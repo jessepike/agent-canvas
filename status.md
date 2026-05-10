@@ -8,13 +8,23 @@ stage: Design → Develop transition
 
 ## Right now
 
-**Gate 30A is fully closed. Develop stage active; Gate 30B-01c ProseMirror custom schema and read-only rendered view are implemented on top of the UI scaffold.**
+**Gate 30A is fully closed. Develop stage active; Gate 30B-02 PM-decorated stable block IDs are implemented on top of the read-only rendered view.**
 
 The spec is locked through 4 review cycles (3 internal CPO + 2 external multi-model rounds — Codex implementation lens + Claude -p architectural lens). Critical=0, High=0 at exit. Project artifacts (intent, decisions, BACKLOG, this status) just landed.
 
-**Next move:** implement Gate 30B-02 PM-decorated stable block IDs. Keep it separate from toggle-time source/rendered sync.
+**Next move:** implement Gate 30B-04 toggle-time bidirectional sync. Keep it separate from external-change diff UI.
 
 ## Session log
+
+### 2026-05-10 — Gate 30B-02 PM-decorated stable block IDs
+
+- Added `ui/src/pm/blockIdsPlugin.ts`, a ProseMirror plugin that assigns browser-native UUIDs to unidentified non-primitive top-level nodes, leaves primitive IDs canonical when present, exposes `getBlockIds(state)`, and decorates top-level blocks with `data-block-id`.
+- Added `ui/src/pm/sidecarBridge.ts` as a stub for the follow-up Tauri IPC commands `load_sidecar` and `save_sidecar`; persistence across sessions remains out of scope for this slice.
+- Updated the PM schema so top-level editable block node types carry optional `id` attrs. `frontmatter` remains ID-less.
+- Updated `blocksToDoc` and the `Block` Zod schema to propagate optional `Block.id` when future parser/IPC payloads expose it. Current Rust `Block` still exposes only `kind`, `byte_range`, and `raw_source`, so the plugin assigns generated IDs on mount for current non-primitives.
+- Updated primitive node views to preserve `data-block-id` on node-view DOM when an `id` attr is present.
+- Verification: `pnpm install` passes; `pnpm run build` passes (`tsc --noEmit && vite build`). Vite reports only the existing chunk-size warning.
+- Browser DOM verification was attempted but blocked by unavailable browser automation / sandboxed macOS app launch. Production bundle inspection confirms the runtime `data-block-id` decoration path is emitted.
 
 ### 2026-05-10 — Gate 30B-01c ProseMirror schema + rendered view
 
@@ -117,14 +127,15 @@ See `decisions.md` for the full log. Highlights from cycle 4:
 
 ## Next steps (priority order)
 
-1. **30B-02 PM-decorated stable block IDs via PM plugin/metadata** (D-VELLUM-6).
-2. **30B-04 Toggle-time bidirectional sync** between source view and rendered view.
-3. **30B-05 External-change diff prompt UI** — consumes the watcher events from 30A-08.
-4. **30B-06 Split-view layout + 30B-07 themes.**
+1. **30B-04 Toggle-time bidirectional sync** between source view and rendered view.
+2. **30B-05 External-change diff prompt UI** — consumes the watcher events from 30A-08.
+3. **30B-06 Split-view layout + 30B-07 themes.**
+4. **Rust IPC follow-up:** expose `load_sidecar` / `save_sidecar` and richer block payload IDs to the UI.
 
 ## Blockers / open questions
 
 - None blocking. Repo public at github.com/jessepike/vellum, 7 commits on main, CI green.
+- 30B-02 follow-up: decide the exact UI matching contract for sidecar `BlockIdentity { id, byte_range_start, kind }` once Rust IPC exposes `load_sidecar`; current UI can preserve `Block.id` when provided but cannot match non-primitive sidecar entries by byte offset yet.
 - Future hardening: migrate UI tooling (Node/pnpm) into OrbStack dev VM per host-protection rule. Current dev VM lacks Node/npm/Corepack/pnpm, so 30B-01c UI verification used existing host pnpm. Not blocking; v1.5 cleanup.
 
 ## Risks watched

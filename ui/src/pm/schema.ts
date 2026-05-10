@@ -10,19 +10,20 @@ const nodes: Record<string, NodeSpec> = {
     group: "inline"
   },
   paragraph: {
+    attrs: { id: { default: null } },
     content: "inline*",
     group: "block",
     toDOM: () => ["p", 0]
   },
   heading: {
-    attrs: { level: { default: 1 } },
+    attrs: { id: { default: null }, level: { default: 1 } },
     content: "inline*",
     group: "block",
     defining: true,
     toDOM: (node) => [`h${node.attrs.level}`, 0]
   },
   code_block: {
-    attrs: { language: { default: null } },
+    attrs: { id: { default: null }, language: { default: null } },
     content: "text*",
     group: "block",
     code: true,
@@ -31,12 +32,13 @@ const nodes: Record<string, NodeSpec> = {
     toDOM: (node) => ["pre", ["code", { "data-language": node.attrs.language ?? "" }, 0]]
   },
   bullet_list: {
+    attrs: { id: { default: null } },
     content: "list_item+",
     group: "block",
     toDOM: () => ["ul", 0]
   },
   ordered_list: {
-    attrs: { order: { default: 1 } },
+    attrs: { id: { default: null }, order: { default: 1 } },
     content: "list_item+",
     group: "block",
     toDOM: (node) => ["ol", { start: node.attrs.order === 1 ? null : node.attrs.order }, 0]
@@ -46,12 +48,14 @@ const nodes: Record<string, NodeSpec> = {
     toDOM: () => ["li", 0]
   },
   blockquote: {
+    attrs: { id: { default: null } },
     content: "block+",
     group: "block",
     defining: true,
     toDOM: () => ["blockquote", 0]
   },
   horizontal_rule: {
+    attrs: { id: { default: null } },
     group: "block",
     toDOM: () => ["hr"]
   },
@@ -152,14 +156,23 @@ function placeholderText(block: Block): string {
   return `${block.kind} block (${block.byte_range.start}-${block.byte_range.end})`;
 }
 
-function textBlock(type: "paragraph" | "heading" | "code_block", block: Block): ProseMirrorNode {
+function blockAttrs(block: Block): { id?: string } | null {
+  return block.id ? { id: block.id } : null;
+}
+
+function textBlock(
+  type: "paragraph" | "heading" | "code_block",
+  block: Block,
+  includeBlockId = true
+): ProseMirrorNode {
   const text = vellumSchema.text(placeholderText(block));
+  const attrs = includeBlockId ? blockAttrs(block) : null;
 
   if (type === "heading") {
-    return vellumSchema.nodes.heading.create({ level: 1 }, text);
+    return vellumSchema.nodes.heading.create({ ...attrs, level: 1 }, text);
   }
 
-  return vellumSchema.nodes[type].create(null, text);
+  return vellumSchema.nodes[type].create(attrs, text);
 }
 
 function blockToNode(block: Block): ProseMirrorNode {
@@ -173,17 +186,21 @@ function blockToNode(block: Block): ProseMirrorNode {
     case "CodeBlock":
       return textBlock("code_block", block);
     case "List": {
-      const item = vellumSchema.nodes.list_item.create(null, textBlock("paragraph", block));
-      return vellumSchema.nodes.bullet_list.create(null, item);
+      const item = vellumSchema.nodes.list_item.create(null, textBlock("paragraph", block, false));
+      return vellumSchema.nodes.bullet_list.create(blockAttrs(block), item);
     }
     case "BlockQuote":
-      return vellumSchema.nodes.blockquote.create(null, textBlock("paragraph", block));
+      return vellumSchema.nodes.blockquote.create(blockAttrs(block), textBlock("paragraph", block, false));
     case "ThematicBreak":
-      return vellumSchema.nodes.horizontal_rule.create();
+      return vellumSchema.nodes.horizontal_rule.create(blockAttrs(block));
     case "VellumLiveQuery":
-      return vellumSchema.nodes.vellum_live_query.create({ tool: "unknown tool", render: "json" });
+      return vellumSchema.nodes.vellum_live_query.create({
+        ...blockAttrs(block),
+        tool: "unknown tool",
+        render: "json"
+      });
     case "VellumResult":
-      return vellumSchema.nodes.vellum_result.create();
+      return vellumSchema.nodes.vellum_result.create(blockAttrs(block));
     case "HtmlBlock":
     case "Table":
     case "FootnoteDefinition":

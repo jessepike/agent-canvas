@@ -23,6 +23,7 @@ export const ByteRangeSchema = z.object({
 
 export const BlockSchema = z.object({
   kind: BlockKindSchema,
+  id: z.string().optional(),
   byte_range: ByteRangeSchema,
   raw_source: ByteRangeSchema
 });

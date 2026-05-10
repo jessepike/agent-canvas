@@ -14,10 +14,18 @@ function lineCount(raw: unknown): number {
   return raw.split(/\r\n|\r|\n/).length;
 }
 
+function applyBlockId(dom: HTMLElement, node: ProseMirrorNode): void {
+  const blockId = textAttr(node, "id", "");
+  if (blockId) {
+    dom.dataset.blockId = blockId;
+  }
+}
+
 export function liveQueryNodeView(node: ProseMirrorNode): NodeView {
   const dom = document.createElement("section");
   dom.className = "pm-primitive pm-live-query";
   dom.contentEditable = "false";
+  applyBlockId(dom, node);
 
   const label = document.createElement("span");
   label.className = "pm-primitive-label";
@@ -32,10 +40,11 @@ export function liveQueryNodeView(node: ProseMirrorNode): NodeView {
   return { dom };
 }
 
-export function resultNodeView(): NodeView {
+export function resultNodeView(node: ProseMirrorNode): NodeView {
   const dom = document.createElement("section");
   dom.className = "pm-primitive pm-result";
   dom.contentEditable = "false";
+  applyBlockId(dom, node);
 
   const label = document.createElement("span");
   label.className = "pm-primitive-label";

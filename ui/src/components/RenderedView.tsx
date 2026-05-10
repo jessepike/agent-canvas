@@ -1,6 +1,7 @@
 import { EditorState } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { useEffect, useRef } from "react";
+import { blockIdsPlugin } from "../pm/blockIdsPlugin";
 import { blocksToDoc, vellumSchema } from "../pm/schema";
 import { frontmatterNodeView, liveQueryNodeView, resultNodeView } from "../pm/nodeviews";
 import type { Block } from "../types/blocks";
@@ -22,7 +23,8 @@ export function RenderedView({ blocks }: RenderedViewProps) {
     const view = new EditorView(parent, {
       state: EditorState.create({
         schema: vellumSchema,
-        doc: blocksToDoc(blocks)
+        doc: blocksToDoc(blocks),
+        plugins: [blockIdsPlugin()]
       }),
       editable: () => false,
       nodeViews: {
@@ -49,7 +51,8 @@ export function RenderedView({ blocks }: RenderedViewProps) {
     view.updateState(
       EditorState.create({
         schema: vellumSchema,
-        doc: blocksToDoc(blocks)
+        doc: blocksToDoc(blocks),
+        plugins: [blockIdsPlugin()]
       })
     );
   }, [blocks]);
