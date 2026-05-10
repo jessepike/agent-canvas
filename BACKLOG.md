@@ -32,12 +32,12 @@ Confidence: `[H/M/L]` × `[R/D/G/F]`.
 | 30A-04 | todo | `vellum-core::parse` module: block-boundary reconstruction on top of `pulldown-cmark` `OffsetIter` | [H-R] | D-VELLUM-19 partition contract |
 | 30A-05 | todo | Partition invariant test: `Σ block.byte_range == 0..file.len()`, no gaps, no overlaps | [H-R] | CI |
 | 30A-06 | todo | `BlockPatch` struct + `BlockEdit` enum per D-VELLUM-16 §Block patch contract | [H-R] | Rust-side first; TS via ts-rs after |
-| 30A-07 | todo | Atomic write path: same-volume tmpfile (`<doc>.vellum-tmp-<pid>-<short_uuid>`), `rename(2)`, stat+hash precondition (D-VELLUM-17) | [H-R] | |
+| 30A-07 | done | Atomic write path: same-volume tmpfile (`<doc>.vellum-tmp-<pid>-<short_uuid>`), `rename(2)`, stat+hash precondition (D-VELLUM-17) | [H-R] | Implemented in `vellum-core::fs`; unit-covered |
 | 30A-08 | todo | `notify`-backed file watcher; conflict-marker detection on open | [H-D] | |
-| 30A-09 | todo | Sidecar identity map: `<vault-root>/.vellum-cache/<docpath>/identity.json` with auto-migration on rename (D-VELLUM-12) | [H-R] | |
-| 30A-10 | todo | Tauri 2.x scaffold; IPC types via `ts-rs` + handwritten Zod schemas (D-VELLUM-14) | [H-D] | |
+| 30A-09 | done | Sidecar identity map: `<vault-root>/.vellum-cache/<docpath>/identity.json` with auto-migration on rename (D-VELLUM-12) | [H-R] | Implemented in `vellum-core::sidecar`; unit-covered |
+| 30A-10 | done | Tauri 2.x scaffold; IPC types via `ts-rs` + handwritten Zod schemas (D-VELLUM-14) | [H-D] | Minimal Tauri shell + `parse_document`; `ts-rs` dependency only, no derives yet |
 | 30A-11 | todo | GitHub Actions CI: cargo test, vitest, format-preservation corpus runner on every commit | [H-D] | |
-| 30A-12 | todo | Tmpfile reaper on vault open: kill stale `*.vellum-tmp-*` whose pid is not a live Vellum process | [M-D] | |
+| 30A-12 | done | Tmpfile reaper on vault open: kill stale `*.vellum-tmp-*` whose pid is not a live Vellum process | [M-D] | Implemented in `vellum-core::fs`; unit-covered |
 
 **Gate 30A exit criterion:** Format preservation corpus passes byte-identical at BOTH the steady-state (sidecar present) and cold-state (sidecar absent) gates. CI green.
 

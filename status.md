@@ -8,13 +8,23 @@ stage: Design → Develop transition
 
 ## Right now
 
-**Gate 30A parser body implemented. Develop stage active.**
+**Gate 30A remaining filesystem, sidecar, reaper, and Tauri scaffold items implemented. Develop stage active.**
 
 The spec is locked through 4 review cycles (3 internal CPO + 2 external multi-model rounds — Codex implementation lens + Claude -p architectural lens). Critical=0, High=0 at exit. Project artifacts (intent, decisions, BACKLOG, this status) just landed.
 
-**Next move:** wire the partition invariant into CI as Gate 30A-05, then continue toward the editor-facing parse surface.
+**Next move:** close remaining stale backlog status for already-landed scaffold/CI items, then continue toward the editor-facing parse surface.
 
 ## Session log
+
+### 2026-05-10 — Gate 30A filesystem, sidecar, reaper, and Tauri scaffold
+
+- Implemented `vellum_core::fs::atomic_write(target, contents, base_hash)` with same-directory `<doc>.vellum-tmp-<pid>-<short_uuid>` writes, blake3 base-hash precondition, atomic `rename`, target-directory and parent-missing errors, and best-effort tmpfile cleanup on failure.
+- Implemented `vellum_core::fs::reap_stale_tmpfiles(vault_root)` with recursive `*.vellum-tmp-*-*` discovery and conservative pid liveness checks (`/proc/<pid>` on Linux, `kill(pid, 0)` elsewhere).
+- Replaced the ID stub with `BlockId = Uuid` and `fresh()`.
+- Added `vellum_core::sidecar` with `IdentityMap`, `BlockIdentity`, vault-rooted `.vellum-cache/<docpath>/identity.json` pathing, save, load, and source-hash migration for renamed/moved docs.
+- Added minimal Tauri 2 shell in `vellum-app`: `parse_document(source: String)` IPC command, `generate_context!()`, `tauri.conf.json`, `build.rs`, and a placeholder icon required by Tauri codegen. No `ui/` scaffold and no `ts-rs` derives yet.
+- Updated Gate 30A backlog rows 30A-07, 30A-09, 30A-10, and 30A-12 to done.
+- Verification in OrbStack dev VM: `cargo build -p vellum-app` passes; `cargo build --workspace` passes; `cargo test --workspace` passes (21 core tests, 0 app tests, 0 corpus unit tests); `cargo clippy --workspace -- -D warnings` passes; `cargo fmt --check` passes; `cargo run -p vellum-corpus` passes 67/67.
 
 ### 2026-05-10 — Gate 30A-04 parser body
 

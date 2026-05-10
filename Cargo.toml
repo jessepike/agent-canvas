@@ -13,16 +13,21 @@ authors = ["Jesse Pike"]
 
 [workspace.dependencies]
 blake3 = { version = "1" }
+libc = { version = "0.2" }
 notify = { version = "6" }
 pulldown-cmark = { version = "0.13" }
 rmcp = { version = "1.6" }
 serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
 similar = { version = "2" }
 tauri = { version = "2", default-features = false }
+tauri-build = { version = "2", default-features = false }
+tempfile = { version = "3" }
 thiserror = { version = "1" }
 time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 toml = { version = "0.8" }
 tracing = { version = "0.1" }
+ts-rs = { version = "10" }
 uuid = { version = "1", features = ["serde", "v4"] }
 walkdir = { version = "2" }

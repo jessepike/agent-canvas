@@ -3,6 +3,7 @@ pub mod fs;
 pub mod hash;
 pub mod id;
 pub mod parse;
+pub mod sidecar;
 
 #[cfg(test)]
 mod tests {

@@ -1,6 +1,8 @@
 use uuid::Uuid;
 
-pub fn new_block_id() -> Uuid {
+pub type BlockId = Uuid;
+
+pub fn fresh() -> BlockId {
     Uuid::new_v4()
 }
 
@@ -10,6 +12,6 @@ mod tests {
 
     #[test]
     fn smoke() {
-        assert_ne!(new_block_id(), Uuid::nil());
+        assert_ne!(fresh(), Uuid::nil());
     }
 }
