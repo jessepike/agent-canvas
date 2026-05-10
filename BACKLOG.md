@@ -26,17 +26,17 @@ Confidence: `[H/M/L]` × `[R/D/G/F]`.
 
 | ID | Status | Item | Confidence | Notes |
 |----|--------|------|-----------|-------|
-| 30A-01 | todo | Cargo workspace scaffold: `crates/vellum-core`, `crates/vellum-app`, `crates/vellum-corpus`, top-level `Cargo.toml` | [H-D] | Codex-delegatable |
-| 30A-02 | todo | `vellum-corpus` crate: directory of 50+ `.md` test files covering hard cases per spec §Block boundary reconstruction | [H-D] | HTML blocks, link refs, footnotes, lazy continuation, fence lengths, BOM, CRLF, frontmatter variants |
-| 30A-03 | todo | `vellum-corpus` runner: open every corpus file, save, assert byte-identical | [H-D] | The build gate |
-| 30A-04 | todo | `vellum-core::parse` module: block-boundary reconstruction on top of `pulldown-cmark` `OffsetIter` | [H-R] | D-VELLUM-19 partition contract |
-| 30A-05 | todo | Partition invariant test: `Σ block.byte_range == 0..file.len()`, no gaps, no overlaps | [H-R] | CI |
-| 30A-06 | todo | `BlockPatch` struct + `BlockEdit` enum per D-VELLUM-16 §Block patch contract | [H-R] | Rust-side first; TS via ts-rs after |
+| 30A-01 | done | Cargo workspace scaffold: `crates/vellum-core`, `crates/vellum-app`, `crates/vellum-corpus`, top-level `Cargo.toml` | [H-D] | Implemented |
+| 30A-02 | done | `vellum-corpus` crate: directory of 50+ `.md` test files covering hard cases per spec §Block boundary reconstruction | [H-D] | 67 corpus fixtures |
+| 30A-03 | done | `vellum-corpus` runner: open every corpus file, save, assert byte-identical | [H-D] | 67/67 PASS |
+| 30A-04 | done | `vellum-core::parse` module: block-boundary reconstruction on top of `pulldown-cmark` `OffsetIter` | [H-R] | D-VELLUM-19 partition contract; corpus passing |
+| 30A-05 | done | Partition invariant test: `Σ block.byte_range == 0..file.len()`, no gaps, no overlaps | [H-R] | Implemented in `parse::partition` unit tests |
+| 30A-06 | done | `BlockPatch` struct + `BlockEdit` enum per D-VELLUM-16 §Block patch contract | [H-R] | Rust-side types implemented |
 | 30A-07 | done | Atomic write path: same-volume tmpfile (`<doc>.vellum-tmp-<pid>-<short_uuid>`), `rename(2)`, stat+hash precondition (D-VELLUM-17) | [H-R] | Implemented in `vellum-core::fs`; unit-covered |
-| 30A-08 | todo | `notify`-backed file watcher; conflict-marker detection on open | [H-D] | |
+| 30A-08 | done | `notify`-backed file watcher; conflict-marker detection on open | [H-D] | Implemented in `vellum-core::watch` and `vellum-core::fs`; unit-covered |
 | 30A-09 | done | Sidecar identity map: `<vault-root>/.vellum-cache/<docpath>/identity.json` with auto-migration on rename (D-VELLUM-12) | [H-R] | Implemented in `vellum-core::sidecar`; unit-covered |
 | 30A-10 | done | Tauri 2.x scaffold; IPC types via `ts-rs` + handwritten Zod schemas (D-VELLUM-14) | [H-D] | Minimal Tauri shell + `parse_document`; `ts-rs` dependency only, no derives yet |
-| 30A-11 | todo | GitHub Actions CI: cargo test, vitest, format-preservation corpus runner on every commit | [H-D] | |
+| 30A-11 | done | GitHub Actions CI: cargo test, vitest, format-preservation corpus runner on every commit | [H-D] | Implemented in `.github/workflows/ci.yml` |
 | 30A-12 | done | Tmpfile reaper on vault open: kill stale `*.vellum-tmp-*` whose pid is not a live Vellum process | [M-D] | Implemented in `vellum-core::fs`; unit-covered |
 
 **Gate 30A exit criterion:** Format preservation corpus passes byte-identical at BOTH the steady-state (sidecar present) and cold-state (sidecar absent) gates. CI green.

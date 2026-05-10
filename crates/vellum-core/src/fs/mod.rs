@@ -31,6 +31,38 @@ pub fn save_round_trip(source: &str) -> Result<String, ParseError> {
     Ok(source.to_owned())
 }
 
+/// Returns true if the source contains Git-style merge conflict markers at column 0.
+///
+/// A conflicted file should switch the editor to source-only safe mode per spec.
+pub fn has_conflict_markers(source: &str) -> bool {
+    let mut in_fence = false;
+    let mut previous_non_empty_text = false;
+
+    for line in source.lines() {
+        if is_fence_line(line) {
+            in_fence = !in_fence;
+            previous_non_empty_text = false;
+            continue;
+        }
+
+        if !in_fence {
+            if line.starts_with("<<<<<<< ") || line.starts_with(">>>>>>> ") {
+                return true;
+            }
+
+            if line == "=======" && !previous_non_empty_text {
+                return true;
+            }
+        }
+
+        // A bare ======= immediately after text is treated as a Setext H1
+        // underline, not as a merge-conflict middle marker.
+        previous_non_empty_text = !line.trim().is_empty();
+    }
+
+    false
+}
+
 pub fn atomic_write(
     target: &Path,
     contents: &[u8],
@@ -113,6 +145,10 @@ fn tmpfile_path(target: &Path) -> PathBuf {
     target.with_file_name(format!("{file_name}.vellum-tmp-{pid}-{short_uuid}"))
 }
 
+fn is_fence_line(line: &str) -> bool {
+    line.starts_with("```") || line.starts_with("~~~")
+}
+
 fn tmpfile_pid(file_name: &OsStr) -> Option<u32> {
     let file_name = file_name.to_str()?;
     let (_, suffix) = file_name.split_once(".vellum-tmp-")?;
@@ -160,6 +196,34 @@ mod tests {
     #[test]
     fn smoke() {
         assert!(true);
+    }
+
+    #[test]
+    fn detects_conflict_in_plain_text() {
+        let source = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n";
+
+        assert!(has_conflict_markers(source));
+    }
+
+    #[test]
+    fn ignores_conflict_inside_code_block() {
+        let source = "```\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n```\n";
+
+        assert!(!has_conflict_markers(source));
+    }
+
+    #[test]
+    fn accepts_clean_file() {
+        let source = "# Title\n\nA normal paragraph.\n\n- one\n- two\n";
+
+        assert!(!has_conflict_markers(source));
+    }
+
+    #[test]
+    fn treats_setext_h1_underline_as_clean() {
+        let source = "A heading\n=======\n\nA paragraph.\n";
+
+        assert!(!has_conflict_markers(source));
     }
 
     #[test]

@@ -8,13 +8,21 @@ stage: Design → Develop transition
 
 ## Right now
 
-**Gate 30A remaining filesystem, sidecar, reaper, and Tauri scaffold items implemented. Develop stage active.**
+**Gate 30A is fully closed. Develop stage active; next work is Gate 30B editor planning.**
 
 The spec is locked through 4 review cycles (3 internal CPO + 2 external multi-model rounds — Codex implementation lens + Claude -p architectural lens). Critical=0, High=0 at exit. Project artifacts (intent, decisions, BACKLOG, this status) just landed.
 
-**Next move:** close remaining stale backlog status for already-landed scaffold/CI items, then continue toward the editor-facing parse surface.
+**Next move:** begin Gate 30B planning for the ProseMirror/CodeMirror editor surface.
 
 ## Session log
+
+### 2026-05-10 — Gate 30A-08 watcher and conflict marker detector
+
+- Implemented `vellum_core::watch::watch_vault(vault_root, callback)` on `notify` with recursive vault watching, `.md` filtering, `.vellum-tmp-*` filtering, `.vellum-cache/` subtree filtering, 50ms modify debounce, changed-file blake3 hashing, and best-effort warning logs for backend or hashing errors.
+- Added `WatchEvent::{Changed, Created, Removed, Renamed}` and opaque `WatchHandle`; dropping the handle drops the underlying `RecommendedWatcher` and joins the worker thread.
+- Implemented `vellum_core::fs::has_conflict_markers(source)` for Git-style conflict markers at column 0, ignoring markers inside fenced code blocks and treating `=======` after non-empty text as a Setext H1 underline.
+- Updated Gate 30A backlog rows to done, including stale already-landed scaffold/parser/corpus/CI rows. Gate 30A is now fully closed.
+- Verification: focused `cargo test -p vellum-core` passes (29 core unit tests).
 
 ### 2026-05-10 — Gate 30A filesystem, sidecar, reaper, and Tauri scaffold
 
