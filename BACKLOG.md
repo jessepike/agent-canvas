@@ -45,6 +45,7 @@ Confidence: `[H/M/L]` × `[R/D/G/F]`.
 
 | ID | Status | Item | Confidence | Notes |
 |----|--------|------|-----------|-------|
+| 30B-00 | done | BlockPatch save flow in Rust (D-VELLUM-16, edit-preserving save) | [H-R] | Tested via synthetic patch sequences against corpus |
 | 30B-01 | todo | ProseMirror custom schema with primitive node types | [H-D] | |
 | 30B-02 | todo | PM-decorated stable block IDs via PM plugin/metadata | [H-D] | D-VELLUM-6 |
 | 30B-03 | todo | CodeMirror 6 source view with Markdown grammar | [H-D] | |

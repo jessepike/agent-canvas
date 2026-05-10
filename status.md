@@ -8,13 +8,21 @@ stage: Design → Develop transition
 
 ## Right now
 
-**Gate 30A is fully closed. Develop stage active; next work is Gate 30B editor planning.**
+**Gate 30A is fully closed. Develop stage active; Gate 30B-00 save-flow foundation is implemented before UI scaffold.**
 
 The spec is locked through 4 review cycles (3 internal CPO + 2 external multi-model rounds — Codex implementation lens + Claude -p architectural lens). Critical=0, High=0 at exit. Project artifacts (intent, decisions, BACKLOG, this status) just landed.
 
 **Next move:** begin Gate 30B planning for the ProseMirror/CodeMirror editor surface.
 
 ## Session log
+
+### 2026-05-10 — Gate 30B-00 BlockPatch save flow
+
+- Implemented root `vellum_core::save(source, patches)` with `SaveError` for partition invariant failures, patch validation failures, missing preserved byte ranges, and unimplemented serializer requests.
+- Save now resolves ordered `BlockPatch` sequences by emitting preserved source slices, emitting `EditedBytes` verbatim, or rejecting `SerializeFromTree` for every block kind until the rendered-view structured representation is specified.
+- Added integration tests in `crates/vellum-core/tests/save_integration.rs` covering byte-identical preserved saves against representative corpus files, paragraph edit, insertion, deletion, merge, missing original bytes, pre-populated patch error, overlapping input ranges, and serializer rejection.
+- Judgment call: omitted `Some` ranges are treated as deliberate deletion/merge gaps and are allowed when ranges remain ordered and non-overlapping; otherwise the requested delete and merge patch sequences could not pass.
+- Verification: `cargo build --workspace`, `cargo test --workspace` (41 tests), `cargo clippy --workspace -- -D warnings`, `cargo fmt --check`, and `cargo run -p vellum-corpus` pass. Corpus remains 67/67.
 
 ### 2026-05-10 — Gate 30A-08 watcher and conflict marker detector
 
