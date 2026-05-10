@@ -1,0 +1,5 @@
+````markdown
+```rust
+fn nested() {}
+```
+````

@@ -1,0 +1,28 @@
+[workspace]
+members = [
+  "crates/vellum-core",
+  "crates/vellum-app",
+  "crates/vellum-corpus",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+authors = ["Jesse Pike"]
+
+[workspace.dependencies]
+blake3 = { version = "1" }
+notify = { version = "6" }
+pulldown-cmark = { version = "0.13" }
+rmcp = { version = "1.6" }
+serde = { version = "1", features = ["derive"] }
+similar = { version = "2" }
+tauri = { version = "2", default-features = false }
+thiserror = { version = "1" }
+time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+toml = { version = "0.8" }
+tracing = { version = "0.1" }
+uuid = { version = "1", features = ["serde", "v4"] }
+walkdir = { version = "2" }

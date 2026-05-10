@@ -1,0 +1,15 @@
+target/
+src-tauri/target/
+
+node_modules/
+dist/
+.vite/
+
+.vellum-cache/
+
+.DS_Store
+.idea/
+.vscode/
+
+# Pre-existing sibling directory; orthogonal to vellum (chroma + kb.db)
+data/
