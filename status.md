@@ -8,13 +8,23 @@ stage: Design → Develop transition
 
 ## Right now
 
-**Gate 30A is fully closed. Develop stage active; Gate 30B-02 PM-decorated stable block IDs are implemented on top of the read-only rendered view.**
+**Gate 30A is fully closed. Develop stage active; Gate 30B IPC extension is implemented: `save_document`, `load_sidecar`, `save_sidecar`, ts-rs exports, and UI Zod boundary schemas are wired.**
 
 The spec is locked through 4 review cycles (3 internal CPO + 2 external multi-model rounds — Codex implementation lens + Claude -p architectural lens). Critical=0, High=0 at exit. Project artifacts (intent, decisions, BACKLOG, this status) just landed.
 
 **Next move:** implement Gate 30B-04 toggle-time bidirectional sync. Keep it separate from external-change diff UI.
 
 ## Session log
+
+### 2026-05-10 — Gate 30B-ipc Tauri IPC surface + ts-rs exports
+
+- Added ts-rs exports for Rust block, patch, block ID, byte range, and sidecar identity types. `cargo test --workspace` now regenerates TypeScript bindings into `ui/src/types/generated/`.
+- Introduced concrete Rust `ByteRange { start, end }` and a transparent `BlockId` newtype over `Uuid` so the IPC contract has exportable Rust types while preserving existing JSON shape.
+- Added Tauri commands: `save_document(source, patches)`, `load_sidecar(doc_path)`, and `save_sidecar(doc_path, map)`. Current sidecar IPC uses absolute doc paths and treats the document parent as the temporary vault root until app-level vault state exists.
+- Replaced stale handwritten UI block types with Zod schemas checked against generated ts-rs types. The boundary remains snake_case to match serde output and the locked Rust/spec field names.
+- Replaced `ui/src/pm/sidecarBridge.ts` stubs with thin re-exports from `ui/src/ipc.ts`.
+- Removed the stale UI assumption that parsed `Block` includes optional `id`; PM-decorated IDs still belong to the PM plugin until a richer parser/identity matching slice lands.
+- Verification: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --check`, `cargo run -p vellum-corpus`, and `pnpm install && pnpm run build` pass. Corpus remains 67/67; Vite reports only the existing chunk-size warning.
 
 ### 2026-05-10 — Gate 30B-02 PM-decorated stable block IDs
 
@@ -127,15 +137,15 @@ See `decisions.md` for the full log. Highlights from cycle 4:
 
 ## Next steps (priority order)
 
-1. **30B-04 Toggle-time bidirectional sync** between source view and rendered view.
+1. **30B-04 Toggle-time bidirectional sync** between source view and rendered view, now using the real `save_document` IPC wrapper instead of a future placeholder.
 2. **30B-05 External-change diff prompt UI** — consumes the watcher events from 30A-08.
 3. **30B-06 Split-view layout + 30B-07 themes.**
-4. **Rust IPC follow-up:** expose `load_sidecar` / `save_sidecar` and richer block payload IDs to the UI.
+4. **Parser/UI identity follow-up:** richer block payload IDs or sidecar matching rules so parsed blocks can be reconciled with PM node IDs across sessions.
 
 ## Blockers / open questions
 
 - None blocking. Repo public at github.com/jessepike/vellum, 7 commits on main, CI green.
-- 30B-02 follow-up: decide the exact UI matching contract for sidecar `BlockIdentity { id, byte_range_start, kind }` once Rust IPC exposes `load_sidecar`; current UI can preserve `Block.id` when provided but cannot match non-primitive sidecar entries by byte offset yet.
+- 30B-04 follow-up: decide the exact UI matching contract for sidecar `BlockIdentity { id, byte_range_start, kind }`. Rust IPC now exposes sidecar load/save, but the UI still needs the rendered/source sync slice to match non-primitive sidecar entries by byte offset.
 - Future hardening: migrate UI tooling (Node/pnpm) into OrbStack dev VM per host-protection rule. Current dev VM lacks Node/npm/Corepack/pnpm, so 30B-01c UI verification used existing host pnpm. Not blocking; v1.5 cleanup.
 
 ## Risks watched

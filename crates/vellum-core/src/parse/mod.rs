@@ -6,14 +6,16 @@ use thiserror::Error;
 
 pub mod partition;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
 pub struct Block {
     pub kind: BlockKind,
-    pub byte_range: Range<usize>,
-    pub raw_source: Range<usize>,
+    pub byte_range: ByteRange,
+    pub raw_source: ByteRange,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
 pub enum BlockKind {
     Frontmatter,
     Heading,
@@ -28,6 +30,29 @@ pub enum BlockKind {
     ThematicBreak,
     VellumLiveQuery,
     VellumResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct ByteRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl ByteRange {
+    pub fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+
+    pub fn into_range(self) -> Range<usize> {
+        self.start..self.end
+    }
+}
+
+impl From<Range<usize>> for ByteRange {
+    fn from(value: Range<usize>) -> Self {
+        Self::new(value.start, value.end)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -53,8 +78,8 @@ pub fn parse(source: &str) -> Result<Vec<Block>, ParseError> {
     if source.trim().is_empty() {
         let block = Block {
             kind: BlockKind::Paragraph,
-            byte_range: 0..source.len(),
-            raw_source: 0..source.len(),
+            byte_range: ByteRange::new(0, source.len()),
+            raw_source: ByteRange::new(0, source.len()),
         };
         return Ok(vec![block]);
     }
@@ -78,6 +103,7 @@ pub fn parse(source: &str) -> Result<Vec<Block>, ParseError> {
 }
 
 fn block(kind: BlockKind, byte_range: Range<usize>) -> Block {
+    let byte_range = ByteRange::from(byte_range);
     Block {
         kind,
         raw_source: byte_range.clone(),

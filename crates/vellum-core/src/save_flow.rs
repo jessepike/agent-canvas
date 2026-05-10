@@ -1,10 +1,8 @@
-use std::ops::Range;
-
 use thiserror::Error;
 
 use crate::{
     block::patch::{BlockEdit, BlockError, BlockId, BlockPatch},
-    parse::{Block, BlockKind, partition::PartitionError},
+    parse::{Block, BlockKind, ByteRange, partition::PartitionError},
 };
 
 #[derive(Debug, Error)]
@@ -33,7 +31,7 @@ pub fn save(source: &str, patches: &[BlockPatch]) -> Result<String, SaveError> {
                         .ok_or(SaveError::MissingOriginalBytes {
                             block_id: patch.block_id,
                         })?;
-                output.push_str(source_slice(source, range)?);
+                output.push_str(source_slice(source, &range)?);
             }
             BlockEdit::EditedBytes(contents) => output.push_str(contents),
             BlockEdit::SerializeFromTree => {
@@ -73,14 +71,14 @@ fn verify_patch_ranges(source: &str, patches: &[BlockPatch]) -> Result<(), SaveE
             patch
                 .original_byte_range
                 .clone()
-                .map(|range| block_for_partition(patch.parsed_kind, range))
+                .map(|range| block_for_partition(patch.parsed_kind, range.clone()))
         })
         .collect::<Vec<_>>();
 
     verify_ranges_are_ordered_and_non_overlapping(source, &blocks).map_err(Into::into)
 }
 
-fn block_for_partition(kind: BlockKind, byte_range: Range<usize>) -> Block {
+fn block_for_partition(kind: BlockKind, byte_range: ByteRange) -> Block {
     Block {
         kind,
         raw_source: byte_range.clone(),
@@ -120,9 +118,12 @@ fn verify_ranges_are_ordered_and_non_overlapping(
     Ok(())
 }
 
-fn source_slice(source: &str, range: Range<usize>) -> Result<&str, SaveError> {
+fn source_slice<'source>(
+    source: &'source str,
+    range: &ByteRange,
+) -> Result<&'source str, SaveError> {
     source
-        .get(range.clone())
+        .get(range.start..range.end)
         .ok_or(PartitionError::InvalidRange {
             index: 0,
             start: range.start,

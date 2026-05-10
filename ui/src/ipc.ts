@@ -1,21 +1,52 @@
 import { invoke } from "@tauri-apps/api/core";
 import { z } from "zod";
-import { BlockSchema } from "./types/blocks";
-import type { Block } from "./types/blocks";
+import { Block, BlockPatch, IdentityMap } from "./types/blocks";
+import type { Block as BlockType, BlockPatch as BlockPatchType, IdentityMap as IdentityMapType } from "./types/blocks";
 
-export async function parseDocument(source: string): Promise<Block[]> {
+function ipcError(command: string, caught: unknown): Error {
+  if (caught instanceof z.ZodError) {
+    return new Error(`IPC contract drift: ${command} returned invalid data: ${caught.message}`);
+  }
+
+  if (caught instanceof Error) {
+    return caught;
+  }
+
+  return new Error(String(caught));
+}
+
+export async function parseDocument(source: string): Promise<BlockType[]> {
   try {
     const result = await invoke<unknown>("parse_document", { source });
-    return z.array(BlockSchema).parse(result);
+    return z.array(Block).parse(result);
   } catch (caught) {
-    if (caught instanceof z.ZodError) {
-      throw new Error(`IPC contract drift: parse_document returned an invalid Block[]: ${caught.message}`);
-    }
+    throw ipcError("parse_document", caught);
+  }
+}
 
-    if (caught instanceof Error) {
-      throw caught;
-    }
+export async function saveDocument(source: string, patches: BlockPatchType[]): Promise<string> {
+  try {
+    const result = await invoke<unknown>("save_document", { source, patches });
+    return z.string().parse(result);
+  } catch (caught) {
+    throw ipcError("save_document", caught);
+  }
+}
 
-    throw new Error(String(caught));
+export async function loadSidecar(docPath: string): Promise<IdentityMapType> {
+  try {
+    const result = await invoke<unknown>("load_sidecar", { docPath });
+    return IdentityMap.parse(result);
+  } catch (caught) {
+    throw ipcError("load_sidecar", caught);
+  }
+}
+
+export async function saveSidecar(docPath: string, map: IdentityMapType): Promise<void> {
+  try {
+    const result = await invoke<unknown>("save_sidecar", { docPath, map });
+    z.null().parse(result);
+  } catch (caught) {
+    throw ipcError("save_sidecar", caught);
   }
 }

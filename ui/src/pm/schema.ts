@@ -156,8 +156,8 @@ function placeholderText(block: Block): string {
   return `${block.kind} block (${block.byte_range.start}-${block.byte_range.end})`;
 }
 
-function blockAttrs(block: Block): { id?: string } | null {
-  return block.id ? { id: block.id } : null;
+function blockAttrs(): Record<string, never> {
+  return {};
 }
 
 function textBlock(
@@ -166,7 +166,7 @@ function textBlock(
   includeBlockId = true
 ): ProseMirrorNode {
   const text = vellumSchema.text(placeholderText(block));
-  const attrs = includeBlockId ? blockAttrs(block) : null;
+  const attrs = includeBlockId ? blockAttrs() : null;
 
   if (type === "heading") {
     return vellumSchema.nodes.heading.create({ ...attrs, level: 1 }, text);
@@ -187,20 +187,20 @@ function blockToNode(block: Block): ProseMirrorNode {
       return textBlock("code_block", block);
     case "List": {
       const item = vellumSchema.nodes.list_item.create(null, textBlock("paragraph", block, false));
-      return vellumSchema.nodes.bullet_list.create(blockAttrs(block), item);
+      return vellumSchema.nodes.bullet_list.create(blockAttrs(), item);
     }
     case "BlockQuote":
-      return vellumSchema.nodes.blockquote.create(blockAttrs(block), textBlock("paragraph", block, false));
+      return vellumSchema.nodes.blockquote.create(blockAttrs(), textBlock("paragraph", block, false));
     case "ThematicBreak":
-      return vellumSchema.nodes.horizontal_rule.create(blockAttrs(block));
+      return vellumSchema.nodes.horizontal_rule.create(blockAttrs());
     case "VellumLiveQuery":
       return vellumSchema.nodes.vellum_live_query.create({
-        ...blockAttrs(block),
+        ...blockAttrs(),
         tool: "unknown tool",
         render: "json"
       });
     case "VellumResult":
-      return vellumSchema.nodes.vellum_result.create(blockAttrs(block));
+      return vellumSchema.nodes.vellum_result.create(blockAttrs());
     case "HtmlBlock":
     case "Table":
     case "FootnoteDefinition":

@@ -3,7 +3,7 @@ use std::{fs, ops::Range, path::PathBuf};
 use uuid::Uuid;
 use vellum_core::{
     SaveError,
-    block::patch::{BlockEdit, BlockError, BlockPatch},
+    block::patch::{BlockEdit, BlockError, BlockId, BlockPatch},
     parse::{Block, BlockKind, parse, partition::PartitionError},
     save,
 };
@@ -22,7 +22,7 @@ fn preserved_patches(blocks: &[Block]) -> Vec<BlockPatch> {
     blocks
         .iter()
         .map(|block| BlockPatch {
-            block_id: Uuid::new_v4(),
+            block_id: BlockId::from(Uuid::new_v4()),
             parsed_kind: block.kind,
             original_byte_range: Some(block.byte_range.clone()),
             edit: BlockEdit::PreservedBytes,
@@ -34,7 +34,7 @@ fn preserved_patches(blocks: &[Block]) -> Vec<BlockPatch> {
 
 fn inserted_patch(contents: &str) -> BlockPatch {
     BlockPatch {
-        block_id: Uuid::new_v4(),
+        block_id: BlockId::from(Uuid::new_v4()),
         parsed_kind: BlockKind::Paragraph,
         original_byte_range: None,
         edit: BlockEdit::EditedBytes(contents.to_owned()),
@@ -130,7 +130,7 @@ fn edits_single_paragraph_with_edited_bytes() {
     let saved = save(&source, &patches).expect("save should succeed");
     let expected = replace_range(
         &source,
-        blocks[paragraph_index].byte_range.clone(),
+        blocks[paragraph_index].byte_range.clone().into_range(),
         replacement,
     );
 
@@ -164,7 +164,7 @@ fn deletes_block_by_omitting_its_patch() {
     let blocks = parse(&source).expect("fixture should parse");
     let delete_index = first_block_of_kind(&blocks[1..], BlockKind::Paragraph) + 1;
     let mut patches = preserved_patches(&blocks);
-    let deleted_range = blocks[delete_index].byte_range.clone();
+    let deleted_range = blocks[delete_index].byte_range.clone().into_range();
 
     patches.remove(delete_index);
 
@@ -212,7 +212,7 @@ fn rejects_preserved_patch_without_original_bytes() {
 fn rejects_patch_with_validation_error() {
     let source = read_corpus("list-tight.md");
     let mut patches = preserved_patches(&parse(&source).expect("fixture should parse"));
-    let other_id = Uuid::new_v4();
+    let other_id = BlockId::from(Uuid::new_v4());
 
     patches[0].error = Some(BlockError::Overlapping(other_id));
 
@@ -229,7 +229,10 @@ fn rejects_overlapping_input_ranges() {
     let blocks = parse(&source).expect("fixture should parse");
     let mut patches = preserved_patches(&blocks);
 
-    patches[1].original_byte_range = Some(blocks[0].byte_range.end - 1..blocks[1].byte_range.end);
+    patches[1].original_byte_range = Some(vellum_core::parse::ByteRange::new(
+        blocks[0].byte_range.end - 1,
+        blocks[1].byte_range.end,
+    ));
 
     let error = save(&source, &patches).expect_err("save should reject overlap");
     assert!(matches!(
