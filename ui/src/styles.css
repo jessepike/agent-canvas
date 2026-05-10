@@ -146,6 +146,25 @@ button {
   color: #6d5400;
 }
 
+.pm-badge-error {
+  border-color: #b00020;
+  color: #8b0018;
+}
+
+.pm-primitive-error {
+  color: #8b0018;
+  font-size: 13px;
+}
+
+.pm-primitive-raw {
+  flex-basis: 100%;
+  margin: 0;
+  overflow: auto;
+  color: #333;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
 .error {
   width: min(100%, 900px);
   margin: 12px 0 0;

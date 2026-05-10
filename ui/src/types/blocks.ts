@@ -6,8 +6,12 @@ import type { BlockId as RsBlockId } from "./generated/BlockId";
 import type { BlockIdentity as RsBlockIdentity } from "./generated/BlockIdentity";
 import type { BlockKind as RsBlockKind } from "./generated/BlockKind";
 import type { BlockPatch as RsBlockPatch } from "./generated/BlockPatch";
+import type { BlockPayload as RsBlockPayload } from "./generated/BlockPayload";
 import type { ByteRange as RsByteRange } from "./generated/ByteRange";
+import type { FrontmatterKind as RsFrontmatterKind } from "./generated/FrontmatterKind";
 import type { IdentityMap as RsIdentityMap } from "./generated/IdentityMap";
+import type { Inline as RsInline } from "./generated/Inline";
+import type { ListItem as RsListItem } from "./generated/ListItem";
 import type { OpenDocument as RsOpenDocument } from "./generated/OpenDocument";
 import type { WriteResult as RsWriteResult } from "./generated/WriteResult";
 
@@ -44,11 +48,142 @@ export const ByteRange = z
 export type ByteRange = z.infer<typeof ByteRange>;
 const _checkByteRange: TypeEquals<ByteRange, RsByteRange> = true;
 
+export const FrontmatterKind = z.enum(["Yaml", "Toml", "Json"]);
+export type FrontmatterKind = z.infer<typeof FrontmatterKind>;
+const _checkFrontmatterKind: TypeEquals<FrontmatterKind, RsFrontmatterKind> = true;
+
+type InlineType = RsInline;
+export const Inline: z.ZodType<InlineType> = z.lazy(() =>
+  z.union([
+    z.object({ Text: z.string() }).strict(),
+    z.object({ Strong: z.array(Inline) }).strict(),
+    z.object({ Emphasis: z.array(Inline) }).strict(),
+    z.object({ Code: z.string() }).strict(),
+    z
+      .object({
+        Link: z
+          .object({
+            href: z.string(),
+            title: z.string().nullable(),
+            body: z.array(Inline)
+          })
+          .strict()
+      })
+      .strict(),
+    z
+      .object({
+        Image: z
+          .object({
+            src: z.string(),
+            title: z.string().nullable(),
+            alt: z.string()
+          })
+          .strict()
+      })
+      .strict(),
+    z.literal("HardBreak"),
+    z.literal("SoftBreak"),
+    z.object({ Html: z.string() }).strict()
+  ])
+);
+export type Inline = z.infer<typeof Inline>;
+const _checkInline: TypeEquals<Inline, RsInline> = true;
+
+type ListItemType = RsListItem;
+export const ListItem: z.ZodType<ListItemType> = z.lazy(() =>
+  z
+    .object({
+      children: z.array(Block),
+      checkbox: z.boolean().nullable()
+    })
+    .strict()
+);
+export type ListItem = z.infer<typeof ListItem>;
+const _checkListItem: TypeEquals<ListItem, RsListItem> = true;
+
+type BlockPayloadType = RsBlockPayload;
+export const BlockPayload: z.ZodType<BlockPayloadType> = z.lazy(() =>
+  z.union([
+    z
+      .object({
+        Frontmatter: z
+          .object({
+            kind: FrontmatterKind,
+            raw: z.string()
+          })
+          .strict()
+      })
+      .strict(),
+    z.object({ Heading: z.object({ level: z.number(), inlines: z.array(Inline) }).strict() }).strict(),
+    z.object({ Paragraph: z.object({ inlines: z.array(Inline) }).strict() }).strict(),
+    z
+      .object({
+        CodeBlock: z
+          .object({
+            language: z.string().nullable(),
+            content: z.string()
+          })
+          .strict()
+      })
+      .strict(),
+    z.object({ BlockQuote: z.object({ children: z.array(Block) }).strict() }).strict(),
+    z
+      .object({
+        List: z
+          .object({
+            ordered: z.boolean(),
+            start: z.number().nullable(),
+            tight: z.boolean(),
+            items: z.array(ListItem)
+          })
+          .strict()
+      })
+      .strict(),
+    z.literal("ThematicBreak"),
+    z.object({ VellumLiveQuery: z.object({ yaml: z.string() }).strict() }).strict(),
+    z.object({ VellumResult: z.object({ yaml: z.string() }).strict() }).strict(),
+    z.object({ HtmlBlock: z.object({ html: z.string() }).strict() }).strict(),
+    z
+      .object({
+        Table: z
+          .object({
+            headers: z.array(z.array(Inline)),
+            rows: z.array(z.array(z.array(Inline)))
+          })
+          .strict()
+      })
+      .strict(),
+    z
+      .object({
+        FootnoteDefinition: z
+          .object({
+            label: z.string(),
+            children: z.array(Block)
+          })
+          .strict()
+      })
+      .strict(),
+    z
+      .object({
+        LinkRefDefinition: z
+          .object({
+            label: z.string(),
+            dest: z.string(),
+            title: z.string().nullable()
+          })
+          .strict()
+      })
+      .strict()
+  ])
+);
+export type BlockPayload = z.infer<typeof BlockPayload>;
+const _checkBlockPayload: TypeEquals<BlockPayload, RsBlockPayload> = true;
+
 export const Block = z
   .object({
     kind: BlockKind,
     byte_range: ByteRange,
-    raw_source: ByteRange
+    payload: BlockPayload
   })
   .strict();
 export type Block = z.infer<typeof Block>;
@@ -135,6 +270,10 @@ export const BlockIdSchema = BlockId;
 export const BlockKindSchema = BlockKind;
 export const ByteRangeSchema = ByteRange;
 export const BlockSchema = Block;
+export const BlockPayloadSchema = BlockPayload;
+export const FrontmatterKindSchema = FrontmatterKind;
+export const InlineSchema = Inline;
+export const ListItemSchema = ListItem;
 export const BlockEditSchema = BlockEdit;
 export const BlockErrorSchema = BlockError;
 export const BlockPatchSchema = BlockPatch;

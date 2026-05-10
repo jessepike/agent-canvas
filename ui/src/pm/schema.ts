@@ -1,6 +1,8 @@
 import { Schema } from "prosemirror-model";
 import type { Node as ProseMirrorNode, NodeSpec, MarkSpec } from "prosemirror-model";
-import type { Block } from "../types/blocks";
+import { inlinesToPmInlines, plainTextFromInlines, pmTextNode } from "./inlinePayload";
+import { liveQueryAttrs, resultAttrs } from "./primitivePayload";
+import type { Block, Inline, ListItem } from "../types/blocks";
 
 const nodes: Record<string, NodeSpec> = {
   doc: {
@@ -44,8 +46,9 @@ const nodes: Record<string, NodeSpec> = {
     toDOM: (node) => ["ol", { start: node.attrs.order === 1 ? null : node.attrs.order }, 0]
   },
   list_item: {
+    attrs: { checkbox: { default: null } },
     content: "paragraph block*",
-    toDOM: () => ["li", 0]
+    toDOM: (node) => ["li", { "data-checkbox": node.attrs.checkbox ?? "" }, 0]
   },
   blockquote: {
     attrs: { id: { default: null } },
@@ -73,7 +76,9 @@ const nodes: Record<string, NodeSpec> = {
       args: { default: null },
       render: { default: "json" },
       cache: { default: null },
-      result_policy: { default: "pinned" }
+      result_policy: { default: "pinned" },
+      yaml_error: { default: null },
+      raw_yaml: { default: "" }
     },
     atom: true,
     group: "block",
@@ -89,7 +94,14 @@ const nodes: Record<string, NodeSpec> = {
       id: { default: null },
       content_hash: { default: null },
       result_hash: { default: null },
-      frozen_at: { default: null }
+      frozen_at: { default: null },
+      for_id: { default: null },
+      recipe_hash: { default: null },
+      captured_at: { default: null },
+      render: { default: "json" },
+      data: { default: null },
+      yaml_error: { default: null },
+      raw_yaml: { default: "" }
     },
     atom: true,
     group: "block",
@@ -152,64 +164,131 @@ const marks: Record<string, MarkSpec> = {
 
 export const vellumSchema = new Schema({ nodes, marks });
 
-function placeholderText(block: Block): string {
-  return `${block.kind} block (${block.byte_range.start}-${block.byte_range.end})`;
-}
-
-function blockAttrs(): Record<string, never> {
-  return {};
-}
-
-function textBlock(
-  type: "paragraph" | "heading" | "code_block",
-  block: Block,
-  includeBlockId = true
-): ProseMirrorNode {
-  const text = vellumSchema.text(placeholderText(block));
-  const attrs = includeBlockId ? blockAttrs() : null;
-
-  if (type === "heading") {
-    return vellumSchema.nodes.heading.create({ ...attrs, level: 1 }, text);
-  }
-
-  return vellumSchema.nodes[type].create(attrs, text);
+function blockAttrs(): { id: null } {
+  return { id: null };
 }
 
 function blockToNode(block: Block): ProseMirrorNode {
-  switch (block.kind) {
-    case "Frontmatter":
-      return vellumSchema.nodes.frontmatter.create({ kind: "yaml", raw: "" });
-    case "Heading":
-      return textBlock("heading", block);
-    case "Paragraph":
-      return textBlock("paragraph", block);
-    case "CodeBlock":
-      return textBlock("code_block", block);
-    case "List": {
-      const item = vellumSchema.nodes.list_item.create(null, textBlock("paragraph", block, false));
-      return vellumSchema.nodes.bullet_list.create(blockAttrs(), item);
-    }
-    case "BlockQuote":
-      return vellumSchema.nodes.blockquote.create(blockAttrs(), textBlock("paragraph", block, false));
-    case "ThematicBreak":
-      return vellumSchema.nodes.horizontal_rule.create(blockAttrs());
-    case "VellumLiveQuery":
-      return vellumSchema.nodes.vellum_live_query.create({
-        ...blockAttrs(),
-        tool: "unknown tool",
-        render: "json"
-      });
-    case "VellumResult":
-      return vellumSchema.nodes.vellum_result.create(blockAttrs());
-    case "HtmlBlock":
-    case "Table":
-    case "FootnoteDefinition":
-    case "LinkRefDefinition":
-      return textBlock("paragraph", block);
+  const payload = block.payload;
+
+  if (payload === "ThematicBreak") {
+    return vellumSchema.nodes.horizontal_rule.create(blockAttrs());
   }
+  if ("Frontmatter" in payload) {
+    return vellumSchema.nodes.frontmatter.create({
+      kind: payload.Frontmatter.kind.toLowerCase(),
+      raw: payload.Frontmatter.raw
+    });
+  }
+  if ("Heading" in payload) {
+    return vellumSchema.nodes.heading.create(
+      { ...blockAttrs(), level: payload.Heading.level },
+      inlinesToPmInlines(vellumSchema, payload.Heading.inlines)
+    );
+  }
+  if ("Paragraph" in payload) {
+    return vellumSchema.nodes.paragraph.create(
+      blockAttrs(),
+      inlinesToPmInlines(vellumSchema, payload.Paragraph.inlines)
+    );
+  }
+  if ("CodeBlock" in payload) {
+    const text = pmTextNode(vellumSchema, payload.CodeBlock.content);
+    return vellumSchema.nodes.code_block.create(
+      { ...blockAttrs(), language: payload.CodeBlock.language },
+      text ? [text] : null
+    );
+  }
+  if ("BlockQuote" in payload) {
+    return vellumSchema.nodes.blockquote.create(blockAttrs(), blocksToNodes(payload.BlockQuote.children));
+  }
+  if ("List" in payload) {
+    const items = payload.List.items.map(itemToListItem);
+    if (payload.List.ordered) {
+      return vellumSchema.nodes.ordered_list.create({ ...blockAttrs(), order: payload.List.start ?? 1 }, items);
+    }
+    return vellumSchema.nodes.bullet_list.create(blockAttrs(), items);
+  }
+  if ("VellumLiveQuery" in payload) {
+    return liveQueryNode(payload.VellumLiveQuery.yaml);
+  }
+  if ("VellumResult" in payload) {
+    return resultNode(payload.VellumResult.yaml);
+  }
+  if ("HtmlBlock" in payload) {
+    return stubParagraph(payload.HtmlBlock.html);
+  }
+  if ("Table" in payload) {
+    return stubParagraph(tableText(payload.Table.headers, payload.Table.rows));
+  }
+  if ("FootnoteDefinition" in payload) {
+    return stubParagraph(`[^${payload.FootnoteDefinition.label}]: ${blocksPlainText(payload.FootnoteDefinition.children)}`);
+  }
+  if ("LinkRefDefinition" in payload) {
+    const title = payload.LinkRefDefinition.title ? ` "${payload.LinkRefDefinition.title}"` : "";
+    return stubParagraph(`[${payload.LinkRefDefinition.label}]: ${payload.LinkRefDefinition.dest}${title}`);
+  }
+
+  return stubParagraph(block.kind);
+}
+
+function itemToListItem(item: ListItem): ProseMirrorNode {
+  const children = blocksToNodes(item.children);
+  const content =
+    children.length > 0 && children[0].type === vellumSchema.nodes.paragraph
+      ? children
+      : [vellumSchema.nodes.paragraph.create(), ...children];
+
+  return vellumSchema.nodes.list_item.create({ checkbox: item.checkbox }, content);
+}
+
+function liveQueryNode(raw: string): ProseMirrorNode {
+  return vellumSchema.nodes.vellum_live_query.create({ ...blockAttrs(), ...liveQueryAttrs(raw) });
+}
+
+function resultNode(raw: string): ProseMirrorNode {
+  return vellumSchema.nodes.vellum_result.create({ ...blockAttrs(), ...resultAttrs(raw) });
+}
+
+function blocksToNodes(blocks: Block[]): ProseMirrorNode[] {
+  return blocks.length > 0 ? blocks.map(blockToNode) : [vellumSchema.nodes.paragraph.create()];
+}
+
+function stubParagraph(text: string): ProseMirrorNode {
+  const node = pmTextNode(vellumSchema, text);
+  return vellumSchema.nodes.paragraph.create(blockAttrs(), node ? [node] : null);
+}
+
+function tableText(headers: Inline[][], rows: Inline[][][]): string {
+  const headerText = headers.map(plainTextFromInlines).join(" | ");
+  const rowText = rows.map((row) => row.map(plainTextFromInlines).join(" | ")).join("\n");
+  return [headerText, rowText].filter(Boolean).join("\n");
+}
+
+function blocksPlainText(blocks: Block[]): string {
+  return blocks.map(blockPlainText).filter(Boolean).join("\n");
+}
+
+function blockPlainText(block: Block): string {
+  const payload = block.payload;
+  if (payload === "ThematicBreak") {
+    return "";
+  }
+  if ("Paragraph" in payload) {
+    return plainTextFromInlines(payload.Paragraph.inlines);
+  }
+  if ("Heading" in payload) {
+    return plainTextFromInlines(payload.Heading.inlines);
+  }
+  if ("CodeBlock" in payload) {
+    return payload.CodeBlock.content;
+  }
+  if ("BlockQuote" in payload) {
+    return blocksPlainText(payload.BlockQuote.children);
+  }
+  return "";
 }
 
 export function blocksToDoc(blocks: Block[]): ProseMirrorNode {
-  const children = blocks.length > 0 ? blocks.map(blockToNode) : [vellumSchema.nodes.paragraph.create()];
-  return vellumSchema.nodes.doc.create(null, children);
+  return vellumSchema.nodes.doc.create(null, blocksToNodes(blocks));
 }

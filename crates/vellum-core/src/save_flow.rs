@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::{
     block::patch::{BlockEdit, BlockError, BlockId, BlockPatch},
-    parse::{Block, BlockKind, ByteRange, partition::PartitionError},
+    parse::{Block, BlockKind, BlockPayload, ByteRange, partition::PartitionError},
 };
 
 #[derive(Debug, Error)]
@@ -81,8 +81,8 @@ fn verify_patch_ranges(source: &str, patches: &[BlockPatch]) -> Result<(), SaveE
 fn block_for_partition(kind: BlockKind, byte_range: ByteRange) -> Block {
     Block {
         kind,
-        raw_source: byte_range.clone(),
         byte_range,
+        payload: BlockPayload::ThematicBreak,
     }
 }
 

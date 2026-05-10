@@ -21,6 +21,28 @@ function applyBlockId(dom: HTMLElement, node: ProseMirrorNode): void {
   }
 }
 
+function appendYamlError(dom: HTMLElement, node: ProseMirrorNode): boolean {
+  const error = textAttr(node, "yaml_error", "");
+  if (!error) {
+    return false;
+  }
+
+  const badge = document.createElement("span");
+  badge.className = "pm-badge pm-badge-error";
+  badge.textContent = "invalid YAML";
+
+  const message = document.createElement("span");
+  message.className = "pm-primitive-error";
+  message.textContent = error;
+
+  const raw = document.createElement("pre");
+  raw.className = "pm-primitive-raw";
+  raw.textContent = textAttr(node, "raw_yaml", "");
+
+  dom.append(badge, message, raw);
+  return true;
+}
+
 export function liveQueryNodeView(node: ProseMirrorNode): NodeView {
   const dom = document.createElement("section");
   dom.className = "pm-primitive pm-live-query";
@@ -31,11 +53,15 @@ export function liveQueryNodeView(node: ProseMirrorNode): NodeView {
   label.className = "pm-primitive-label";
   label.textContent = textAttr(node, "tool", "unknown tool");
 
-  const badge = document.createElement("span");
-  badge.className = "pm-badge";
-  badge.textContent = "recipe";
+  if (!appendYamlError(dom, node)) {
+    const badge = document.createElement("span");
+    badge.className = "pm-badge";
+    badge.textContent = "recipe";
 
-  dom.append(label, badge);
+    dom.append(label, badge);
+  } else {
+    dom.prepend(label);
+  }
 
   return { dom };
 }
@@ -50,11 +76,15 @@ export function resultNodeView(node: ProseMirrorNode): NodeView {
   label.className = "pm-primitive-label";
   label.textContent = "vellum:result";
 
-  const badge = document.createElement("span");
-  badge.className = "pm-badge pm-badge-pending";
-  badge.textContent = "evidence-state pending";
+  if (!appendYamlError(dom, node)) {
+    const badge = document.createElement("span");
+    badge.className = "pm-badge pm-badge-pending";
+    badge.textContent = "evidence-state pending";
 
-  dom.append(label, badge);
+    dom.append(label, badge);
+  } else {
+    dom.prepend(label);
+  }
 
   return { dom };
 }

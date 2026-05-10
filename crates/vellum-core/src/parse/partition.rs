@@ -72,13 +72,15 @@ pub fn verify_partition(source: &str, blocks: &[Block]) -> Result<(), PartitionE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::{Block, BlockKind, ByteRange};
+    use crate::parse::{Block, BlockKind, BlockPayload, ByteRange};
 
     fn block(start: usize, end: usize) -> Block {
         Block {
             kind: BlockKind::Paragraph,
             byte_range: ByteRange::new(start, end),
-            raw_source: ByteRange::new(start, end),
+            payload: BlockPayload::Paragraph {
+                inlines: Vec::new(),
+            },
         }
     }
 
