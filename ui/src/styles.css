@@ -9,7 +9,14 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 
+#root {
+  min-height: 100vh;
+}
+
 .app {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
   padding: 24px;
 }
 
@@ -42,21 +49,31 @@ button {
   padding: 6px 12px;
 }
 
-textarea {
-  display: block;
-  width: min(100%, 600px);
-  height: 400px;
-  padding: 12px;
+.source-panel {
+  display: flex;
+  min-height: 320px;
+  flex: 1 1 50vh;
   border: 1px solid #999;
   background: #fff;
-  color: #111;
-  font: inherit;
-  line-height: 1.4;
-  resize: both;
 }
 
-pre {
-  width: min(100%, 900px);
+.source-view {
+  flex: 1;
+  min-width: 0;
+}
+
+.cm-editor {
+  height: 100%;
+}
+
+.cm-scroller {
+  font-family: inherit;
+  line-height: 1.4;
+}
+
+.result-pane {
+  flex: 0 1 35vh;
+  max-height: 35vh;
   margin: 16px 0 0;
   padding: 12px;
   overflow: auto;

@@ -8,13 +8,21 @@ stage: Design → Develop transition
 
 ## Right now
 
-**Gate 30A is fully closed. Develop stage active; Gate 30B-01a minimal UI scaffold proves the Tauri IPC roundtrip path.**
+**Gate 30A is fully closed. Develop stage active; Gate 30B-01b CodeMirror source view is implemented on top of the minimal UI scaffold.**
 
 The spec is locked through 4 review cycles (3 internal CPO + 2 external multi-model rounds — Codex implementation lens + Claude -p architectural lens). Critical=0, High=0 at exit. Project artifacts (intent, decisions, BACKLOG, this status) just landed.
 
-**Next move:** implement Gate 30B-01b CodeMirror source view, then Gate 30B-01c ProseMirror custom schema, as separate reviewable slices.
+**Next move:** implement Gate 30B-01c ProseMirror custom schema with primitive node types. Keep it separate from source-view toggle sync.
 
 ## Session log
+
+### 2026-05-10 — Gate 30B-01b CodeMirror source view
+
+- Added `ui/src/components/SourceView.tsx`, a small React functional component that mounts a CodeMirror 6 `EditorView`, enables Markdown grammar, line wrapping, default light UI, per-transaction `onChange`, unmount disposal, and external prop-to-doc resync for later file watcher integration.
+- Replaced the scaffold textarea in `ui/src/App.tsx` with `SourceView` while preserving file load, Parse button, and pretty-printed parsed `Block[]` output.
+- Updated `ui/src/styles.css` so the source editor fills roughly half the viewport and the result pane sits below as a bounded scrollable region.
+- Added CM6 dependencies: `codemirror`, `@codemirror/lang-markdown`, `@codemirror/state`, and `@codemirror/view`.
+- Verification: `pnpm install` passes; `pnpm run build` passes (`tsc --noEmit && vite build`). No lint script exists in `ui/package.json`.
 
 ### 2026-05-10 — Gate 30B-01a minimal UI IPC roundtrip
 
@@ -99,15 +107,16 @@ See `decisions.md` for the full log. Highlights from cycle 4:
 
 ## Next steps (priority order)
 
-1. **30A-05 partition invariant CI test.**
-2. **P0-04 `gh repo create jessepike/vellum --public`** — user action. Spec mandates public from commit 1.
-3. **Editor-facing parse surface** — expose block metadata needed by the UI once Gate 30A is fully closed.
-4. **30B planning** — ProseMirror/CodeMirror shell after parser/corpus gate is stable.
+1. **30B-01c ProseMirror custom schema with primitive node types.**
+2. **30B-02 PM-decorated stable block IDs via PM plugin/metadata** (D-VELLUM-6).
+3. **30B-04 Toggle-time bidirectional sync** between source view and rendered view.
+4. **30B-05 External-change diff prompt UI** — consumes the watcher events from 30A-08.
+5. **30B-06 Split-view layout + 30B-07 themes.**
 
 ## Blockers / open questions
 
-- Repo init: `gh repo create` is a user action — I (CPO) can't push to GitHub on your behalf.
-- All other 30A items are Codex-delegatable. Scaffold runs autonomously once kicked off.
+- None blocking. Repo public at github.com/jessepike/vellum, 7 commits on main, CI green.
+- Future hardening: migrate UI tooling (Node/pnpm) into OrbStack dev VM per host-protection rule. Not blocking; v1.5 cleanup.
 
 ## Risks watched
 

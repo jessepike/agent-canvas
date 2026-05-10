@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SourceView } from "./components/SourceView";
 import { parseDocument } from "./ipc";
 import type { ChangeEvent } from "react";
 import type { Block } from "./types/blocks";
@@ -60,14 +61,11 @@ export default function App() {
           {isParsing ? "Parsing..." : "Parse"}
         </button>
       </div>
-      <textarea
-        aria-label="Markdown source"
-        value={source}
-        onChange={(event) => setSource(event.target.value)}
-        spellCheck={false}
-      />
+      <section className="source-panel">
+        <SourceView value={source} onChange={setSource} />
+      </section>
       {error ? <p className="error">{error}</p> : null}
-      <pre>{JSON.stringify(blocks, null, 2)}</pre>
+      <pre className="result-pane">{JSON.stringify(blocks, null, 2)}</pre>
     </main>
   );
 }
