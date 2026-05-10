@@ -8,13 +8,20 @@ stage: Design → Develop transition
 
 ## Right now
 
-**Design stage complete. Develop stage beginning.**
+**Gate 30A parser body implemented. Develop stage active.**
 
 The spec is locked through 4 review cycles (3 internal CPO + 2 external multi-model rounds — Codex implementation lens + Claude -p architectural lens). Critical=0, High=0 at exit. Project artifacts (intent, decisions, BACKLOG, this status) just landed.
 
-**Next move:** scaffold the Cargo workspace + format-preservation corpus via Codex delegation. This is Phase 0 + Gate 30A.
+**Next move:** wire the partition invariant into CI as Gate 30A-05, then continue toward the editor-facing parse surface.
 
 ## Session log
+
+### 2026-05-10 — Gate 30A-04 parser body
+
+- Implemented `parse::parse(source: &str) -> Result<Vec<Block>, ParseError>` in `crates/vellum-core/src/parse/mod.rs`.
+- Parser now detects YAML/TOML/JSON frontmatter as an opaque first block, scans top-level link reference definition lines, walks `pulldown-cmark` 0.13 `OffsetIter` for top-level block frames, maps Vellum primitive fences to `VellumLiveQuery` / `VellumResult`, stitches trailing whitespace into the preceding block, and validates with `parse::partition::verify_partition` before returning.
+- Added `ParseError::PartitionInvariant` so parser callers get an explicit invariant failure instead of a panic or unchecked bad partition.
+- Verification: `cargo run -p vellum-corpus` passes 67/67; `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, and `cargo fmt --check` pass in OrbStack dev VM.
 
 ### 2026-05-10 — Phase 0 + Gate 30A scaffold
 
@@ -57,12 +64,10 @@ See `decisions.md` for the full log. Highlights from cycle 4:
 
 ## Next steps (priority order)
 
-1. **P0-03 CLAUDE.md + AGENTS.md** — project-local agent context. Authoring this session.
+1. **30A-05 partition invariant CI test.**
 2. **P0-04 `gh repo create jessepike/vellum --public`** — user action. Spec mandates public from commit 1.
-3. **30A-01 Cargo workspace scaffold** — delegate to Codex via codex-delegate.
-4. **30A-02 format-preservation corpus** — delegate to Codex; 50+ test files.
-5. **30A-04 vellum-core::parse module** — partition-contract parser.
-6. **30A-05 partition invariant CI test.**
+3. **Editor-facing parse surface** — expose block metadata needed by the UI once Gate 30A is fully closed.
+4. **30B planning** — ProseMirror/CodeMirror shell after parser/corpus gate is stable.
 
 ## Blockers / open questions
 
