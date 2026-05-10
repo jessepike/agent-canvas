@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { RenderedView } from "./components/RenderedView";
 import { SourceView } from "./components/SourceView";
 import { parseDocument } from "./ipc";
 import type { ChangeEvent } from "react";
@@ -61,11 +62,15 @@ export default function App() {
           {isParsing ? "Parsing..." : "Parse"}
         </button>
       </div>
-      <section className="source-panel">
-        <SourceView value={source} onChange={setSource} />
-      </section>
+      <div className="editor-stack">
+        <section className="editor-panel source-panel" aria-label="Source editor panel">
+          <SourceView value={source} onChange={setSource} />
+        </section>
+        <section className="editor-panel rendered-panel" aria-label="Rendered preview panel">
+          <RenderedView blocks={blocks} />
+        </section>
+      </div>
       {error ? <p className="error">{error}</p> : null}
-      <pre className="result-pane">{JSON.stringify(blocks, null, 2)}</pre>
     </main>
   );
 }

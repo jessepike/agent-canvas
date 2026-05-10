@@ -23,6 +23,21 @@ importers:
       codemirror:
         specifier: ^6.0.2
         version: 6.0.2
+      prosemirror-commands:
+        specifier: ^1.7.1
+        version: 1.7.1
+      prosemirror-keymap:
+        specifier: ^1.2.3
+        version: 1.2.3
+      prosemirror-model:
+        specifier: ^1.25.4
+        version: 1.25.4
+      prosemirror-state:
+        specifier: ^1.4.4
+        version: 1.4.4
+      prosemirror-view:
+        specifier: ^1.41.8
+        version: 1.41.8
       react:
         specifier: ^19.0.0
         version: 19.2.6
@@ -600,12 +615,33 @@ packages:
   node-releases@2.0.38:
     resolution: {integrity: sha512-3qT/88Y3FbH/Kx4szpQQ4HzUbVrHPKTLVpVocKiLfoYvw9XSGOX2FmD2d6DrXbVYyAQTF2HeF6My8jmzx7/CRw==}
 
+  orderedmap@2.1.1:
+    resolution: {integrity: sha512-TvAWxi0nDe1j/rtMcWcIj94+Ffe6n7zhow33h40SKxmsmozs6dz/e+EajymfoFcHd7sxNn8yHM8839uixMOV6g==}
+
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
   postcss@8.5.14:
     resolution: {integrity: sha512-SoSL4+OSEtR99LHFZQiJLkT59C5B1amGO1NzTwj7TT1qCUgUO6hxOvzkOYxD+vMrXBM3XJIKzokoERdqQq/Zmg==}
     engines: {node: ^10 || ^12 || >=14}
+
+  prosemirror-commands@1.7.1:
+    resolution: {integrity: sha512-rT7qZnQtx5c0/y/KlYaGvtG411S97UaL6gdp6RIZ23DLHanMYLyfGBV5DtSnZdthQql7W+lEVbpSfwtO8T+L2w==}
+
+  prosemirror-keymap@1.2.3:
+    resolution: {integrity: sha512-4HucRlpiLd1IPQQXNqeo81BGtkY8Ai5smHhKW9jjPKRc2wQIxksg7Hl1tTI2IfT2B/LgX6bfYvXxEpJl7aKYKw==}
+
+  prosemirror-model@1.25.4:
+    resolution: {integrity: sha512-PIM7E43PBxKce8OQeezAs9j4TP+5yDpZVbuurd1h5phUxEKIu+G2a+EUZzIC5nS1mJktDJWzbqS23n1tsAf5QA==}
+
+  prosemirror-state@1.4.4:
+    resolution: {integrity: sha512-6jiYHH2CIGbCfnxdHbXZ12gySFY/fz/ulZE333G6bPqIZ4F+TXo9ifiR86nAHpWnfoNjOb3o5ESi7J8Uz1jXHw==}
+
+  prosemirror-transform@1.12.0:
+    resolution: {integrity: sha512-GxboyN4AMIsoHNtz5uf2r2Ru551i5hWeCMD6E2Ib4Eogqoub0NflniaBPVQ4MrGE5yZ8JV9tUHg9qcZTTrcN4w==}
+
+  prosemirror-view@1.41.8:
+    resolution: {integrity: sha512-TnKDdohEatgyZNGCDWIdccOHXhYloJwbwU+phw/a23KBvJIR9lWQWW7WHHK3vBdOLDNuF7TaX98GObUZOWkOnA==}
 
   react-dom@19.2.6:
     resolution: {integrity: sha512-0prMI+hvBbPjsWnxDLxlCGyM8PN6UuWjEUCYmZhO67xIV9Xasa/r/vDnq+Xyq4Lo27g8QSbO5YzARu0D1Sps3g==}
@@ -1218,6 +1254,8 @@ snapshots:
 
   node-releases@2.0.38: {}
 
+  orderedmap@2.1.1: {}
+
   picocolors@1.1.1: {}
 
   postcss@8.5.14:
@@ -1225,6 +1263,37 @@ snapshots:
       nanoid: 3.3.12
       picocolors: 1.1.1
       source-map-js: 1.2.1
+
+  prosemirror-commands@1.7.1:
+    dependencies:
+      prosemirror-model: 1.25.4
+      prosemirror-state: 1.4.4
+      prosemirror-transform: 1.12.0
+
+  prosemirror-keymap@1.2.3:
+    dependencies:
+      prosemirror-state: 1.4.4
+      w3c-keyname: 2.2.8
+
+  prosemirror-model@1.25.4:
+    dependencies:
+      orderedmap: 2.1.1
+
+  prosemirror-state@1.4.4:
+    dependencies:
+      prosemirror-model: 1.25.4
+      prosemirror-transform: 1.12.0
+      prosemirror-view: 1.41.8
+
+  prosemirror-transform@1.12.0:
+    dependencies:
+      prosemirror-model: 1.25.4
+
+  prosemirror-view@1.41.8:
+    dependencies:
+      prosemirror-model: 1.25.4
+      prosemirror-state: 1.4.4
+      prosemirror-transform: 1.12.0
 
   react-dom@19.2.6(react@19.2.6):
     dependencies:

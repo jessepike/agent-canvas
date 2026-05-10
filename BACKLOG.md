@@ -48,7 +48,7 @@ Confidence: `[H/M/L]` × `[R/D/G/F]`.
 | 30B-00 | done | BlockPatch save flow in Rust (D-VELLUM-16, edit-preserving save) | [H-R] | Tested via synthetic patch sequences against corpus |
 | 30B-01 | done | 30B-01a: minimal React+Vite+TS scaffold + IPC roundtrip | [H-D] | Textarea + `parse_document` invoke + Zod Block[] validation |
 | 30B-01b | done | CodeMirror 6 source view | [H-D] | Was part of 30B-03; renumbered for reviewable delegation |
-| 30B-01c | todo | ProseMirror custom schema with primitive node types | [H-D] | Original 30B-01; no Tiptap |
+| 30B-01c | done | ProseMirror custom schema with primitive node types | [H-D] | Read-only rendered view; no block IDs or source patch sync yet |
 | 30B-02 | todo | PM-decorated stable block IDs via PM plugin/metadata | [H-D] | D-VELLUM-6 |
 | 30B-03 | cut | CodeMirror 6 source view with Markdown grammar | [H-D] | Replaced by 30B-01b |
 | 30B-04 | todo | Toggle-time bidirectional sync between source view and rendered view | [H-D] | NOT per-keystroke |

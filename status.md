@@ -8,13 +8,23 @@ stage: Design → Develop transition
 
 ## Right now
 
-**Gate 30A is fully closed. Develop stage active; Gate 30B-01b CodeMirror source view is implemented on top of the minimal UI scaffold.**
+**Gate 30A is fully closed. Develop stage active; Gate 30B-01c ProseMirror custom schema and read-only rendered view are implemented on top of the UI scaffold.**
 
 The spec is locked through 4 review cycles (3 internal CPO + 2 external multi-model rounds — Codex implementation lens + Claude -p architectural lens). Critical=0, High=0 at exit. Project artifacts (intent, decisions, BACKLOG, this status) just landed.
 
-**Next move:** implement Gate 30B-01c ProseMirror custom schema with primitive node types. Keep it separate from source-view toggle sync.
+**Next move:** implement Gate 30B-02 PM-decorated stable block IDs. Keep it separate from toggle-time source/rendered sync.
 
 ## Session log
+
+### 2026-05-10 — Gate 30B-01c ProseMirror schema + rendered view
+
+- Added `ui/src/pm/schema.ts` with a custom ProseMirror schema for Vellum block nodes, primitive atoms, frontmatter, and basic marks. No `prosemirror-schema-basic` dependency.
+- Added `ui/src/pm/nodeviews.ts` with placeholder node views for `vellum:live-query`, `vellum:result`, and collapsed frontmatter.
+- Added `ui/src/components/RenderedView.tsx`, a read-only React component that mounts/disposes a ProseMirror `EditorView` and rebuilds the PM doc from current parser `Block[]`.
+- Updated `ui/src/App.tsx` and `ui/src/styles.css` to show SourceView on top and RenderedView below, both driven by the Parse button.
+- Added ProseMirror deps: `prosemirror-model`, `prosemirror-state`, `prosemirror-view`, `prosemirror-keymap`, and `prosemirror-commands`.
+- Verification: `pnpm install prosemirror-model prosemirror-state prosemirror-view prosemirror-keymap prosemirror-commands` passes; `pnpm run build` passes (`tsc --noEmit && vite build`). Vite reports only the bundle-size warning.
+- Scope intentionally deferred: PM-decorated block IDs (30B-02), editable rendered view, and source/rendered patch sync (30B-04). Current parser `Block[]` lacks text content and primitive YAML attrs, so rendered nodes use placeholders until a later parser/IPC slice exposes richer block payloads.
 
 ### 2026-05-10 — Gate 30B-01b CodeMirror source view
 
@@ -107,16 +117,15 @@ See `decisions.md` for the full log. Highlights from cycle 4:
 
 ## Next steps (priority order)
 
-1. **30B-01c ProseMirror custom schema with primitive node types.**
-2. **30B-02 PM-decorated stable block IDs via PM plugin/metadata** (D-VELLUM-6).
-3. **30B-04 Toggle-time bidirectional sync** between source view and rendered view.
-4. **30B-05 External-change diff prompt UI** — consumes the watcher events from 30A-08.
-5. **30B-06 Split-view layout + 30B-07 themes.**
+1. **30B-02 PM-decorated stable block IDs via PM plugin/metadata** (D-VELLUM-6).
+2. **30B-04 Toggle-time bidirectional sync** between source view and rendered view.
+3. **30B-05 External-change diff prompt UI** — consumes the watcher events from 30A-08.
+4. **30B-06 Split-view layout + 30B-07 themes.**
 
 ## Blockers / open questions
 
 - None blocking. Repo public at github.com/jessepike/vellum, 7 commits on main, CI green.
-- Future hardening: migrate UI tooling (Node/pnpm) into OrbStack dev VM per host-protection rule. Not blocking; v1.5 cleanup.
+- Future hardening: migrate UI tooling (Node/pnpm) into OrbStack dev VM per host-protection rule. Current dev VM lacks Node/npm/Corepack/pnpm, so 30B-01c UI verification used existing host pnpm. Not blocking; v1.5 cleanup.
 
 ## Risks watched
 

@@ -49,10 +49,16 @@ button {
   padding: 6px 12px;
 }
 
-.source-panel {
+.editor-stack {
+  display: grid;
+  min-height: 640px;
+  flex: 1 1 auto;
+  grid-template-rows: minmax(260px, 1fr) minmax(260px, 1fr);
+  gap: 12px;
+}
+
+.editor-panel {
   display: flex;
-  min-height: 320px;
-  flex: 1 1 50vh;
   border: 1px solid #999;
   background: #fff;
 }
@@ -71,15 +77,61 @@ button {
   line-height: 1.4;
 }
 
-.result-pane {
-  flex: 0 1 35vh;
-  max-height: 35vh;
-  margin: 16px 0 0;
-  padding: 12px;
+.rendered-view {
+  flex: 1;
+  min-width: 0;
   overflow: auto;
-  border: 1px solid #bbb;
-  background: #fff;
-  line-height: 1.4;
+}
+
+.ProseMirror {
+  min-height: 100%;
+  padding: 16px;
+  outline: none;
+  white-space: pre-wrap;
+}
+
+.ProseMirror h1 {
+  margin: 0 0 12px;
+  font-size: 20px;
+}
+
+.ProseMirror p {
+  margin: 0 0 10px;
+}
+
+.pm-primitive,
+.pm-frontmatter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid #b7b7b7;
+  border-radius: 6px;
+  background: #f8faf9;
+}
+
+.pm-frontmatter {
+  color: #555;
+}
+
+.pm-primitive-label {
+  font-weight: 700;
+}
+
+.pm-badge {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid #777;
+  border-radius: 999px;
+  color: #333;
+  font-size: 12px;
+}
+
+.pm-badge-pending {
+  border-color: #9a7a1c;
+  color: #6d5400;
 }
 
 .error {
