@@ -10,6 +10,15 @@ The Rust core owns durability: parsing, block byte ranges, filesystem safety, ha
 
 The current scaffold is Gate 30A: parser API, partition invariant, and the format-preservation corpus. UI, MCP, auth, and renderer work come later.
 
+## UI setup
+
+The UI is in `ui/` — React + Vite + TypeScript.
+
+Install: `cd ui && pnpm install`.
+Dev server: `pnpm dev` (Vite hot reload on http://localhost:1420).
+Tauri dev mode (UI + Rust together): from project root, `cargo tauri dev`.
+Build: `pnpm build` → outputs to `ui/dist/`.
+
 ## Format Preservation
 
 Every parsed top-level block carries a byte range into the original file. Untouched blocks are emitted as their preserved raw bytes. The parser must produce an ordered, non-overlapping partition of the entire file: no gaps, no overlaps, no nested top-level spans.

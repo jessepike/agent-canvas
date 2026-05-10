@@ -5,6 +5,10 @@ crates/vellum-app/gen/
 node_modules/
 dist/
 .vite/
+.pnpm-store/
+ui/node_modules/
+ui/dist/
+ui/.vite/
 
 .vellum-cache/
 

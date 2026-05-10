@@ -46,9 +46,11 @@ Confidence: `[H/M/L]` × `[R/D/G/F]`.
 | ID | Status | Item | Confidence | Notes |
 |----|--------|------|-----------|-------|
 | 30B-00 | done | BlockPatch save flow in Rust (D-VELLUM-16, edit-preserving save) | [H-R] | Tested via synthetic patch sequences against corpus |
-| 30B-01 | todo | ProseMirror custom schema with primitive node types | [H-D] | |
+| 30B-01 | done | 30B-01a: minimal React+Vite+TS scaffold + IPC roundtrip | [H-D] | Textarea + `parse_document` invoke + Zod Block[] validation |
+| 30B-01b | todo | CodeMirror 6 source view | [H-D] | Was part of 30B-03; renumbered for reviewable delegation |
+| 30B-01c | todo | ProseMirror custom schema with primitive node types | [H-D] | Original 30B-01; no Tiptap |
 | 30B-02 | todo | PM-decorated stable block IDs via PM plugin/metadata | [H-D] | D-VELLUM-6 |
-| 30B-03 | todo | CodeMirror 6 source view with Markdown grammar | [H-D] | |
+| 30B-03 | cut | CodeMirror 6 source view with Markdown grammar | [H-D] | Replaced by 30B-01b |
 | 30B-04 | todo | Toggle-time bidirectional sync between source view and rendered view | [H-D] | NOT per-keystroke |
 | 30B-05 | todo | External-change diff prompt UI (three-pane: in-memory / on-disk / base) | [H-D] | |
 | 30B-06 | todo | Split-view default layout; rendered-only and source-only modes; per-doc preference | [M-D] | |

@@ -8,13 +8,22 @@ stage: Design → Develop transition
 
 ## Right now
 
-**Gate 30A is fully closed. Develop stage active; Gate 30B-00 save-flow foundation is implemented before UI scaffold.**
+**Gate 30A is fully closed. Develop stage active; Gate 30B-01a minimal UI scaffold proves the Tauri IPC roundtrip path.**
 
 The spec is locked through 4 review cycles (3 internal CPO + 2 external multi-model rounds — Codex implementation lens + Claude -p architectural lens). Critical=0, High=0 at exit. Project artifacts (intent, decisions, BACKLOG, this status) just landed.
 
-**Next move:** begin Gate 30B planning for the ProseMirror/CodeMirror editor surface.
+**Next move:** implement Gate 30B-01b CodeMirror source view, then Gate 30B-01c ProseMirror custom schema, as separate reviewable slices.
 
 ## Session log
+
+### 2026-05-10 — Gate 30B-01a minimal UI IPC roundtrip
+
+- Added `ui/` React 19 + Vite + TypeScript scaffold with a pasteable/file-load Markdown textarea, Parse button, and pretty-printed `Block[]` JSON output.
+- Added `ui/src/ipc.ts` wrapper for `invoke("parse_document", { source })`, validating returned `Block[]` with handwritten Zod schemas per D-VELLUM-14.
+- Added handwritten Zod schemas for `BlockKind`, `Block`, byte ranges, and string parse errors. No `ts-rs` derives are wired yet.
+- Wired Tauri config to Vite dev server at `http://localhost:1420`, frontend dist at `../../ui/dist`, and pnpm commands from the app crate into `ui/`.
+- Updated Gate 30B backlog split: 30B-01a done, 30B-01b CodeMirror source view, 30B-01c ProseMirror schema. No CodeMirror or ProseMirror dependencies were added in this slice.
+- Verification: `pnpm install`, `pnpm build`, `cd crates/vellum-app && cd ../../ui && pnpm --filter . build`, `cargo build --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --check`, `cargo test --workspace`, and `cargo run -p vellum-corpus` pass. Corpus remains 67/67.
 
 ### 2026-05-10 — Gate 30B-00 BlockPatch save flow
 
