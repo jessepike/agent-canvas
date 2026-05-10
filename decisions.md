@@ -9,18 +9,18 @@ Confidence tags: `[H/M/L]` confidence × `[R/D/G/F]` basis (Researched / Deliber
 
 ## Current Commitments Index
 
-- **Stack:** Tauri 2.x + Rust core + ProseMirror-authoritative UI + CodeMirror 6 source view (D-VELLUM-1, 2).
-- **License:** Apache 2.0, public from commit 1 (D-VELLUM-3).
-- **v1 primitive set:** `vellum:live-query` only (D-VELLUM-4). `vellum:agent`, `vellum:transform`, `vellum:include` deferred to v1.5.
-- **Source preservation:** byte-level via partition contract on top of `pulldown-cmark`; format-preservation corpus is the v1 build gate (D-VELLUM-5).
-- **Block identity:** dual system — on-disk YAML `id` for primitives; in-memory PM-decorated UUIDs for non-primitives, persisted in sidecar `identity.json` with source-hash auto-migration on rename (D-VELLUM-6, D-VELLUM-12).
-- **Trust:** single `~/.vellum/trust.toml` with `bind` field anti-spoofing, 3-step deterministic evaluation order, `unknown_server = "ask"` default (D-VELLUM-7, D-VELLUM-13).
-- **IPC contract:** typed block-grain via `ts-rs` for TS types + handwritten Zod schemas; CI type-tests reconcile (D-VELLUM-14).
-- **First MCP server:** GitHub MCP read-only subset with token-only auth via OS keychain. OAuth deferred to v1.5 (D-VELLUM-8).
-- **v1.0 signing:** ad-hoc / developer-signed only. macOS notarization, Windows code-signing, Linux signature distribution all deferred to v1.1 (D-VELLUM-15).
-- **Doctor:** cut from v1; inline validation replaces it (D-VELLUM-9).
-- **Cache:** vault-rooted at `<vault-root>/.vellum-cache/<docpath>/`, sidecar-first, `pinned` is default result_policy (D-VELLUM-10).
-- **Milestones:** Gate 30A (parser+corpus) → 30B (editor) → 60 (live-query end-to-end) → 90 (honest history + ship) (D-VELLUM-11).
+- [pending] **Stack:** Tauri 2.x + Rust core + ProseMirror-authoritative UI + CodeMirror 6 source view (D-VELLUM-1, 2).
+- [pending] **License:** Apache 2.0, public from commit 1 (D-VELLUM-3).
+- [pending] **v1 primitive set:** `vellum:live-query` only (D-VELLUM-4). `vellum:agent`, `vellum:transform`, `vellum:include` deferred to v1.5.
+- [pending] **Source preservation:** byte-level via partition contract on top of `pulldown-cmark`; format-preservation corpus is the v1 build gate (D-VELLUM-5).
+- [pending] **Block identity:** dual system — on-disk YAML `id` for primitives; in-memory PM-decorated UUIDs for non-primitives, persisted in sidecar `identity.json` with source-hash auto-migration on rename (D-VELLUM-6, D-VELLUM-12).
+- [pending] **Trust:** single `~/.vellum/trust.toml` with `bind` field anti-spoofing, 3-step deterministic evaluation order, `unknown_server = "ask"` default (D-VELLUM-7, D-VELLUM-13).
+- [pending] **IPC contract:** typed block-grain via `ts-rs` for TS types + handwritten Zod schemas; CI type-tests reconcile (D-VELLUM-14).
+- [pending] **First MCP server:** GitHub MCP read-only subset with token-only auth via OS keychain. OAuth deferred to v1.5 (D-VELLUM-8).
+- [pending] **v1.0 signing:** ad-hoc / developer-signed only. macOS notarization, Windows code-signing, Linux signature distribution all deferred to v1.1 (D-VELLUM-15).
+- [pending] **Doctor:** cut from v1; inline validation replaces it (D-VELLUM-9).
+- [pending] **Cache:** vault-rooted at `<vault-root>/.vellum-cache/<docpath>/`, sidecar-first, `pinned` is default result_policy (D-VELLUM-10).
+- [pending] **Milestones:** Gate 30A (parser+corpus) → 30B (editor) → 60 (live-query end-to-end) → 90 (honest history + ship) (D-VELLUM-11).
 
 ## Decision Log
 
