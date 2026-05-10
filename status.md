@@ -8,11 +8,17 @@ stage: Design → Develop transition
 
 ## Right now
 
-**Gate 30A is fully closed. Develop stage active; Gate 30B-save is implemented: source-only open/save uses Tauri dialogs, raw Markdown writes go through `atomic_write` with base-hash corruption guard, and conflict saves are blocked with a reload banner.**
+**Vellum is daily-usable as a plain-Markdown editor for source-only editing.** Gate 30A closed; Gate 30B-{00, 01a, 01b, 01c, 02, ipc, save, render} all shipped. Rendered preview shows real Markdown content (headings with levels, inline marks, code with language, lists, primitive YAML attrs parsed at render time). Open/Save uses Tauri dialog + `atomic_write` with stat+hash corruption guard. Cmd+S / Cmd+O wired. Conflict detection blocks the save and prompts reload (three-way merge UI deferred to 30B-05).
 
-The spec is locked through 4 review cycles (3 internal CPO + 2 external multi-model rounds — Codex implementation lens + Claude -p architectural lens). Critical=0, High=0 at exit. Project artifacts (intent, decisions, BACKLOG, this status) just landed.
+**Paused 2026-05-10 ~18:40 PT** — Codex hit usage limit on 30B-07 themes delegation. Tree is clean (no uncommitted work). Codex resets at ~6:41 PM PT.
 
-**Next move:** implement Gate 30B-04 toggle-time bidirectional sync. Keep it separate from external-change diff UI / three-way merge resolution.
+**Remaining Gate 30B work:**
+- 30B-07 themes (small; queued at `/tmp/codex-30b-07.md`)
+- 30B-06 split-view layout (small)
+- 30B-05 three-way merge UI (medium; consumes existing `CONFLICT:` IPC pattern)
+- 30B-04 toggle-time sync + rendered editability (large; architectural sketch in 30B-render commit body — top-level block ownership boundaries, BlockPatch emission via PreservedBytes / EditedBytes; SerializeFromTree still stubbed)
+
+**After Gate 30B exit:** Days 31-60 vellum:live-query end-to-end (MCP client + GitHub MCP + `~/.vellum/trust.toml` + renderers).
 
 ## Session log
 
