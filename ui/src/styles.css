@@ -33,13 +33,6 @@ h1 {
   margin-bottom: 12px;
 }
 
-.file-picker {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-}
-
 button,
 input {
   font: inherit;
@@ -47,6 +40,25 @@ input {
 
 button {
   padding: 6px 12px;
+}
+
+.document-status {
+  margin-left: auto;
+  font-size: 14px;
+  color: #333;
+}
+
+.conflict-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #a05a00;
+  background: #fff7e8;
+  color: #653800;
+  font-size: 14px;
 }
 
 .editor-stack {

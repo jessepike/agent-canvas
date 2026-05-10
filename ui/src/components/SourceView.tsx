@@ -1,23 +1,36 @@
 import { markdown } from "@codemirror/lang-markdown";
-import { EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorState, Prec } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
 import { useEffect, useRef } from "react";
 
 type SourceViewProps = {
   value: string;
   onChange: (next: string) => void;
+  onOpen?: () => void;
+  onSave?: () => void;
 };
 
-export function SourceView({ value, onChange }: SourceViewProps) {
+export function SourceView({ value, onChange, onOpen, onSave }: SourceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
+  const onOpenRef = useRef(onOpen);
+  const onSaveRef = useRef(onSave);
   const valueRef = useRef(value);
+  const isApplyingExternalValueRef = useRef(false);
 
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
+
+  useEffect(() => {
+    onOpenRef.current = onOpen;
+  }, [onOpen]);
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
 
   useEffect(() => {
     valueRef.current = value;
@@ -34,6 +47,24 @@ export function SourceView({ value, onChange }: SourceViewProps) {
       state: EditorState.create({
         doc: valueRef.current,
         extensions: [
+          Prec.high(
+            keymap.of([
+              {
+                key: "Mod-o",
+                run: () => {
+                  onOpenRef.current?.();
+                  return true;
+                }
+              },
+              {
+                key: "Mod-s",
+                run: () => {
+                  onSaveRef.current?.();
+                  return true;
+                }
+              }
+            ])
+          ),
           basicSetup,
           markdown(),
           EditorView.lineWrapping,
@@ -44,6 +75,9 @@ export function SourceView({ value, onChange }: SourceViewProps) {
 
             const next = update.state.doc.toString();
             valueRef.current = next;
+            if (isApplyingExternalValueRef.current) {
+              return;
+            }
             onChangeRef.current(next);
           })
         ]
@@ -69,9 +103,11 @@ export function SourceView({ value, onChange }: SourceViewProps) {
       return;
     }
 
+    isApplyingExternalValueRef.current = true;
     view.dispatch({
       changes: { from: 0, to: current.length, insert: value }
     });
+    isApplyingExternalValueRef.current = false;
   }, [value]);
 
   return <div ref={containerRef} className="source-view" aria-label="Markdown source" />;

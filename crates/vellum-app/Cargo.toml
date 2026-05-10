@@ -6,11 +6,17 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+serde.workspace = true
 tauri = { workspace = true, default-features = false, features = ["wry"] }
+tauri-plugin-dialog.workspace = true
+ts-rs.workspace = true
 vellum-core = { path = "../vellum-core" }
 
 [build-dependencies]
 tauri-build.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [[bin]]
 name = "vellum-app"

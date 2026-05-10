@@ -8,13 +8,24 @@ stage: Design → Develop transition
 
 ## Right now
 
-**Gate 30A is fully closed. Develop stage active; Gate 30B IPC extension is implemented: `save_document`, `load_sidecar`, `save_sidecar`, ts-rs exports, and UI Zod boundary schemas are wired.**
+**Gate 30A is fully closed. Develop stage active; Gate 30B-save is implemented: source-only open/save uses Tauri dialogs, raw Markdown writes go through `atomic_write` with base-hash corruption guard, and conflict saves are blocked with a reload banner.**
 
 The spec is locked through 4 review cycles (3 internal CPO + 2 external multi-model rounds — Codex implementation lens + Claude -p architectural lens). Critical=0, High=0 at exit. Project artifacts (intent, decisions, BACKLOG, this status) just landed.
 
-**Next move:** implement Gate 30B-04 toggle-time bidirectional sync. Keep it separate from external-change diff UI.
+**Next move:** implement Gate 30B-04 toggle-time bidirectional sync. Keep it separate from external-change diff UI / three-way merge resolution.
 
 ## Session log
+
+### 2026-05-10 — Gate 30B-save Open / Save / Cmd+S round-trip
+
+- Extended `vellum_core::fs::atomic_write` to return the blake3 hash of the bytes just written while preserving the same-directory tmpfile and base-hash conflict guard.
+- Added ts-rs exported `OpenDocument` and `WriteResult` IPC structs.
+- Added Tauri commands `open_document(doc_path)` and `write_document(doc_path, source, base_hash)` with regular-file validation, conflict-marker detection on open, and `CONFLICT:` string prefix for base-hash mismatch until the typed 30B-05 merge error channel lands.
+- Replaced the browser file input with Tauri dialog plugin open/save flows. UI now tracks `docPath`, `baseHash`, `dirty`, supports Save As for untitled buffers, prompts before opening over dirty edits, and shows filename plus dirty/saved marker.
+- Added Cmd/Ctrl+O and Cmd/Ctrl+S handling both at document level and inside CodeMirror via a high-precedence keymap. CodeMirror external value updates are suppressed from dirty tracking so opening/reloading does not mark a document dirty.
+- Added conflict banner text: "File changed on disk since open. Save aborted — reload or open three-way merge." with a "Reload from disk" action.
+- Installed Node/npm/pnpm inside the OrbStack dev VM to satisfy the project isolation rule for UI dependency installs; `pnpm` pinned to 9.15.9 because Ubuntu's Node 18 cannot run pnpm 11.
+- Verification: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --all --check`, `cargo run -p vellum-corpus`, and `pnpm install --force && pnpm run build` pass. Corpus remains 67/67; Vite reports only the chunk-size warning.
 
 ### 2026-05-10 — Gate 30B-ipc Tauri IPC surface + ts-rs exports
 
@@ -146,7 +157,7 @@ See `decisions.md` for the full log. Highlights from cycle 4:
 
 - None blocking. Repo public at github.com/jessepike/vellum, 7 commits on main, CI green.
 - 30B-04 follow-up: decide the exact UI matching contract for sidecar `BlockIdentity { id, byte_range_start, kind }`. Rust IPC now exposes sidecar load/save, but the UI still needs the rendered/source sync slice to match non-primitive sidecar entries by byte offset.
-- Future hardening: migrate UI tooling (Node/pnpm) into OrbStack dev VM per host-protection rule. Current dev VM lacks Node/npm/Corepack/pnpm, so 30B-01c UI verification used existing host pnpm. Not blocking; v1.5 cleanup.
+- UI tooling now exists inside OrbStack dev VM (`node` 18.19.1, `pnpm` 9.15.9). Keep package installs and UI builds there, not on the host.
 
 ## Risks watched
 

@@ -1,7 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { z } from "zod";
-import { Block, BlockPatch, IdentityMap } from "./types/blocks";
-import type { Block as BlockType, BlockPatch as BlockPatchType, IdentityMap as IdentityMapType } from "./types/blocks";
+import { Block, BlockPatch, IdentityMap, OpenDocument, WriteResult, Hash32 } from "./types/blocks";
+import type {
+  Block as BlockType,
+  BlockPatch as BlockPatchType,
+  IdentityMap as IdentityMapType,
+  OpenDocument as OpenDocumentType,
+  WriteResult as WriteResultType
+} from "./types/blocks";
 
 function ipcError(command: string, caught: unknown): Error {
   if (caught instanceof z.ZodError) {
@@ -30,6 +36,32 @@ export async function saveDocument(source: string, patches: BlockPatchType[]): P
     return z.string().parse(result);
   } catch (caught) {
     throw ipcError("save_document", caught);
+  }
+}
+
+export async function openDocument(path: string): Promise<OpenDocumentType> {
+  try {
+    const result = await invoke<unknown>("open_document", { docPath: path });
+    return OpenDocument.parse(result);
+  } catch (caught) {
+    throw ipcError("open_document", caught);
+  }
+}
+
+export async function writeDocument(
+  path: string,
+  source: string,
+  baseHash: number[]
+): Promise<WriteResultType> {
+  try {
+    const result = await invoke<unknown>("write_document", {
+      docPath: path,
+      source,
+      baseHash: Hash32.parse(baseHash)
+    });
+    return WriteResult.parse(result);
+  } catch (caught) {
+    throw ipcError("write_document", caught);
   }
 }
 

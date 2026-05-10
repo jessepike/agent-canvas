@@ -22,6 +22,7 @@ serde_json = { version = "1" }
 similar = { version = "2" }
 tauri = { version = "2", default-features = false }
 tauri-build = { version = "2", default-features = false }
+tauri-plugin-dialog = { version = "2" }
 tempfile = { version = "3" }
 thiserror = { version = "1" }
 time = { version = "0.3", features = ["serde", "formatting", "parsing"] }

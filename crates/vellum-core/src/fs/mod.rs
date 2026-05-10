@@ -5,11 +5,27 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::parse::{ParseError, parse};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct OpenDocument {
+    pub path: String,
+    pub source: String,
+    pub base_hash: [u8; 32],
+    pub has_conflict_markers: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct WriteResult {
+    pub new_hash: [u8; 32],
+}
 
 #[derive(Debug, Error)]
 pub enum AtomicWriteError {
@@ -67,7 +83,7 @@ pub fn atomic_write(
     target: &Path,
     contents: &[u8],
     base_hash: Option<&[u8; 32]>,
-) -> Result<(), AtomicWriteError> {
+) -> Result<[u8; 32], AtomicWriteError> {
     if target.is_dir() {
         return Err(AtomicWriteError::TargetIsDirectory);
     }
@@ -92,7 +108,7 @@ pub fn atomic_write(
 
     let tmp_path = tmpfile_path(target);
     match write_and_rename(&tmp_path, target, contents) {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(*blake3::hash(contents).as_bytes()),
         Err(error) => {
             let _ = fs::remove_file(&tmp_path);
             Err(error.into())
@@ -231,9 +247,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let target = dir.path().join("note.md");
 
-        atomic_write(&target, b"# Hello\n", None).unwrap();
+        let new_hash = atomic_write(&target, b"# Hello\n", None).unwrap();
 
         assert_eq!(fs::read(&target).unwrap(), b"# Hello\n");
+        assert_eq!(new_hash, *blake3::hash(b"# Hello\n").as_bytes());
     }
 
     #[test]
@@ -243,9 +260,10 @@ mod tests {
         fs::write(&target, b"old").unwrap();
         let base_hash = *blake3::hash(b"old").as_bytes();
 
-        atomic_write(&target, b"new", Some(&base_hash)).unwrap();
+        let new_hash = atomic_write(&target, b"new", Some(&base_hash)).unwrap();
 
         assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert_eq!(new_hash, *blake3::hash(b"new").as_bytes());
     }
 
     #[test]

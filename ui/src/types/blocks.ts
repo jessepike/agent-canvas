@@ -8,6 +8,8 @@ import type { BlockKind as RsBlockKind } from "./generated/BlockKind";
 import type { BlockPatch as RsBlockPatch } from "./generated/BlockPatch";
 import type { ByteRange as RsByteRange } from "./generated/ByteRange";
 import type { IdentityMap as RsIdentityMap } from "./generated/IdentityMap";
+import type { OpenDocument as RsOpenDocument } from "./generated/OpenDocument";
+import type { WriteResult as RsWriteResult } from "./generated/WriteResult";
 
 type TypeEquals<Left, Right> = Left extends Right ? (Right extends Left ? true : false) : false;
 
@@ -93,7 +95,7 @@ export const BlockIdentity = z
 export type BlockIdentity = z.infer<typeof BlockIdentity>;
 const _checkBlockIdentity: TypeEquals<BlockIdentity, RsBlockIdentity> = true;
 
-const SourceHash = z.custom<RsIdentityMap["source_hash"]>(
+export const Hash32 = z.custom<RsIdentityMap["source_hash"]>(
   (value) =>
     Array.isArray(value) &&
     value.length === 32 &&
@@ -103,12 +105,31 @@ const SourceHash = z.custom<RsIdentityMap["source_hash"]>(
 
 export const IdentityMap = z
   .object({
-    source_hash: SourceHash,
+    source_hash: Hash32,
     block_ids: z.array(BlockIdentity)
   })
   .strict();
 export type IdentityMap = z.infer<typeof IdentityMap>;
 const _checkIdentityMap: TypeEquals<IdentityMap, RsIdentityMap> = true;
+
+export const OpenDocument = z
+  .object({
+    path: z.string(),
+    source: z.string(),
+    base_hash: Hash32,
+    has_conflict_markers: z.boolean()
+  })
+  .strict();
+export type OpenDocument = z.infer<typeof OpenDocument>;
+const _checkOpenDocument: TypeEquals<OpenDocument, RsOpenDocument> = true;
+
+export const WriteResult = z
+  .object({
+    new_hash: Hash32
+  })
+  .strict();
+export type WriteResult = z.infer<typeof WriteResult>;
+const _checkWriteResult: TypeEquals<WriteResult, RsWriteResult> = true;
 
 export const BlockIdSchema = BlockId;
 export const BlockKindSchema = BlockKind;
@@ -119,5 +140,7 @@ export const BlockErrorSchema = BlockError;
 export const BlockPatchSchema = BlockPatch;
 export const BlockIdentitySchema = BlockIdentity;
 export const IdentityMapSchema = IdentityMap;
+export const OpenDocumentSchema = OpenDocument;
+export const WriteResultSchema = WriteResult;
 export const ParseErrorSchema = z.string();
 export type ParseError = z.infer<typeof ParseErrorSchema>;
