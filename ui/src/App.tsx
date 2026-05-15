@@ -29,6 +29,19 @@ export default function App() {
   const [isParsing, setIsParsing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+
+  const reparse = useCallback(async (next: string) => {
+    try {
+      const parsedBlocks = await parseDocument(next);
+      setBlocks(parsedBlocks);
+    } catch (caught) {
+      // Parse errors are non-fatal for the rendered view; surface as error banner
+      // but don't crash the open/save flow.
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setBlocks([]);
+    }
+  }, []);
 
   const openPath = useCallback(async (path: string) => {
     setIsOpening(true);
@@ -40,14 +53,16 @@ export default function App() {
       setDocPath(opened.path);
       setBaseHash(opened.base_hash);
       setSource(opened.source);
-      setBlocks([]);
       setDirty(false);
+      setLastSavedAt(null);
+      // Auto-parse on open so the rendered view populates immediately
+      await reparse(opened.source);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setIsOpening(false);
     }
-  }, []);
+  }, [reparse]);
 
   const handleOpen = useCallback(async () => {
     if (dirty && !window.confirm("Discard unsaved changes and open another document?")) {
@@ -120,6 +135,13 @@ export default function App() {
       setDocPath(targetPath);
       setBaseHash(result.new_hash);
       setDirty(false);
+      // Visible save feedback — "Saved HH:MM:SS" lingers for 3s
+      const now = new Date();
+      const stamp = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+      setLastSavedAt(stamp);
+      window.setTimeout(() => setLastSavedAt((current) => (current === stamp ? null : current)), 3000);
+      // Auto-parse after save to keep rendered view in sync
+      await reparse(source);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
       if (message.startsWith("CONFLICT:")) {
@@ -130,12 +152,14 @@ export default function App() {
     } finally {
       setIsSaving(false);
     }
-  }, [baseHash, docPath, source]);
+  }, [baseHash, docPath, source, reparse]);
 
   function handleSourceChange(next: string) {
     setSource(next);
     setDirty(true);
     setConflict(false);
+    // Source diverges from disk; saved-feedback no longer applies
+    setLastSavedAt(null);
   }
 
   useEffect(() => {
@@ -177,6 +201,7 @@ export default function App() {
         </button>
         <span className="document-status" aria-label="Document status">
           {fileName} {dirty ? "•" : "✓"}
+          {lastSavedAt ? <span className="saved-toast"> Saved {lastSavedAt}</span> : null}
         </span>
       </div>
       {conflict ? (
@@ -203,4 +228,8 @@ export default function App() {
 function basename(path: string): string {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
+}
+
+function pad(n: number): string {
+  return n.toString().padStart(2, "0");
 }
