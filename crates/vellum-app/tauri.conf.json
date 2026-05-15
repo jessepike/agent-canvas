@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "dev.jessepike.vellum",
   "build": {
-    "beforeBuildCommand": "cd ../../ui && pnpm --filter . build",
-    "beforeDevCommand": "cd ../../ui && pnpm --filter . dev",
+    "beforeBuildCommand": "cd ../ui && pnpm --filter . build",
+    "beforeDevCommand": "cd ../ui && pnpm --filter . dev",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../../ui/dist"
   },
