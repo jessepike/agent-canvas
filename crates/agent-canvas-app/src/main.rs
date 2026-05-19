@@ -4,7 +4,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Mutex,
-    time::UNIX_EPOCH,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(target_os = "macos")]
@@ -91,6 +91,23 @@ struct SendPayload {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct AgentSession {
+    id: String,
+    persona: String,
+    backbone: String,
+    context: String,
+    connected_at: i64,
+    last_active: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AddAgentSessionInput {
+    persona: String,
+    backbone: String,
+    context: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct FsEventPayload {
     kind: &'static str,
     path: Option<String>,
@@ -146,6 +163,69 @@ fn send_to_clipboard(payload: SendPayload) -> Result<String, String> {
     let formatted = format_send_payload(&payload);
     write_clipboard(&formatted)?;
     Ok(formatted)
+}
+
+#[tauri::command]
+fn list_agent_sessions(state: tauri::State<AppState>) -> Result<Vec<AgentSession>, String> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    let mut statement = conn
+        .prepare(
+            "SELECT id, persona, backbone, COALESCE(context, ''), connected_at, last_active
+             FROM agent_sessions ORDER BY last_active DESC",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(AgentSession {
+                id: row.get(0)?,
+                persona: row.get(1)?,
+                backbone: row.get(2)?,
+                context: row.get(3)?,
+                connected_at: row.get(4)?,
+                last_active: row.get(5)?,
+            })
+        })
+        .map_err(|error| error.to_string())?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn add_agent_session(
+    state: tauri::State<AppState>,
+    input: AddAgentSessionInput,
+) -> Result<AgentSession, String> {
+    let now = unix_now();
+    let session = AgentSession {
+        id: uuid::Uuid::new_v4().to_string(),
+        persona: input.persona,
+        backbone: input.backbone,
+        context: input.context,
+        connected_at: now,
+        last_active: now,
+    };
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute(
+        "INSERT INTO agent_sessions(id, persona, backbone, context, connected_at, last_active)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            session.id,
+            session.persona,
+            session.backbone,
+            session.context,
+            session.connected_at,
+            session.last_active
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(session)
 }
 
 #[tauri::command]
@@ -593,6 +673,13 @@ fn format_send_payload(payload: &SendPayload) -> String {
     )
 }
 
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 #[cfg(target_os = "macos")]
 fn write_clipboard(contents: &str) -> Result<(), String> {
     let mut child = Command::new("pbcopy")
@@ -684,6 +771,8 @@ fn main() {
             list_project_files,
             list_personas,
             send_to_clipboard,
+            list_agent_sessions,
+            add_agent_session,
             parse_document,
             save_document,
             open_document,

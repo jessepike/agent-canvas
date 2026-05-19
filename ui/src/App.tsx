@@ -3,7 +3,9 @@ import { listen } from "@tauri-apps/api/event";
 import { RenderedView } from "./components/RenderedView";
 import { SourceView } from "./components/SourceView";
 import {
+  addAgentSession,
   getBootstrapInfo,
+  listAgentSessions,
   listInbox,
   listPersonas,
   listProjects,
@@ -12,6 +14,7 @@ import {
   sendToClipboard,
   writeDocument,
   type BootstrapInfo,
+  type AgentSession,
   type FileMetadata,
   type PersonaRegistry
 } from "./ipc";
@@ -37,6 +40,11 @@ export default function App() {
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
   const [personas, setPersonas] = useState<PersonaRegistry | null>(null);
+  const [sessions, setSessions] = useState<AgentSession[]>([]);
+  const [showSessionForm, setShowSessionForm] = useState(false);
+  const [sessionPersona, setSessionPersona] = useState("cto");
+  const [sessionBackbone, setSessionBackbone] = useState("claude");
+  const [sessionContext, setSessionContext] = useState("AGRC");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<OpenArtifact | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -54,16 +62,18 @@ export default function App() {
     setIsLoading(true);
     setError(null);
     try {
-      const [nextBootstrap, nextFiles, nextProjects, nextPersonas] = await Promise.all([
+      const [nextBootstrap, nextFiles, nextProjects, nextPersonas, nextSessions] = await Promise.all([
         getBootstrapInfo(),
         listInbox(),
         listProjects(),
-        listPersonas()
+        listPersonas(),
+        listAgentSessions()
       ]);
       setBootstrap(nextBootstrap);
       setFiles(nextFiles);
       setProjects(nextProjects);
       setPersonas(nextPersonas);
+      setSessions(nextSessions);
       setSelectedPath((current) => current ?? nextFiles[0]?.path ?? null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -75,6 +85,20 @@ export default function App() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const addSession = useCallback(async () => {
+    try {
+      const session = await addAgentSession({
+        persona: sessionPersona,
+        backbone: sessionBackbone,
+        context: sessionContext
+      });
+      setSessions((current) => [session, ...current]);
+      setShowSessionForm(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [sessionBackbone, sessionContext, sessionPersona]);
 
   const selectedFile = useMemo(
     () => files.find((file) => file.path === selectedPath) ?? null,
@@ -346,9 +370,61 @@ export default function App() {
             )}
             {error ? <p className="error-banner">{error}</p> : null}
           </section>
-          <aside className="agent-gutter">
-            <button type="button">+ Connect</button>
-          </aside>
+          {sessions.length === 0 && !showSessionForm ? (
+            <aside className="agent-gutter">
+              <button type="button" onClick={() => setShowSessionForm(true)}>
+                + Connect
+              </button>
+            </aside>
+          ) : (
+            <aside className="agent-panel">
+              <div className="agent-panel-header">
+                <span>Agent Sessions</span>
+                <button type="button" onClick={() => setShowSessionForm((current) => !current)}>
+                  +
+                </button>
+              </div>
+              {showSessionForm ? (
+                <form
+                  className="session-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void addSession();
+                  }}
+                >
+                  <select value={sessionPersona} onChange={(event) => setSessionPersona(event.target.value)}>
+                    {(personas?.personas ?? []).map((persona) => (
+                      <option key={persona.name} value={persona.name}>
+                        {persona.display_label}
+                      </option>
+                    ))}
+                  </select>
+                  <select value={sessionBackbone} onChange={(event) => setSessionBackbone(event.target.value)}>
+                    <option value="claude">claude</option>
+                    <option value="codex">codex</option>
+                    <option value="other">other</option>
+                  </select>
+                  <input
+                    value={sessionContext}
+                    onChange={(event) => setSessionContext(event.target.value)}
+                    placeholder="[context]"
+                  />
+                  <button type="submit">Add session</button>
+                </form>
+              ) : null}
+              <div className="agent-session-list">
+                {sessions.map((session) => (
+                  <article className="agent-card" key={session.id}>
+                    <div className="agent-card-top">
+                      <span className={`badge persona-badge badge-${session.persona}`}>{labelForPersona(session.persona)}</span>
+                      <span className="backbone-tag">{session.backbone}</span>
+                    </div>
+                    <div className="agent-context">[{session.context || "current"}]</div>
+                  </article>
+                ))}
+              </div>
+            </aside>
+          )}
         </div>
       </section>
     </main>

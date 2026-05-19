@@ -57,6 +57,27 @@ export const SendPayload = z
   .strict();
 export type SendPayload = z.infer<typeof SendPayload>;
 
+export const AgentSession = z
+  .object({
+    id: z.string(),
+    persona: z.string(),
+    backbone: z.string(),
+    context: z.string(),
+    connected_at: z.number(),
+    last_active: z.number()
+  })
+  .strict();
+export type AgentSession = z.infer<typeof AgentSession>;
+
+export const AddAgentSessionInput = z
+  .object({
+    persona: z.string(),
+    backbone: z.string(),
+    context: z.string()
+  })
+  .strict();
+export type AddAgentSessionInput = z.infer<typeof AddAgentSessionInput>;
+
 export const BootstrapInfo = z
   .object({
     canvas_root: z.string(),
@@ -132,6 +153,24 @@ export async function sendToClipboard(payload: SendPayload): Promise<string> {
     return z.string().parse(result);
   } catch (caught) {
     throw ipcError("send_to_clipboard", caught);
+  }
+}
+
+export async function listAgentSessions(): Promise<AgentSession[]> {
+  try {
+    const result = await invoke<unknown>("list_agent_sessions");
+    return z.array(AgentSession).parse(result);
+  } catch (caught) {
+    throw ipcError("list_agent_sessions", caught);
+  }
+}
+
+export async function addAgentSession(input: AddAgentSessionInput): Promise<AgentSession> {
+  try {
+    const result = await invoke<unknown>("add_agent_session", { input });
+    return AgentSession.parse(result);
+  } catch (caught) {
+    throw ipcError("add_agent_session", caught);
   }
 }
 

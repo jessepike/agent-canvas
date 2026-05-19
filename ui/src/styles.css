@@ -729,3 +729,93 @@ button:hover {
   line-height: 1.2;
   writing-mode: vertical-rl;
 }
+
+.agent-panel {
+  display: flex;
+  width: 300px;
+  flex-shrink: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 0.5px solid var(--border);
+  background: #f4f1e8;
+}
+
+.agent-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 0.5px solid var(--border-soft);
+  padding: 14px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.agent-panel-header button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.session-form {
+  display: grid;
+  gap: 8px;
+  border-bottom: 0.5px solid var(--border-soft);
+  padding: 10px 12px 12px;
+}
+
+.session-form select,
+.session-form input {
+  min-width: 0;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--text);
+  background: var(--bg-window);
+}
+
+.session-form button {
+  padding: 6px 8px;
+}
+
+.agent-session-list {
+  display: grid;
+  gap: 8px;
+  overflow: auto;
+  padding: 10px;
+}
+
+.agent-card {
+  border: 0.5px solid var(--border);
+  border-radius: 7px;
+  padding: 10px;
+  background: var(--bg-doc);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.agent-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.backbone-tag {
+  border: 0.5px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--text-secondary);
+  background: var(--bg-sidebar);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.agent-context {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
