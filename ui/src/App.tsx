@@ -192,8 +192,24 @@ export default function App() {
     setSavedAt(null);
 
     try {
+      // Detect binary / unsupported extensions BEFORE attempting to read as UTF-8.
+      // openDocument expects text content; PDFs, images, etc. will throw on read.
+      if (isBinaryExtension(file.extension) || (!markdownExtension(file.extension) && !htmlExtension(file.extension))) {
+        setArtifact({
+          path: file.path,
+          source: "",
+          baseHash: [],
+          blocks: [],
+          dirty: false,
+          kind: "unsupported"
+        });
+        setEditMode(false);
+        setSourceMode(false);
+        return;
+      }
+
       const opened = await openDocument(file.path);
-      const kind = markdownExtension(file.extension) ? "md" : htmlExtension(file.extension) ? "html" : "unsupported";
+      const kind = markdownExtension(file.extension) ? "md" : "html";
       const blocks = kind === "md" ? await parseDocument(opened.source) : [];
       setArtifact({
         path: opened.path,
@@ -206,6 +222,16 @@ export default function App() {
       setEditMode(false);
       setSourceMode(false);
     } catch (caught) {
+      // Even with extension check, openDocument can fail. Clear stale artifact so the
+      // viewer doesn't continue showing the previously-opened file.
+      setArtifact({
+        path: file.path,
+        source: "",
+        baseHash: [],
+        blocks: [],
+        dirty: false,
+        kind: "unsupported"
+      });
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setIsOpening(false);
@@ -289,6 +315,20 @@ export default function App() {
     return () => window.removeEventListener("focus", handleFocus);
   }, [refresh, reloadOpenArtifact]);
 
+  // Tauri 2 macOS WebView shows the native context menu by default, which
+  // overlays React's custom menu. Suppress globally for non-text-input targets
+  // so onContextMenu handlers on file rows + agent cards actually render.
+  useEffect(() => {
+    function handleContextMenu(event: MouseEvent) {
+      if (isTextInput(event.target)) {
+        return; // allow native menu on inputs/textareas for copy/paste UX
+      }
+      event.preventDefault();
+    }
+    document.addEventListener("contextmenu", handleContextMenu);
+    return () => document.removeEventListener("contextmenu", handleContextMenu);
+  }, []);
+
   const saveArtifact = useCallback(async () => {
     if (!artifact) {
       return;
@@ -323,18 +363,16 @@ export default function App() {
   }
 
   const openSendPopover = useCallback((forceAgentPicker = false) => {
-    if (sessions.length === 0) {
-      setShowSessionForm(true);
-      return;
-    }
     if (!artifact) {
       return;
     }
+    // Pasteboard handoff works regardless of declared agent sessions. The agent
+    // panel is metadata for routing convenience, not a gate on copy-to-clipboard.
     const defaultIsPreset = ACTION_VERBS.includes(defaultActionVerb as (typeof ACTION_VERBS)[number]);
     const defaultSession = sessions.find((session) => session.id === defaultAgentId) ?? null;
     const nextSelectedAgent = defaultSession?.id ?? (sessions.length === 1 ? sessions[0]?.id ?? null : null);
     setSelectedAgentId(nextSelectedAgent);
-    setShowAgentPicker(forceAgentPicker || (sessions.length > 1 && !defaultSession));
+    setShowAgentPicker(sessions.length > 0 && (forceAgentPicker || (sessions.length > 1 && !defaultSession)));
     setSendActionVerb(defaultIsPreset ? defaultActionVerb : "Custom");
     setCustomActionVerb(defaultIsPreset ? "" : defaultActionVerb);
     setSendNote("");
@@ -347,10 +385,14 @@ export default function App() {
     }
     const verb = actionVerb.trim() || "Review";
     try {
-      const targetAgent = sessions.find((session) => session.id === selectedAgentId) ?? defaultAgent;
-      if (sessions.length > 1 && !targetAgent) {
-        setShowAgentPicker(true);
-        return;
+      // Only require agent picker when multiple sessions exist and none is targeted.
+      // Zero sessions = pasteboard payload uses generic "Agent" framing; still copies.
+      if (sessions.length > 1) {
+        const targetAgent = sessions.find((session) => session.id === selectedAgentId) ?? defaultAgent;
+        if (!targetAgent) {
+          setShowAgentPicker(true);
+          return;
+        }
       }
       await sendToClipboard({
         path: artifact.path,
@@ -883,7 +925,7 @@ export default function App() {
                 >
                   {artifact?.kind === "html" ? (sourceMode ? "Render" : "View Source") : editMode ? "Preview" : "Edit"}
                 </button>
-                <button className="primary" type="button" onClick={() => openSendPopover()} disabled={!artifact && sessions.length > 0}>
+                <button className="primary" type="button" onClick={() => openSendPopover()} disabled={!artifact}>
                   {sendButtonLabel}
                 </button>
                 <button type="button" onClick={() => void saveArtifact()} disabled={!artifact?.dirty || isSaving}>
@@ -1276,6 +1318,27 @@ function markdownExtension(extension: string): boolean {
 
 function htmlExtension(extension: string): boolean {
   return extension === "html" || extension === "htm";
+}
+
+function isBinaryExtension(extension: string): boolean {
+  const ext = extension.toLowerCase();
+  return (
+    ext === "pdf" ||
+    ext === "png" ||
+    ext === "jpg" ||
+    ext === "jpeg" ||
+    ext === "gif" ||
+    ext === "webp" ||
+    ext === "svg" ||
+    ext === "ico" ||
+    ext === "zip" ||
+    ext === "tar" ||
+    ext === "gz" ||
+    ext === "mp3" ||
+    ext === "mp4" ||
+    ext === "mov" ||
+    ext === "wav"
+  );
 }
 
 function labelForPersona(persona: string): string {
