@@ -17,7 +17,7 @@ Status: `todo` / `in-progress` / `blocked` / `done` / `cut`.
 | 9 | done | Command palette with real keyboard wiring |
 | 10 | done | Project mode with three-column layout |
 | 11 | done | Keyboard polish, rescan-on-focus, smoke test |
-| 12 | todo | README, Apache 2.0 license, release status, v0.1.0 tag |
+| 12 | done | README, Apache 2.0 license, release status, v0.1.0 tag |
 
 ## v0 Scope
 

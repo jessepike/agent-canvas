@@ -1,23 +1,51 @@
-# Vellum
+# AgentCanvas
 
-Live Markdown. Plain files. Honest history.
+AgentCanvas is a local Mac workbench for reviewing, lightly source-editing, and round-tripping artifacts produced by LLM agents. It watches a plain-file iCloud folder, renders Markdown and HTML, preserves source bytes on save, and copies a formatted handoff payload for Claude/Codex sessions.
 
-Vellum is a desktop Markdown editor where executable blocks can refresh data inline while the file remains ordinary Markdown. The project is built around a byte-level source-preservation contract: opening and saving an unchanged document must not pretty-print, normalize, or otherwise rewrite the source.
+This repo was formerly Vellum. The old executable-block editor spec is preserved in `legacy/` only for parser, corpus, atomic-save, and Tauri carry-forward.
 
-The canonical design source is [`vellum-spec-v0.3.md`](vellum-spec-v0.3.md). The contributor rules and format-preservation philosophy are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+## v0.1.0
 
-## Build
+- iCloud substrate: `~/iCloud/AgentCanvas/` backed by `~/Library/Mobile Documents/com~apple~CloudDocs/AgentCanvas/`
+- Inbox, Projects, and Archive folders
+- SQLite state at `~/Library/Application Support/AgentCanvas/state.db`
+- Markdown rendered preview with source edit mode
+- Sandboxed HTML iframe rendering with source view
+- Atomic save with stat+hash optimistic concurrency guard
+- Recursive watcher plus rescan on focus
+- Persona badges from `~/code/_shared/pike-agents/plugins/` with built-in fallback
+- Pasteboard Send-to-Claude handoff
+- Manual agent session panel
+- Cmd-K command palette
+- Keyboard-first inbox controls
 
-Rust builds run from the workspace root:
+## Visual Target
+
+The UI follows the checked-in prototypes:
+
+- `prototypes/A-main-daily-driver.png`
+- `prototypes/B-html-artifact.png`
+- `prototypes/E-agent-panel.png`
+- `prototypes/F-project-detail-3col.png`
+- `prototypes/I-command-palette.png`
+
+Design tokens live in `prototypes/visual-system.md`.
+
+## Development
+
+Per project policy, run package installs, builds, tests, and dev servers in the OrbStack dev VM:
 
 ```sh
-cargo build --workspace
-cargo test --workspace
-cargo run -p vellum-corpus
+orb run -m dev bash -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/vellum && pnpm --dir ui install'
+orb run -m dev bash -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/vellum && pnpm --dir ui run build'
+orb run -m dev bash -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/vellum && cargo test --workspace'
+orb run -m dev bash -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/vellum && cargo run -p vellum-corpus'
 ```
 
-The UI is intentionally not scaffolded yet. Gate 30A is parser and corpus only.
+## Release Notes
+
+v0.1.0 ships ad-hoc/dev only. Notarization and signed binaries are deferred.
 
 ## License
 
-Apache License 2.0. See [`LICENSE`](LICENSE).
+Apache License 2.0. See `LICENSE`.
