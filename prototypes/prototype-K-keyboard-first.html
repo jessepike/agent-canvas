@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Workbench — Keyboard-first</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Funnel+Sans:wght@300;400;500;600;700&family=Funnel+Display:wght@500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-ui: 'Funnel Sans', -apple-system, system-ui, sans-serif;
+    --font-display: 'Funnel Display', 'Funnel Sans', sans-serif;
+    --font-serif: 'Newsreader', Georgia, serif;
+    --font-mono: 'JetBrains Mono', monospace;
+
+    --bg-desktop: #C8C5BC;
+    --bg-window: #FBFAF6;
+    --bg-sidebar: #EFEDE6;
+    --bg-doc: #FFFFFF;
+    --bg-titlebar-top: #F2F0E8;
+    --bg-titlebar-bot: #E7E4DA;
+
+    --border: #DDD9CC;
+    --border-soft: #E8E5D9;
+    --border-strong: #C6C1B0;
+
+    --text: #1B1A14;
+    --text-secondary: #6E6A5E;
+    --text-tertiary: #A09B8B;
+    --text-faded: #BFBAAB;
+
+    --accent: #1F5BD8;
+    --accent-deep: #173F95;
+    --accent-soft: #E5EBFA;
+    --accent-focus: #DDE7FB;
+
+    --pin: #C19433;
+
+    --shadow-window: 0 28px 70px rgba(20, 18, 12, 0.30), 0 10px 24px rgba(20, 18, 12, 0.16);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg-desktop);
+    color: var(--text); font-size: 13.5px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+    display: flex; align-items: center; justify-content: center;
+    padding: 28px; min-height: 100vh;
+    letter-spacing: -0.005em;
+  }
+  .window {
+    width: 100%; max-width: 1280px;
+    height: calc(100vh - 56px); min-height: 760px;
+    background: var(--bg-window);
+    border-radius: 11px;
+    box-shadow: var(--shadow-window);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    border: 0.5px solid rgba(0,0,0,0.12);
+  }
+  .titlebar {
+    height: 38px;
+    background: linear-gradient(to bottom, var(--bg-titlebar-top), var(--bg-titlebar-bot));
+    border-bottom: 0.5px solid var(--border);
+    display: flex; align-items: center; padding: 0 14px;
+    position: relative;
+  }
+  .traffic-lights { display: flex; gap: 8px; }
+  .tl { width: 12px; height: 12px; border-radius: 50%; border: 0.5px solid rgba(0,0,0,0.12); }
+  .tl-close { background: #FF5F57; } .tl-min { background: #FEBC2E; } .tl-max { background: #28C840; }
+  .titlebar-title { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 13px; font-weight: 600; }
+  .titlebar-tip {
+    position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+    font-size: 11.5px; color: var(--text-secondary);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .titlebar-tip .kbd {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    background: rgba(0,0,0,0.06);
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--text);
+    letter-spacing: 0;
+  }
+
+  .main { flex: 1; display: flex; overflow: hidden; }
+
+  /* ===== Sidebar ===== */
+  .sidebar {
+    width: 290px;
+    background: var(--bg-sidebar);
+    border-right: 0.5px solid var(--border);
+    display: flex; flex-direction: column;
+    overflow: hidden; flex-shrink: 0;
+  }
+  .sidebar-header { padding: 12px 12px 8px; flex-shrink: 0; }
+  .search { position: relative; }
+  .search svg {
+    position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
+    width: 13px; height: 13px; color: var(--text-tertiary);
+  }
+  .search input {
+    width: 100%; background: rgba(255,255,255,0.7);
+    border: 0.5px solid var(--border-strong); border-radius: 6px;
+    padding: 5px 10px 5px 26px;
+    font: inherit; font-size: 12.5px; color: var(--text); outline: none;
+  }
+  .search input:focus {
+    border-color: var(--accent);
+    background: #FFF;
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .search-kbd {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+    background: rgba(0,0,0,0.04);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .sidebar-scroll {
+    flex: 1; overflow-y: auto; padding: 6px 8px 16px;
+  }
+  .sb-section { margin-top: 14px; }
+  .sb-section:first-child { margin-top: 4px; }
+  .sb-section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 6px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em;
+    color: var(--text-secondary); text-transform: uppercase;
+  }
+  .sb-section-count {
+    background: rgba(0,0,0,0.04);
+    padding: 1px 6px; border-radius: 8px;
+    font-size: 10.5px; color: var(--text-tertiary);
+    letter-spacing: 0;
+  }
+  .sb-list { display: flex; flex-direction: column; gap: 1px; }
+
+  .sb-item {
+    display: flex; align-items: center; gap: 7px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin: 0 -2px;
+    position: relative;
+    transition: background 0.08s, box-shadow 0.08s, padding-left 0.08s;
+    user-select: none;
+  }
+  .sb-item:hover { background: rgba(0,0,0,0.04); }
+  .sb-item.focused {
+    background: var(--accent-focus);
+    box-shadow: inset 3px 0 0 var(--accent);
+    padding-left: 13px;
+  }
+  .sb-item.focused .sb-name { color: var(--accent-deep); }
+  .sb-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent); flex-shrink: 0;
+  }
+  .sb-dot.empty { background: transparent; }
+  .sb-icon { width: 14px; height: 14px; color: var(--text-tertiary); flex-shrink: 0; }
+  .sb-name { flex: 1; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: -0.005em; }
+  .sb-item.unread .sb-name { font-weight: 600; }
+  .sb-item.read .sb-name { color: var(--text-secondary); }
+  .sb-star { color: var(--pin); flex-shrink: 0; width: 12px; height: 12px; }
+  .sb-badge {
+    font-size: 10.5px; color: var(--text-secondary);
+    background: rgba(255,255,255,0.7); border: 0.5px solid var(--border-strong);
+    border-radius: 3px; padding: 1px 5px; font-weight: 500; flex-shrink: 0;
+  }
+  .sb-badge.persona { font-family: var(--font-serif); font-style: italic; font-weight: 500; }
+  .sb-badge.codex { font-family: var(--font-mono); font-size: 10px; }
+  .sb-time { font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  .sb-item.focused .sb-time { color: var(--accent-deep); }
+
+  .sb-folder {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 8px; border-radius: 6px;
+    margin: 0 -2px;
+    cursor: pointer;
+    position: relative;
+  }
+  .sb-folder:hover { background: rgba(0,0,0,0.04); }
+  .sb-folder.focused {
+    background: var(--accent-focus);
+    box-shadow: inset 3px 0 0 var(--accent);
+    padding-left: 11px;
+  }
+  .sb-folder-icon { width: 14px; height: 14px; color: var(--text-tertiary); }
+  .sb-folder-name { flex: 1; font-size: 13px; color: var(--text); font-weight: 500; }
+  .sb-folder-count { font-size: 11px; color: var(--text-tertiary); }
+  .sb-folder-num {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+    background: rgba(0,0,0,0.04);
+    padding: 0 5px;
+    border-radius: 3px;
+    margin-left: 4px;
+  }
+
+  /* ===== Content ===== */
+  .content {
+    flex: 1; display: flex; flex-direction: column;
+    background: var(--bg-doc); overflow: hidden; min-width: 0;
+  }
+  .toolbar {
+    height: 46px; border-bottom: 0.5px solid var(--border-soft);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 18px 0 22px;
+  }
+  .breadcrumb { font-size: 12.5px; color: var(--text-secondary); display: flex; gap: 7px; }
+  .breadcrumb .sep { color: var(--text-faded); }
+  .breadcrumb .current { color: var(--text); font-weight: 500; }
+  .toolbar-status {
+    display: flex; gap: 8px; align-items: center;
+    font-size: 11.5px; color: var(--text-tertiary);
+  }
+  .toolbar-status .key-status {
+    font-family: var(--font-mono);
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 10.5px;
+    font-weight: 600;
+  }
+  .toolbar-status .key-status.on { background: #2A7F3F; color: white; }
+
+  .doc-scroll { flex: 1; overflow-y: auto; padding: 32px 60px 60px; }
+  .doc { max-width: 680px; margin: 0 auto; }
+  .doc h1 { font-family: var(--font-display); font-size: 30px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 14px; color: var(--text); }
+  .doc h2 { font-family: var(--font-display); font-size: 18px; font-weight: 600; margin: 26px 0 10px; }
+  .doc p { font-size: 14.5px; line-height: 1.65; color: #2A2823; margin: 0 0 14px; letter-spacing: -0.005em; }
+  .doc ul { margin: 0 0 16px; padding-left: 4px; list-style: none; }
+  .doc ul li { font-size: 14.5px; line-height: 1.6; color: #2A2823; padding-left: 18px; position: relative; margin-bottom: 6px; }
+  .doc ul li::before { content: ""; position: absolute; left: 4px; top: 0.65em; width: 5px; height: 5px; border-radius: 50%; background: var(--text-tertiary); }
+  .doc.editing {
+    outline: 2px dashed var(--accent-soft);
+    outline-offset: 14px;
+    border-radius: 4px;
+  }
+  .doc.editing::before {
+    content: "Edit mode · press 'e' to exit";
+    display: block; background: var(--accent-soft); color: var(--accent-deep);
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 3px 9px; border-radius: 4px; margin-bottom: 14px; width: max-content;
+  }
+  .doc-meta { display: flex; gap: 10px; align-items: center; color: var(--text-tertiary); font-size: 12px; margin: 0 0 18px; }
+  .doc-meta .dot { width: 3px; height: 3px; background: var(--text-faded); border-radius: 50%; }
+  .doc-meta .persona-mention { font-family: var(--font-serif); font-style: italic; color: var(--text-secondary); font-size: 12.5px; }
+
+  /* ===== Shortcuts overlay ===== */
+  .shortcuts-overlay {
+    position: fixed;
+    bottom: 40px;
+    right: 40px;
+    background: rgba(27, 26, 20, 0.97);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    color: rgba(255,255,255,0.95);
+    padding: 20px 24px 18px;
+    border-radius: 14px;
+    box-shadow: 0 28px 60px rgba(0,0,0,0.32);
+    z-index: 200;
+    min-width: 320px;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(8px) scale(0.98);
+    transition: opacity 0.18s, transform 0.18s;
+  }
+  .shortcuts-overlay.open {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0) scale(1);
+  }
+  .shortcuts-overlay h3 {
+    font-family: var(--font-display);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    margin: 0 0 12px;
+    color: rgba(255,255,255,0.98);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .shortcuts-overlay h3 .close-hint {
+    font-size: 10.5px;
+    color: rgba(255,255,255,0.55);
+    font-weight: 500;
+  }
+  .shortcuts-overlay h3 .close-hint .kbd {
+    background: rgba(255,255,255,0.12);
+    color: rgba(255,255,255,0.92);
+    padding: 0 5px;
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    margin-left: 3px;
+  }
+  .shortcut-group {
+    margin-bottom: 12px;
+  }
+  .shortcut-group:last-child { margin-bottom: 0; }
+  .shortcut-group-title {
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.48);
+    margin-bottom: 6px;
+  }
+  .shortcut-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    font-size: 12.5px;
+    color: rgba(255,255,255,0.85);
+  }
+  .shortcut-row .keys {
+    display: flex; gap: 4px;
+  }
+  .shortcut-row .keys .kbd {
+    background: rgba(255,255,255,0.10);
+    color: rgba(255,255,255,0.95);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    border: 0.5px solid rgba(255,255,255,0.10);
+    min-width: 16px; text-align: center;
+  }
+
+  /* toast */
+  .toast {
+    position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+    background: var(--text); color: white;
+    padding: 9px 16px; border-radius: 9px;
+    font-size: 12.5px; font-weight: 500;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.22);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.18s, transform 0.18s;
+    z-index: 250;
+    display: flex; align-items: center; gap: 10px;
+    letter-spacing: -0.003em;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(-6px); }
+  .toast .kbd-inline {
+    background: rgba(255,255,255,0.16);
+    color: rgba(255,255,255,0.95);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+</style>
+</head>
+<body>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="traffic-lights">
+      <div class="tl tl-close"></div><div class="tl tl-min"></div><div class="tl tl-max"></div>
+    </div>
+    <div class="titlebar-title">Workbench</div>
+    <div class="titlebar-tip">
+      Press <span class="kbd">?</span> for shortcuts
+    </div>
+  </div>
+
+  <div class="main">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="search">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3 3"/></svg>
+          <input type="text" id="searchInput" placeholder="Search files…">
+          <span class="search-kbd">/</span>
+        </div>
+      </div>
+
+      <div class="sidebar-scroll">
+        <div class="sb-section">
+          <div class="sb-section-header">
+            <span>Inbox</span>
+            <span class="sb-section-count">5</span>
+          </div>
+          <div class="sb-list" id="inboxList">
+
+            <div class="sb-item unread file-row focused" data-doc="agf" data-pinned="true">
+              <div class="sb-dot"></div>
+              <svg class="sb-star" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+              <div class="sb-name">agf-positioning-v3.md</div>
+              <div class="sb-badge persona">cto</div>
+              <div class="sb-time">2m</div>
+            </div>
+
+            <div class="sb-item unread file-row" data-doc="vendor" data-pinned="true">
+              <div class="sb-dot"></div>
+              <svg class="sb-star" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+              <div class="sb-name">vendor-risk-spec.html</div>
+              <div class="sb-badge codex">codex</div>
+              <div class="sb-time">12m</div>
+            </div>
+
+            <div class="sb-item unread file-row" data-doc="digest">
+              <div class="sb-dot"></div>
+              <svg class="sb-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>
+              <div class="sb-name">weekly-digest.md</div>
+              <div class="sb-badge persona">cto</div>
+              <div class="sb-time">1h</div>
+            </div>
+
+            <div class="sb-item read file-row" data-doc="prep">
+              <div class="sb-dot empty"></div>
+              <svg class="sb-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>
+              <div class="sb-name">meeting-prep.md</div>
+              <div class="sb-time">3h</div>
+            </div>
+
+            <div class="sb-item read file-row" data-doc="img">
+              <div class="sb-dot empty"></div>
+              <svg class="sb-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="3" width="11" height="10" rx="1"/><circle cx="6" cy="7" r="1.2"/><path d="M2.5 11L6 8l3 3 2-1.5 2.5 2.5"/></svg>
+              <div class="sb-name">image-spike.png</div>
+              <div class="sb-time">yest.</div>
+            </div>
+
+          </div>
+        </div>
+
+        <div class="sb-section">
+          <div class="sb-section-header">
+            <span>Projects</span>
+          </div>
+          <div class="sb-list" id="projList">
+            <div class="sb-folder" data-project="AGRC">
+              <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+              <div class="sb-folder-name">AGRC</div>
+              <div class="sb-folder-count">6</div>
+              <div class="sb-folder-num">⌘1</div>
+            </div>
+            <div class="sb-folder" data-project="Advisory">
+              <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+              <div class="sb-folder-name">Advisory</div>
+              <div class="sb-folder-count">5</div>
+              <div class="sb-folder-num">⌘2</div>
+            </div>
+            <div class="sb-folder" data-project="Vellum">
+              <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+              <div class="sb-folder-name">Vellum</div>
+              <div class="sb-folder-count">47</div>
+              <div class="sb-folder-num">⌘3</div>
+            </div>
+            <div class="sb-folder" data-project="Krypton">
+              <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+              <div class="sb-folder-name">Krypton</div>
+              <div class="sb-folder-count">2</div>
+              <div class="sb-folder-num">⌘4</div>
+            </div>
+            <div class="sb-folder" data-project="Personal">
+              <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+              <div class="sb-folder-name">Personal</div>
+              <div class="sb-folder-count">0</div>
+              <div class="sb-folder-num">⌘5</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <div class="toolbar">
+        <div class="breadcrumb">
+          <span>Inbox</span>
+          <span class="sep">›</span>
+          <span class="current" id="bcCurrent">agf-positioning-v3.md</span>
+        </div>
+        <div class="toolbar-status">
+          <span>edit:</span>
+          <span class="key-status" id="editStatus">off</span>
+          <span style="margin-left:8px;">press <span class="key-status" style="background:rgba(0,0,0,0.06);color:var(--text-secondary);">?</span> for shortcuts</span>
+        </div>
+      </div>
+      <div class="doc-scroll">
+        <article class="doc" id="docPane">
+          <h1>AGF Positioning v3.0</h1>
+          <div class="doc-meta">
+            <span class="persona-mention">cto</span><span>· claude · [AGRC]</span>
+            <span class="dot"></span><span>2 min ago</span>
+          </div>
+          <p>AGF is the secure AI governance platform for regulated enterprises. We unify policy, risk, and audit into a single system of record — built for scale, designed for trust.</p>
+          <h2>Six Pillars</h2>
+          <ul>
+            <li>Governance that adapts to your risk profile</li>
+            <li>Policy automation with built-in controls</li>
+            <li>Evidence capture and audit readiness</li>
+            <li>Enterprise-grade security across markets and personas</li>
+            <li>Operator workflows with human-in-the-loop checkpoints</li>
+            <li>Open APIs for assurance, attestation, and supply-chain disclosure</li>
+          </ul>
+          <h2>Why now</h2>
+          <p>Procurement teams at Tier-1 banks are rejecting AI proposals that cannot produce evidence of governed behavior on day one. AGF is the only platform where evidence is a side-effect of operating, not an artifact retrofitted later.</p>
+        </article>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Shortcuts overlay -->
+<div class="shortcuts-overlay" id="shortcutsOverlay">
+  <h3>
+    Keyboard
+    <span class="close-hint">press <span class="kbd">?</span> to close</span>
+  </h3>
+  <div class="shortcut-group">
+    <div class="shortcut-group-title">Navigation</div>
+    <div class="shortcut-row"><span>Next file</span><span class="keys"><span class="kbd">j</span></span></div>
+    <div class="shortcut-row"><span>Previous file</span><span class="keys"><span class="kbd">k</span></span></div>
+    <div class="shortcut-row"><span>Open file</span><span class="keys"><span class="kbd">⏎</span></span></div>
+    <div class="shortcut-row"><span>Focus search</span><span class="keys"><span class="kbd">/</span></span></div>
+    <div class="shortcut-row"><span>Jump to project 1–9</span><span class="keys"><span class="kbd">⌘</span><span class="kbd">1–9</span></span></div>
+  </div>
+  <div class="shortcut-group">
+    <div class="shortcut-group-title">Actions on focused file</div>
+    <div class="shortcut-row"><span>Toggle edit mode</span><span class="keys"><span class="kbd">e</span></span></div>
+    <div class="shortcut-row"><span>Send to Claude (default)</span><span class="keys"><span class="kbd">s</span></span></div>
+    <div class="shortcut-row"><span>Send to specific agent</span><span class="keys"><span class="kbd">⇧</span><span class="kbd">s</span></span></div>
+    <div class="shortcut-row"><span>Toggle pin</span><span class="keys"><span class="kbd">p</span></span></div>
+    <div class="shortcut-row"><span>Archive</span><span class="keys"><span class="kbd">⌘</span><span class="kbd">⌫</span></span></div>
+  </div>
+  <div class="shortcut-group">
+    <div class="shortcut-group-title">Global</div>
+    <div class="shortcut-row"><span>Command palette</span><span class="keys"><span class="kbd">⌘</span><span class="kbd">K</span></span></div>
+    <div class="shortcut-row"><span>This panel</span><span class="keys"><span class="kbd">?</span></span></div>
+  </div>
+</div>
+
+<!-- toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+  // ====== Sample docs (subset) ======
+  const docs = {
+    agf: `<h1>AGF Positioning v3.0</h1>
+      <div class="doc-meta"><span class="persona-mention">cto</span><span>· claude · [AGRC]</span><span class="dot"></span><span>2 min ago</span></div>
+      <p>AGF is the secure AI governance platform for regulated enterprises. We unify policy, risk, and audit into a single system of record — built for scale, designed for trust.</p>
+      <h2>Six Pillars</h2>
+      <ul>
+        <li>Governance that adapts to your risk profile</li>
+        <li>Policy automation with built-in controls</li>
+        <li>Evidence capture and audit readiness</li>
+        <li>Enterprise-grade security across markets and personas</li>
+        <li>Operator workflows with human-in-the-loop checkpoints</li>
+        <li>Open APIs for assurance, attestation, and supply-chain disclosure</li>
+      </ul>`,
+    vendor: `<h1>Vendor Risk Spec v0.4</h1>
+      <div class="doc-meta"><span>codex</span><span>· [AGRC]</span><span class="dot"></span><span>12 min ago</span></div>
+      <p>A working spec for AGF's vendor-risk module: data model, control coverage, evaluation order, and the three trust boundaries that gate vendor onboarding.</p>`,
+    digest: `<h1>Weekly Digest — May 11–17</h1>
+      <div class="doc-meta"><span class="persona-mention">cto</span><span>· claude · [AGRC]</span><span class="dot"></span><span>1 hour ago</span></div>
+      <p>A condensed read of the last seven days. Vellum is accelerating from design into build; Advisory is bottlenecked on your inbox, not on the market.</p>`,
+    prep: `<h1>Meeting prep — Anthem</h1>
+      <div class="doc-meta"><span>claude</span><span class="dot"></span><span>3 hours ago</span></div>
+      <p>Prep notes for the 10am Anthem design-partner check-in. Three things to confirm and one risk to surface.</p>`,
+    img: `<h1>image-spike.png</h1>
+      <div class="doc-meta"><span>screenshot</span><span class="dot"></span><span>yesterday</span></div>
+      <p style="color:var(--text-tertiary);font-style:italic;">(image preview placeholder)</p>`
+  };
+
+  // ====== State ======
+  const inboxItems = Array.from(document.querySelectorAll('#inboxList .file-row'));
+  const docPane = document.getElementById('docPane');
+  const bcCurrent = document.getElementById('bcCurrent');
+  const editStatus = document.getElementById('editStatus');
+  const overlay = document.getElementById('shortcutsOverlay');
+  const toast = document.getElementById('toast');
+  const searchInput = document.getElementById('searchInput');
+
+  let focusIdx = 0;
+  let editing = false;
+
+  function getItems() { return Array.from(document.querySelectorAll('#inboxList .file-row')); }
+
+  function setFocus(i) {
+    const items = getItems();
+    if (items.length === 0) return;
+    if (i < 0) i = 0;
+    if (i >= items.length) i = items.length - 1;
+    focusIdx = i;
+    items.forEach((el, idx) => el.classList.toggle('focused', idx === focusIdx));
+    items[focusIdx].scrollIntoView({ block: 'nearest' });
+  }
+
+  function openFocused() {
+    const items = getItems();
+    const it = items[focusIdx]; if (!it) return;
+    const key = it.dataset.doc;
+    docPane.innerHTML = docs[key] || `<h1>${it.querySelector('.sb-name').textContent}</h1><p>(placeholder body)</p>`;
+    bcCurrent.textContent = it.querySelector('.sb-name').textContent;
+    // mark read
+    it.classList.remove('unread');
+    it.classList.add('read');
+    const dot = it.querySelector('.sb-dot');
+    if (dot) dot.classList.add('empty');
+  }
+
+  function toggleEdit() {
+    editing = !editing;
+    docPane.classList.toggle('editing', editing);
+    editStatus.textContent = editing ? 'on' : 'off';
+    editStatus.classList.toggle('on', editing);
+    showToast(`Edit mode <strong>${editing ? 'on' : 'off'}</strong>`);
+  }
+
+  function togglePin() {
+    const it = getItems()[focusIdx]; if (!it) return;
+    const pinned = it.dataset.pinned === 'true';
+    it.dataset.pinned = pinned ? 'false' : 'true';
+    if (pinned) {
+      const star = it.querySelector('.sb-star');
+      if (star) star.remove();
+      showToast(`Unpinned <strong>${it.querySelector('.sb-name').textContent}</strong>`);
+    } else {
+      // add a star after the dot
+      const star = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      star.setAttribute('viewBox', '0 0 14 14');
+      star.setAttribute('fill', 'currentColor');
+      star.setAttribute('class', 'sb-star');
+      star.innerHTML = '<path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/>';
+      const dot = it.querySelector('.sb-dot');
+      dot.parentNode.insertBefore(star, dot.nextSibling);
+      showToast(`Pinned <strong>${it.querySelector('.sb-name').textContent}</strong>`);
+    }
+  }
+
+  function archiveFocused() {
+    const it = getItems()[focusIdx]; if (!it) return;
+    const name = it.querySelector('.sb-name').textContent;
+    it.style.transition = 'opacity 0.2s, transform 0.2s';
+    it.style.opacity = '0';
+    it.style.transform = 'translateX(40px)';
+    setTimeout(() => {
+      it.remove();
+      const items = getItems();
+      if (items.length === 0) {
+        showToast('Inbox cleared');
+        return;
+      }
+      if (focusIdx >= items.length) focusIdx = items.length - 1;
+      setFocus(focusIdx);
+      showToast(`Archived <strong>${name}</strong> → <span class="kbd-inline">Archive/</span>`);
+    }, 200);
+  }
+
+  function sendDefault() {
+    const it = getItems()[focusIdx]; if (!it) return;
+    const name = it.querySelector('.sb-name').textContent;
+    showToast(`Sent <strong>${name}</strong> → <em style="font-family:'Newsreader',serif;">cto · claude</em> <span class="kbd-inline">[AGRC]</span>`);
+  }
+
+  function sendSpecific() {
+    showToast('would open command palette filtered to "send to…"');
+  }
+
+  function jumpToProject(n) {
+    const folders = Array.from(document.querySelectorAll('.sb-folder'));
+    const folder = folders[n - 1];
+    if (!folder) return;
+    folders.forEach(f => f.classList.remove('focused'));
+    folder.classList.add('focused');
+    folder.scrollIntoView({ block: 'nearest' });
+    showToast(`Jumped to project <strong>${folder.querySelector('.sb-folder-name').textContent}</strong>`);
+  }
+
+  function focusSearch() {
+    searchInput.focus();
+    searchInput.select();
+  }
+
+  function toggleOverlay() {
+    overlay.classList.toggle('open');
+  }
+
+  function showToast(html) {
+    toast.innerHTML = html;
+    toast.classList.add('show');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => toast.classList.remove('show'), 1800);
+  }
+
+  // ====== Keyboard bindings ======
+  document.addEventListener('keydown', (e) => {
+    // when typing in an input, only handle Escape
+    const inField = e.target.matches('input, textarea');
+    if (inField) {
+      if (e.key === 'Escape') { e.target.blur(); e.preventDefault(); }
+      return;
+    }
+
+    // ⌘1-9 — jump to project
+    if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
+      e.preventDefault();
+      jumpToProject(parseInt(e.key, 10));
+      return;
+    }
+    // ⌘⌫ — archive
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Backspace') {
+      e.preventDefault();
+      archiveFocused();
+      return;
+    }
+    if (e.metaKey || e.ctrlKey || e.altKey) return; // ignore other modifier combos
+
+    switch (e.key) {
+      case 'j':
+      case 'ArrowDown':
+        e.preventDefault(); setFocus(focusIdx + 1); break;
+      case 'k':
+      case 'ArrowUp':
+        e.preventDefault(); setFocus(focusIdx - 1); break;
+      case 'Enter':
+        e.preventDefault(); openFocused(); break;
+      case 'e':
+        e.preventDefault(); toggleEdit(); break;
+      case 's':
+        e.preventDefault(); sendDefault(); break;
+      case 'S':
+        e.preventDefault(); sendSpecific(); break;
+      case 'p':
+        e.preventDefault(); togglePin(); break;
+      case '/':
+        e.preventDefault(); focusSearch(); break;
+      case '?':
+        e.preventDefault(); toggleOverlay(); break;
+      case 'Escape':
+        overlay.classList.remove('open'); break;
+    }
+  });
+
+  // Mouse clicks on inbox rows update focus + open
+  getItems().forEach((it, i) => {
+    it.addEventListener('click', () => {
+      setFocus(i);
+      openFocused();
+    });
+  });
+
+  // initial state
+  setFocus(0);
+  // brief flash to teach: open overlay for 1.4s on load
+  setTimeout(() => overlay.classList.add('open'), 250);
+  setTimeout(() => overlay.classList.remove('open'), 2600);
+</script>
+</body>
+</html>

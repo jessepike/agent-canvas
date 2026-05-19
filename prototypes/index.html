@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Workbench — Prototypes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Funnel+Sans:wght@300;400;500;600;700&family=Funnel+Display:wght@500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-ui: 'Funnel Sans', -apple-system, system-ui, sans-serif;
+    --font-display: 'Funnel Display', 'Funnel Sans', sans-serif;
+    --font-serif: 'Newsreader', Georgia, serif;
+    --font-mono: 'JetBrains Mono', monospace;
+
+    --bg-desktop: #C8C5BC;
+    --bg-page: #FBFAF6;
+    --border: #DDD9CC;
+    --border-soft: #E8E5D9;
+    --text: #1B1A14;
+    --text-secondary: #6E6A5E;
+    --text-tertiary: #A09B8B;
+    --accent: #1F5BD8;
+    --accent-deep: #173F95;
+    --accent-soft: #E5EBFA;
+    --pin: #C19433;
+    --pending: #C2691E;
+    --pending-bg: #FCEED9;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg-desktop);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 56px 32px 48px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.005em;
+  }
+  .container { max-width: 1080px; margin: 0 auto; }
+
+  header { text-align: center; margin-bottom: 44px; }
+  .brand {
+    font-family: var(--font-display);
+    font-size: 12px; font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+  }
+  h1 {
+    font-family: var(--font-serif);
+    font-size: 52px;
+    font-weight: 500;
+    line-height: 1.05;
+    letter-spacing: -0.025em;
+    margin: 0 0 14px;
+  }
+  .sub {
+    font-size: 16px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    max-width: 580px;
+    margin: 0 auto;
+  }
+
+  .round-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 36px 0 16px;
+  }
+  .round-tag {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    background: rgba(0,0,0,0.04);
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+  .round-title {
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    color: var(--text);
+  }
+  .round-sub {
+    margin-left: auto;
+    font-size: 12.5px;
+    color: var(--text-tertiary);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+
+  .card {
+    background: var(--bg-page);
+    border: 0.5px solid var(--border);
+    border-radius: 14px;
+    padding: 24px 26px 22px;
+    text-decoration: none;
+    color: inherit;
+    display: flex; flex-direction: column;
+    transition: transform 0.18s, box-shadow 0.18s;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.4) inset, 0 1px 2px rgba(0,0,0,0.04);
+    position: relative;
+    overflow: hidden;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(20,18,12,0.10), 0 1px 0 rgba(255,255,255,0.4) inset;
+  }
+  .card-eyebrow {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    margin-bottom: 12px;
+  }
+  .card-letter {
+    width: 22px; height: 22px;
+    border-radius: 6px;
+    color: var(--bg-page);
+    font-family: var(--font-display);
+    font-size: 12px;
+    font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    letter-spacing: 0;
+  }
+  .card.a .card-letter { background: #1B1A14; }
+  .card.b .card-letter { background: var(--accent); }
+  .card.c .card-letter { background: var(--pending); }
+  .card.d .card-letter { background: var(--pin); }
+  .card.e .card-letter { background: #4F2D7D; }
+  .card.f .card-letter { background: #B6493B; }
+  .card.i .card-letter { background: #1B1A14; }
+  .card.k .card-letter { background: #2A7F3F; }
+
+  .card.spotlight {
+    border-color: rgba(31,91,216,0.4);
+    background: linear-gradient(to bottom, #FFFFFF 0%, #F2F6FF 100%);
+  }
+  .card.spotlight::after {
+    content: "highest priority";
+    position: absolute;
+    top: 16px; right: 16px;
+    background: var(--accent);
+    color: white;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 2px 7px;
+    border-radius: 4px;
+  }
+
+  .card h2 {
+    font-family: var(--font-display);
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.018em;
+    margin: 0 0 6px;
+    color: var(--text);
+  }
+  .card p {
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    margin: 0 0 16px;
+  }
+
+  .card-meta {
+    margin-top: auto;
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+    padding-top: 12px;
+    border-top: 0.5px solid var(--border-soft);
+    flex-wrap: wrap;
+  }
+  .card-meta .tag {
+    background: rgba(0,0,0,0.04);
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+  .card.spotlight .card-meta .tag {
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+  }
+  .card-arrow {
+    margin-left: auto;
+    color: var(--text-tertiary);
+    font-size: 16px;
+    transition: transform 0.18s, color 0.18s;
+  }
+  .card:hover .card-arrow { transform: translateX(3px); color: var(--accent); }
+
+  footer {
+    text-align: center;
+    margin-top: 56px;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+  }
+  footer .sep { margin: 0 6px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="brand">Vellum · AgentCanvas (working name: Workbench)</div>
+    <h1>Workbench Prototypes</h1>
+    <p class="sub">Interactive prototypes pressure-testing the artifact-viewer shape — inbox metaphor, agent integration, command palette, keyboard-first navigation.</p>
+  </header>
+
+  <!-- ROUND 1 -->
+  <div class="round-header">
+    <div class="round-tag">Round 1</div>
+    <div class="round-title">Shell & metaphor</div>
+    <div class="round-sub">Two-pane shell, file states, edit-proposal flow</div>
+  </div>
+
+  <div class="grid">
+    <a class="card a" href="prototype-A-main.html">
+      <div class="card-eyebrow"><span class="card-letter">A</span>Daily Driver</div>
+      <h2>Two-pane main view</h2>
+      <p>Inbox on the left, rendered Markdown on the right. Three swappable docs. Edit is a pencil-toggle mode; Pinned is a virtual collection; Quick Capture shows its on-disk path.</p>
+      <div class="card-meta">
+        <span class="tag">Markdown</span>
+        <span class="tag">Edit mode</span>
+        <span class="tag">⌘⏎ to send</span>
+        <span class="card-arrow">→</span>
+      </div>
+    </a>
+
+    <a class="card b" href="prototype-B-html.html">
+      <div class="card-eyebrow"><span class="card-letter">B</span>HTML Artifact</div>
+      <h2>Rich HTML viewing</h2>
+      <p>Same shell, right pane renders a research artifact: cards, inline SVG bar chart, editorial callout, comparison table. Tests how calm chrome carries dense content.</p>
+      <div class="card-meta">
+        <span class="tag">HTML</span>
+        <span class="tag">SVG chart</span>
+        <span class="card-arrow">→</span>
+      </div>
+    </a>
+
+    <a class="card c" href="prototype-C-edit-proposal.html">
+      <div class="card-eyebrow"><span class="card-letter">C</span>Edit Proposal</div>
+      <h2>MCP edit-proposal state</h2>
+      <p>Banner from Claude with reasoning. Inline diff in body. Pending-change dot in sidebar. Changes ribbon on right edge. Reject dismisses banner.</p>
+      <div class="card-meta">
+        <span class="tag">Diff</span>
+        <span class="tag">Pending state</span>
+        <span class="card-arrow">→</span>
+      </div>
+    </a>
+
+    <a class="card d" href="prototype-D-inbox-detail.html">
+      <div class="card-eyebrow"><span class="card-letter">D</span>Inbox Detail</div>
+      <h2>Interactive sidebar</h2>
+      <p>Sidebar at full width. Type into Quick Capture + Enter to add. Drag inbox items to projects to file. Click-to-arm fallback.</p>
+      <div class="card-meta">
+        <span class="tag">Type to capture</span>
+        <span class="tag">Drag to file</span>
+        <span class="card-arrow">→</span>
+      </div>
+    </a>
+  </div>
+
+  <!-- ROUND 2 -->
+  <div class="round-header">
+    <div class="round-tag">Round 2</div>
+    <div class="round-title">Agents, modes, keyboard</div>
+    <div class="round-sub">Lovability bar: I and K</div>
+  </div>
+
+  <div class="grid">
+    <a class="card e" href="prototype-E-agent-panel.html">
+      <div class="card-eyebrow"><span class="card-letter">E</span>Agent Panel</div>
+      <h2>Connected agent sessions</h2>
+      <p>Right column showing five live sessions — <em>cto · claude [AGRC]</em>, codex, ciso, etc. Toggle between three typography variants (Editorial / Weighted / Persona-typed) to pick the badge.</p>
+      <div class="card-meta">
+        <span class="tag">Layered identity</span>
+        <span class="tag">3 typography variants</span>
+        <span class="card-arrow">→</span>
+      </div>
+    </a>
+
+    <a class="card f" href="prototype-F-project-mode.html">
+      <div class="card-eyebrow"><span class="card-letter">F</span>Project Mode</div>
+      <h2>Three-column project view</h2>
+      <p>Click AGRC in the sidebar to reflow from 2-col Inbox to 3-col Project (sidebar + file list + viewer). Real mode-switch animation. Click Inbox to return.</p>
+      <div class="card-meta">
+        <span class="tag">Mode switch</span>
+        <span class="tag">Filter tabs</span>
+        <span class="card-arrow">→</span>
+      </div>
+    </a>
+
+    <a class="card i spotlight" href="prototype-I-command-palette.html">
+      <div class="card-eyebrow"><span class="card-letter">I</span>Command Palette</div>
+      <h2>⌘K palette</h2>
+      <p>Real keyboard wiring. ⌘K to open, type to filter live, ↑↓ to navigate, ⏎ to fire, Esc to dismiss. Actions / Files / Commands sections with shortcut hints. Auto-opens on load.</p>
+      <div class="card-meta">
+        <span class="tag">⌘K</span>
+        <span class="tag">Typeahead</span>
+        <span class="tag">↑↓ ⏎ esc</span>
+        <span class="card-arrow">→</span>
+      </div>
+    </a>
+
+    <a class="card k spotlight" href="prototype-K-keyboard-first.html">
+      <div class="card-eyebrow"><span class="card-letter">K</span>Keyboard-first</div>
+      <h2>Mouse optional</h2>
+      <p>j/k to navigate · ⏎ to open · e edit · s send · ⇧s send-to · p pin · ⌘⌫ archive · / search · ? shortcuts · ⌘1-9 jump to project. All bindings live. Overlay flashes on load.</p>
+      <div class="card-meta">
+        <span class="tag">j/k</span>
+        <span class="tag">all bindings live</span>
+        <span class="tag">? overlay</span>
+        <span class="card-arrow">→</span>
+      </div>
+    </a>
+  </div>
+
+  <footer>
+    Funnel Sans · Newsreader · JetBrains Mono
+    <span class="sep">·</span>
+    Single-page · open-by-double-click
+    <span class="sep">·</span>
+    Round 2 · May 2026
+  </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Workbench — agf-spec-v3.md (edit proposed)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Funnel+Sans:wght@300;400;500;600;700&family=Funnel+Display:wght@500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-ui: 'Funnel Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --font-display: 'Funnel Display', 'Funnel Sans', sans-serif;
+    --font-serif: 'Newsreader', 'Iowan Old Style', Georgia, serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+    --bg-desktop: #C8C5BC;
+    --bg-window: #FBFAF6;
+    --bg-sidebar: #EFEDE6;
+    --bg-doc: #FFFFFF;
+    --bg-titlebar-top: #F2F0E8;
+    --bg-titlebar-bot: #E7E4DA;
+
+    --border: #DDD9CC;
+    --border-soft: #E8E5D9;
+    --border-strong: #C6C1B0;
+
+    --text: #1B1A14;
+    --text-secondary: #6E6A5E;
+    --text-tertiary: #A09B8B;
+    --text-faded: #BFBAAB;
+
+    --accent: #1F5BD8;
+    --accent-deep: #173F95;
+    --accent-soft: #E5EBFA;
+
+    --pin: #C19433;
+
+    --pending: #C2691E;
+    --pending-deep: #8E4912;
+    --pending-bg: #FCEED9;
+    --pending-border: #E8C696;
+
+    --diff-add-bg: #DEEED2;
+    --diff-add-text: #2A5A1F;
+    --diff-add-strong: #5A8C36;
+    --diff-add-block: #ECF5DE;
+    --diff-add-block-border: #B9D49A;
+
+    --diff-rem-bg: #F2DCD9;
+    --diff-rem-text: #7A2424;
+    --diff-rem-strong: #B8453A;
+
+    --selected-bg: #FFFFFF;
+    --hover-bg: #E5E2D8;
+    --pending-row-bg: #FCF1DC;
+
+    --shadow-window: 0 28px 70px rgba(20, 18, 12, 0.30), 0 10px 24px rgba(20, 18, 12, 0.16);
+    --shadow-toolbar-btn: 0 1px 0 rgba(255,255,255,0.6) inset, 0 1px 2px rgba(0,0,0,0.04);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg-desktop);
+    color: var(--text); font-size: 13.5px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+    display: flex; align-items: center; justify-content: center;
+    padding: 28px; min-height: 100vh;
+    letter-spacing: -0.005em;
+  }
+
+  .window {
+    width: 100%; max-width: 1320px;
+    height: calc(100vh - 56px); min-height: 740px;
+    background: var(--bg-window); border-radius: 11px;
+    box-shadow: var(--shadow-window);
+    overflow: hidden; display: flex; flex-direction: column;
+    border: 0.5px solid rgba(0,0,0,0.12);
+  }
+  .titlebar {
+    height: 38px;
+    background: linear-gradient(to bottom, var(--bg-titlebar-top), var(--bg-titlebar-bot));
+    border-bottom: 0.5px solid var(--border);
+    display: flex; align-items: center; padding: 0 14px;
+    flex-shrink: 0; position: relative;
+  }
+  .traffic-lights { display: flex; gap: 8px; }
+  .tl { width: 12px; height: 12px; border-radius: 50%; border: 0.5px solid rgba(0,0,0,0.12); }
+  .tl-close { background: #FF5F57; } .tl-min { background: #FEBC2E; } .tl-max { background: #28C840; }
+  .titlebar-title {
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 13px; font-weight: 600; color: var(--text);
+  }
+
+  .main { flex: 1; display: flex; overflow: hidden; }
+
+  /* sidebar — same system, with pending state */
+  .sidebar {
+    width: 280px; background: var(--bg-sidebar);
+    border-right: 0.5px solid var(--border);
+    display: flex; flex-direction: column;
+    overflow: hidden; flex-shrink: 0;
+  }
+  .sidebar-header { padding: 12px 12px 8px; flex-shrink: 0; }
+  .search { position: relative; margin-bottom: 8px; }
+  .search svg { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); width: 13px; height: 13px; color: var(--text-tertiary); }
+  .search input {
+    width: 100%; background: rgba(255,255,255,0.7);
+    border: 0.5px solid var(--border-strong); border-radius: 6px;
+    padding: 5px 10px 5px 26px;
+    font: inherit; font-size: 12.5px; color: var(--text); outline: none;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.5);
+  }
+  .qc-input-wrap { position: relative; margin-top: 8px; }
+  .qc-input-wrap svg { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); width: 13px; height: 13px; color: var(--text-tertiary); }
+  .qc-input {
+    width: 100%; background: transparent;
+    border: 1px dashed var(--border-strong); border-radius: 6px;
+    padding: 6px 10px 6px 26px;
+    font: inherit; font-size: 12px; color: var(--text); outline: none;
+  }
+
+  .sidebar-scroll { flex: 1; overflow-y: auto; padding: 4px 8px 12px; }
+  .sb-section { margin-top: 14px; }
+  .sb-section:first-child { margin-top: 6px; }
+  .sb-section-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 6px 4px; }
+  .sb-section-title { font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase; display: flex; align-items: center; gap: 6px; }
+  .sb-count { font-size: 10.5px; font-weight: 500; color: var(--text-tertiary); background: rgba(0,0,0,0.04); padding: 1px 6px; border-radius: 8px; }
+  .sb-chevron { color: var(--text-tertiary); font-size: 10px; }
+
+  .sb-item {
+    display: flex; align-items: center; gap: 7px;
+    padding: 6px 8px; border-radius: 6px; cursor: pointer;
+    margin: 0 -2px; user-select: none; transition: background 0.08s;
+  }
+  .sb-item:hover { background: var(--hover-bg); }
+  .sb-item.selected.pending {
+    background: var(--pending-row-bg);
+    box-shadow: 0 0 0 0.5px var(--pending-border), 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .sb-item.selected:not(.pending) {
+    background: var(--selected-bg);
+    box-shadow: 0 0 0 0.5px var(--border), 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .sb-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+  .sb-dot.pending { background: var(--pending); box-shadow: 0 0 0 2.5px rgba(194,105,30,0.18); }
+  .sb-dot.empty { background: transparent; }
+  .sb-icon { width: 14px; height: 14px; color: var(--text-tertiary); flex-shrink: 0; }
+  .sb-name { flex: 1; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sb-item.unread .sb-name { font-weight: 600; }
+  .sb-item.pending .sb-name { font-weight: 600; color: var(--pending-deep); }
+  .sb-item.read .sb-name { color: var(--text-secondary); }
+  .sb-star { color: var(--pin); flex-shrink: 0; width: 12px; height: 12px; }
+  .sb-badge {
+    font-size: 10.5px; color: var(--text-secondary);
+    background: rgba(255,255,255,0.7); border: 0.5px solid var(--border-strong);
+    border-radius: 3px; padding: 1px 5px; font-weight: 500; flex-shrink: 0;
+  }
+  .sb-time { font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+
+  .sb-folder {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 8px; border-radius: 6px; cursor: pointer;
+    margin: 0 -2px;
+  }
+  .sb-folder:hover { background: var(--hover-bg); }
+  .sb-folder-icon { width: 14px; height: 14px; color: var(--text-tertiary); flex-shrink: 0; }
+  .sb-folder-name { flex: 1; font-size: 13px; color: var(--text); font-weight: 500; }
+  .sb-folder-count { font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+
+  /* ---- content ---- */
+  .content {
+    flex: 1; display: flex; flex-direction: column;
+    background: var(--bg-doc); overflow: hidden; min-width: 0;
+    position: relative;
+  }
+  .toolbar {
+    height: 46px; background: var(--bg-doc);
+    border-bottom: 0.5px solid var(--border-soft);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 18px 0 22px; flex-shrink: 0;
+  }
+  .breadcrumb { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-secondary); }
+  .breadcrumb .crumb-sep { color: var(--text-faded); }
+  .breadcrumb .crumb-current { color: var(--text); font-weight: 500; }
+  .actions { display: flex; gap: 8px; }
+  .btn {
+    font-family: inherit; font-size: 12.5px; font-weight: 500;
+    padding: 5px 11px; border-radius: 6px;
+    border: 0.5px solid var(--border-strong);
+    background: linear-gradient(to bottom, #FFFFFF, #F5F3EC);
+    color: var(--text); cursor: pointer;
+    box-shadow: var(--shadow-toolbar-btn);
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .btn-primary {
+    background: linear-gradient(to bottom, #3270E8, #1F4ECC);
+    color: white; border-color: var(--accent-deep);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.18) inset, 0 1px 2px rgba(31,91,216,0.3);
+  }
+  .btn svg { width: 13px; height: 13px; }
+
+  /* ---- proposal banner ---- */
+  .proposal-banner {
+    background: linear-gradient(to bottom, var(--pending-bg) 0%, #FDF4E2 100%);
+    border-bottom: 0.5px solid var(--pending-border);
+    padding: 14px 22px;
+    display: flex; align-items: center; gap: 16px;
+    flex-shrink: 0;
+  }
+  .proposal-icon {
+    width: 38px; height: 38px; border-radius: 10px;
+    background: linear-gradient(140deg, #F2B66B, #E08A30);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.4) inset, 0 1px 4px rgba(194,105,30,0.25);
+  }
+  .proposal-icon svg { width: 19px; height: 19px; color: white; }
+  .proposal-text { flex: 1; min-width: 0; }
+  .proposal-title {
+    font-size: 13.5px; font-weight: 600;
+    color: var(--pending-deep); letter-spacing: -0.005em;
+    margin-bottom: 2px;
+  }
+  .proposal-reason {
+    font-size: 12.5px; color: #6E5530;
+    font-style: italic;
+    font-family: var(--font-serif);
+    letter-spacing: -0.003em;
+  }
+  .proposal-reason .quote-mark { color: var(--pending); margin: 0 1px; }
+  .proposal-actions { display: flex; gap: 8px; flex-shrink: 0; }
+  .btn-pending-primary {
+    background: linear-gradient(to bottom, #DC8838, #C2691E);
+    color: white; border: 0.5px solid var(--pending-deep);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.2) inset, 0 1px 3px rgba(194,105,30,0.3);
+  }
+  .btn-pending-primary:hover { filter: brightness(1.04); }
+  .btn-ghost {
+    background: transparent;
+    border: 0.5px solid var(--pending-border);
+    color: var(--pending-deep);
+    box-shadow: none;
+  }
+  .btn-ghost:hover { background: rgba(255,255,255,0.4); }
+
+  /* ---- document area + changes ribbon ---- */
+  .doc-area {
+    flex: 1; display: flex; overflow: hidden;
+    position: relative;
+  }
+  .doc-scroll {
+    flex: 1; overflow-y: auto;
+    padding: 36px 60px 80px;
+  }
+  .doc { max-width: 720px; margin: 0 auto; position: relative; }
+
+  .doc h1 {
+    font-family: var(--font-display);
+    font-size: 32px; font-weight: 700;
+    line-height: 1.15; letter-spacing: -0.02em;
+    margin: 0 0 16px;
+  }
+  .doc .lede {
+    font-size: 15px; line-height: 1.6;
+    color: #2A2823; margin: 0 0 18px;
+    letter-spacing: -0.005em;
+  }
+  .doc p {
+    font-size: 14.5px; line-height: 1.7;
+    color: #2A2823; margin: 0 0 16px;
+    letter-spacing: -0.005em;
+  }
+  .doc h2 {
+    font-family: var(--font-display);
+    font-size: 19px; font-weight: 600;
+    letter-spacing: -0.012em;
+    margin: 32px 0 12px;
+  }
+
+  /* inline diff */
+  .diff-rem {
+    background: var(--diff-rem-bg);
+    color: var(--diff-rem-text);
+    text-decoration: line-through;
+    text-decoration-color: var(--diff-rem-strong);
+    text-decoration-thickness: 1.2px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    margin: 0 1px;
+    box-shadow: inset 0 -1px 0 rgba(184,69,58,0.2);
+  }
+  .diff-add {
+    background: var(--diff-add-bg);
+    color: var(--diff-add-text);
+    text-decoration: underline;
+    text-decoration-color: var(--diff-add-strong);
+    text-decoration-thickness: 1.2px;
+    text-underline-offset: 2px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    margin: 0 1px;
+    font-weight: 500;
+  }
+
+  .diff-add-block {
+    background: var(--diff-add-block);
+    border: 0.5px solid var(--diff-add-block-border);
+    border-left: 3px solid var(--diff-add-strong);
+    border-radius: 4px;
+    padding: 10px 14px;
+    margin: 18px 0;
+    font-size: 14.5px; line-height: 1.65;
+    color: var(--diff-add-text);
+    font-weight: 500;
+    letter-spacing: -0.005em;
+    position: relative;
+  }
+  .diff-add-block::before {
+    content: "added";
+    position: absolute;
+    top: -7px; right: 10px;
+    background: var(--diff-add-strong);
+    color: white;
+    font-family: var(--font-ui);
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+
+  /* changes ribbon */
+  .ribbon {
+    width: 14px;
+    background: #FAFAF6;
+    border-left: 0.5px solid var(--border-soft);
+    flex-shrink: 0;
+    position: relative;
+    padding: 32px 0;
+  }
+  .ribbon-mark {
+    position: absolute;
+    left: 4px;
+    width: 6px;
+    border-radius: 1.5px;
+    opacity: 0.85;
+  }
+  .ribbon-mark.rem { background: var(--diff-rem-strong); }
+  .ribbon-mark.add { background: var(--diff-add-strong); }
+  .ribbon-mark.both {
+    background: linear-gradient(to bottom, var(--diff-rem-strong) 0 50%, var(--diff-add-strong) 50% 100%);
+  }
+
+  /* meta line under title */
+  .doc-meta {
+    display: flex; align-items: center; gap: 10px;
+    margin: 0 0 22px;
+    color: var(--text-tertiary); font-size: 12px;
+  }
+  .doc-meta .dot { width: 3px; height: 3px; background: var(--text-faded); border-radius: 50%; }
+  .agent-pill {
+    background: var(--pending-bg); color: var(--pending-deep);
+    border-radius: 3px; font-size: 11px; font-weight: 600;
+    padding: 1px 6px; letter-spacing: 0;
+  }
+
+  .doc pre {
+    background: #1C2333; color: #E8ECF5;
+    border-radius: 8px; padding: 14px 16px;
+    overflow-x: auto; margin: 16px 0;
+    font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55;
+  }
+  .tok-key { color: #FFAB70; } .tok-str { color: #A5D6A7; } .tok-punc { color: #AAB4C8; }
+
+  .sidebar-scroll::-webkit-scrollbar,
+  .doc-scroll::-webkit-scrollbar { width: 8px; }
+  .sidebar-scroll::-webkit-scrollbar-thumb,
+  .doc-scroll::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.12); border-radius: 4px;
+    border: 2px solid transparent; background-clip: padding-box;
+  }
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="traffic-lights">
+      <div class="tl tl-close"></div><div class="tl tl-min"></div><div class="tl tl-max"></div>
+    </div>
+    <div class="titlebar-title">Workbench</div>
+  </div>
+
+  <div class="main">
+    <!-- sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="search">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3 3"/></svg>
+          <input type="text" placeholder="Search files…">
+        </div>
+        <div class="qc-input-wrap">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3v10M3 8h10"/></svg>
+          <input class="qc-input" type="text" placeholder="Quick capture…">
+        </div>
+      </div>
+
+      <div class="sidebar-scroll">
+        <div class="sb-section">
+          <div class="sb-section-header">
+            <div class="sb-section-title">Inbox <span class="sb-count">4</span></div>
+            <div class="sb-chevron">▾</div>
+          </div>
+
+          <div class="sb-item pending selected">
+            <div class="sb-dot pending"></div>
+            <svg class="sb-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>
+            <div class="sb-name">agf-spec-v3.md</div>
+            <div class="sb-badge">Claude</div>
+          </div>
+
+          <div class="sb-item unread">
+            <div class="sb-dot"></div>
+            <svg class="sb-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>
+            <div class="sb-name">agf-positioning-v3.md</div>
+            <div class="sb-badge">Claude</div>
+            <div class="sb-time">2m</div>
+          </div>
+          <div class="sb-item unread">
+            <div class="sb-dot"></div>
+            <svg class="sb-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>
+            <div class="sb-name">vendor-risk-spec.html</div>
+            <div class="sb-badge">Codex</div>
+            <div class="sb-time">12m</div>
+          </div>
+          <div class="sb-item unread">
+            <div class="sb-dot"></div>
+            <svg class="sb-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>
+            <div class="sb-name">weekly-digest.md</div>
+            <div class="sb-badge">Claude</div>
+            <div class="sb-time">1h</div>
+          </div>
+          <div class="sb-item read">
+            <div class="sb-dot empty"></div>
+            <svg class="sb-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>
+            <div class="sb-name">meeting-prep.md</div>
+            <div class="sb-time">3h</div>
+          </div>
+        </div>
+
+        <div class="sb-section">
+          <div class="sb-section-header">
+            <div class="sb-section-title">Pinned <span class="sb-count">2</span></div>
+            <div class="sb-chevron">▾</div>
+          </div>
+          <div class="sb-item unread">
+            <div class="sb-dot"></div>
+            <svg class="sb-star" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+            <div class="sb-name">ongoing-spec.md</div>
+            <div class="sb-badge">Claude</div>
+          </div>
+          <div class="sb-item read">
+            <div class="sb-dot empty"></div>
+            <svg class="sb-star" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+            <div class="sb-name">agent-state.md</div>
+            <div class="sb-badge">Codex</div>
+          </div>
+        </div>
+
+        <div class="sb-section">
+          <div class="sb-section-header">
+            <div class="sb-section-title">Projects</div>
+            <div class="sb-chevron">▾</div>
+          </div>
+          <div class="sb-folder">
+            <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+            <div class="sb-folder-name">AGRC</div>
+            <div class="sb-folder-count">3</div>
+          </div>
+          <div class="sb-folder">
+            <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+            <div class="sb-folder-name">Advisory</div>
+            <div class="sb-folder-count">5</div>
+          </div>
+          <div class="sb-folder">
+            <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+            <div class="sb-folder-name">Vellum</div>
+            <div class="sb-folder-count">47</div>
+          </div>
+          <div class="sb-folder">
+            <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+            <div class="sb-folder-name">Krypton</div>
+            <div class="sb-folder-count">2</div>
+          </div>
+          <div class="sb-folder">
+            <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+            <div class="sb-folder-name">Personal</div>
+            <div class="sb-folder-count">4</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- content -->
+    <main class="content">
+      <div class="toolbar">
+        <div class="breadcrumb">
+          <span>Inbox</span>
+          <span class="crumb-sep">›</span>
+          <span class="crumb-current">agf-spec-v3.md</span>
+        </div>
+        <div class="actions">
+          <button class="btn">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 11v2h10v-2M8 3v8M5 6l3-3 3 3"/></svg>
+            Open in Files
+          </button>
+        </div>
+      </div>
+
+      <!-- proposal banner -->
+      <div class="proposal-banner">
+        <div class="proposal-icon">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+            <path d="M8 2L13 8L8 14L3 8Z"/>
+            <path d="M8 6L8 10M6 8L10 8"/>
+          </svg>
+        </div>
+        <div class="proposal-text">
+          <div class="proposal-title">Claude proposed an edit to this document</div>
+          <div class="proposal-reason">
+            <span class="quote-mark">"</span>Aligned section 1 with v2.0 vocabulary per your earlier note — replaced "flow" with "workflow" and added an explicit reproducibility constraint.<span class="quote-mark">"</span>
+          </div>
+        </div>
+        <div class="proposal-actions">
+          <button class="btn btn-ghost">Open in Claude</button>
+          <button class="btn btn-ghost">Reject</button>
+          <button class="btn btn-pending-primary">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 8l3 3 9-9"/></svg>
+            Review Diff
+          </button>
+        </div>
+      </div>
+
+      <!-- doc area with ribbon -->
+      <div class="doc-area">
+        <div class="doc-scroll">
+          <article class="doc">
+            <h1>AGF Spec v3.0</h1>
+            <div class="doc-meta">
+              <span class="agent-pill">Pending change</span>
+              <span>last edited 4 minutes ago</span>
+              <span class="dot"></span>
+              <span>iCloud · AGRC</span>
+            </div>
+            <p class="lede">This document defines the Agent Graph Framework (AGF) v3.0. It builds on v2.0 and introduces clarifications, refinements, and new capabilities to the runtime contract.</p>
+
+            <h2>1. Workflows</h2>
+            <p>In AGF v3.0, <span class="diff-rem">a flow is a directed graph of steps executed by an agent runtime.</span> <span class="diff-add">a workflow is a directed graph of steps executed by an agent runtime.</span> Each step represents a deterministic unit of work with defined inputs, outputs, and execution semantics. Steps MAY invoke tools, call sub-workflows, or evaluate conditions.</p>
+
+            <div class="diff-add-block">
+              Workflows MAY declare explicit version constraints on referenced components to ensure reproducibility across environments. Constraints are evaluated at compile time and resolved at runtime against the active component registry.
+            </div>
+
+            <p>All workflows must be valid according to the schema defined in section 7. Invalid workflows are rejected at the compile boundary and never reach the runtime.</p>
+
+            <h2>2. Step semantics</h2>
+            <p>A step is the atomic unit of execution. Steps are typed: each step declares its input type, output type, and effect class. The runtime enforces type compatibility at every edge in the graph.</p>
+
+            <pre><span class="tok-key">type</span> <span class="tok-key">Step</span> <span class="tok-punc">=</span> <span class="tok-punc">{</span>
+  id<span class="tok-punc">:</span> <span class="tok-key">UUID</span><span class="tok-punc">,</span>
+  kind<span class="tok-punc">:</span> <span class="tok-str">"tool"</span> <span class="tok-punc">|</span> <span class="tok-str">"sub"</span> <span class="tok-punc">|</span> <span class="tok-str">"cond"</span><span class="tok-punc">,</span>
+  effect<span class="tok-punc">:</span> <span class="tok-str">"pure"</span> <span class="tok-punc">|</span> <span class="tok-str">"read"</span> <span class="tok-punc">|</span> <span class="tok-str">"write"</span><span class="tok-punc">,</span>
+<span class="tok-punc">};</span></pre>
+
+            <p>Effect classes drive the runtime's scheduling and rollback behavior. Pure steps may be re-executed freely; write steps are guarded by the journal described in section 5.</p>
+
+            <h2>3. Execution model</h2>
+            <p>The runtime executes a workflow by traversing its directed graph in topological order. Parallelism is permitted between any two steps with no transitive dependency. The runtime is responsible for ensuring that the observable result is identical to a serial execution in dependency order.</p>
+          </article>
+        </div>
+
+        <!-- changes ribbon — small marks aligned vertically to diff regions -->
+        <div class="ribbon" aria-hidden="true">
+          <div class="ribbon-mark both" style="top: 138px; height: 18px;"></div>
+          <div class="ribbon-mark add" style="top: 184px; height: 38px;"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+  // Tiny interactivity: Reject removes the banner & clears diff styles; Review Diff scrolls to first change.
+  const banner = document.querySelector('.proposal-banner');
+  const rejectBtn = document.querySelector('.btn-ghost');
+  const reviewBtn = document.querySelector('.btn-pending-primary');
+
+  reviewBtn.addEventListener('click', () => {
+    const firstDiff = document.querySelector('.diff-rem');
+    if (firstDiff) firstDiff.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
+  // Make the Reject button (second .btn-ghost) functional
+  const ghosts = document.querySelectorAll('.btn-ghost');
+  if (ghosts.length >= 2) {
+    ghosts[1].addEventListener('click', () => {
+      banner.style.transition = 'opacity 0.18s';
+      banner.style.opacity = '0';
+      setTimeout(() => banner.remove(), 200);
+    });
+  }
+</script>
+</body>
+</html>

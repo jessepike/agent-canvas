@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Workbench — Inbox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Funnel+Sans:wght@300;400;500;600;700&family=Funnel+Display:wght@500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-ui: 'Funnel Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --font-display: 'Funnel Display', 'Funnel Sans', sans-serif;
+    --font-serif: 'Newsreader', 'Iowan Old Style', Georgia, serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+    --bg-desktop: #C8C5BC;
+    --bg-window: #EFEDE6;
+    --bg-titlebar-top: #F2F0E8;
+    --bg-titlebar-bot: #E7E4DA;
+
+    --border: #DDD9CC;
+    --border-soft: #E8E5D9;
+    --border-strong: #C6C1B0;
+
+    --text: #1B1A14;
+    --text-secondary: #6E6A5E;
+    --text-tertiary: #A09B8B;
+    --text-faded: #BFBAAB;
+
+    --accent: #1F5BD8;
+    --accent-deep: #173F95;
+    --accent-soft: #E5EBFA;
+    --accent-soft-deep: #D5E0F4;
+
+    --pin: #C19433;
+    --selected-bg: #FFFFFF;
+    --hover-bg: #E5E2D8;
+    --drop-target-bg: #DCE7FB;
+    --drop-target-border: var(--accent);
+
+    --shadow-window: 0 28px 70px rgba(20, 18, 12, 0.30), 0 10px 24px rgba(20, 18, 12, 0.16);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg-desktop);
+    color: var(--text); font-size: 13.5px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+    display: flex; align-items: center; justify-content: center;
+    padding: 28px; min-height: 100vh;
+    letter-spacing: -0.005em;
+  }
+
+  /* narrower window — sidebar only */
+  .window {
+    width: 460px;
+    height: calc(100vh - 56px);
+    min-height: 740px;
+    background: var(--bg-window);
+    border-radius: 11px;
+    box-shadow: var(--shadow-window);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    border: 0.5px solid rgba(0,0,0,0.12);
+  }
+  .titlebar {
+    height: 48px;
+    background: linear-gradient(to bottom, var(--bg-titlebar-top), var(--bg-titlebar-bot));
+    border-bottom: 0.5px solid var(--border);
+    display: flex; align-items: center;
+    padding: 0 14px;
+    flex-shrink: 0; position: relative;
+  }
+  .traffic-lights { display: flex; gap: 8px; }
+  .tl { width: 12px; height: 12px; border-radius: 50%; border: 0.5px solid rgba(0,0,0,0.12); }
+  .tl-close { background: #FF5F57; } .tl-min { background: #FEBC2E; } .tl-max { background: #28C840; }
+  .titlebar-spacer { flex: 1; }
+  .titlebar-brand {
+    font-family: var(--font-display);
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.018em;
+    margin-left: 16px;
+  }
+  .titlebar-action {
+    width: 26px; height: 26px;
+    border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .titlebar-action:hover { background: var(--hover-bg); color: var(--text); }
+  .titlebar-action svg { width: 16px; height: 16px; }
+
+  .sidebar-header {
+    padding: 14px 16px 4px;
+    flex-shrink: 0;
+  }
+  .search { position: relative; margin-bottom: 4px; }
+  .search svg {
+    position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    width: 14px; height: 14px; color: var(--text-tertiary); pointer-events: none;
+  }
+  .search input {
+    width: 100%; background: #FFFFFF;
+    border: 0.5px solid var(--border-strong); border-radius: 7px;
+    padding: 7px 12px 7px 30px;
+    font: inherit; font-size: 13px; color: var(--text); outline: none;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.5);
+  }
+  .search input::placeholder { color: var(--text-tertiary); }
+  .search input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  .qc-section {
+    padding: 12px 16px 4px;
+    flex-shrink: 0;
+  }
+  .qc-label {
+    font-size: 10.5px; font-weight: 700;
+    letter-spacing: 0.08em; color: var(--text-secondary);
+    text-transform: uppercase; margin-bottom: 6px;
+    padding: 0 2px;
+  }
+  .qc-input-wrap { position: relative; }
+  .qc-input-wrap svg {
+    position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    width: 13px; height: 13px; color: var(--text-tertiary);
+  }
+  .qc-input {
+    width: 100%; background: transparent;
+    border: 1px dashed var(--border-strong); border-radius: 7px;
+    padding: 8px 12px 8px 30px;
+    font: inherit; font-size: 13px; color: var(--text); outline: none;
+  }
+  .qc-input:focus {
+    border-style: solid; border-color: var(--accent);
+    background: rgba(255,255,255,0.85);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .qc-input::placeholder { color: var(--text-tertiary); }
+  .qc-flash {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--accent-deep);
+    padding: 0 4px;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .qc-flash.show { opacity: 1; }
+
+  .sidebar-scroll {
+    flex: 1; overflow-y: auto;
+    padding: 6px 12px 16px;
+  }
+
+  .sb-section { margin-top: 16px; }
+  .sb-section:first-child { margin-top: 8px; }
+  .sb-section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 6px 6px;
+    cursor: pointer; user-select: none;
+  }
+  .sb-section-title {
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.09em;
+    color: var(--text-secondary); text-transform: uppercase;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .sb-count {
+    font-size: 11px; font-weight: 500; color: var(--text-tertiary);
+    background: rgba(0,0,0,0.04); padding: 1px 7px; border-radius: 8px;
+    letter-spacing: 0;
+  }
+  .sb-chevron { color: var(--text-tertiary); font-size: 10px; transition: transform 0.15s; }
+  .sb-section.collapsed .sb-chevron { transform: rotate(-90deg); }
+  .sb-section.collapsed .sb-list { display: none; }
+
+  .sb-list { display: flex; flex-direction: column; gap: 1px; }
+
+  .sb-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-radius: 7px;
+    cursor: pointer; user-select: none;
+    transition: background 0.08s, opacity 0.15s;
+    position: relative;
+  }
+  .sb-item:hover { background: var(--hover-bg); }
+  .sb-item.selected {
+    background: #FFFFFF;
+    box-shadow: 0 0 0 0.5px var(--border), 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .sb-item.dragging { opacity: 0.45; }
+  .sb-item.new-arrival {
+    animation: arrivalFlash 1.2s ease-out;
+  }
+  @keyframes arrivalFlash {
+    0% { background: var(--accent-soft); transform: translateY(-4px); opacity: 0; }
+    20% { background: var(--accent-soft); transform: translateY(0); opacity: 1; }
+    100% { background: transparent; }
+  }
+
+  .sb-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+  .sb-dot.empty { background: transparent; }
+  .sb-icon {
+    width: 15px; height: 15px;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+  .sb-name {
+    flex: 1; font-size: 13.5px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    letter-spacing: -0.005em;
+  }
+  .sb-item.unread .sb-name { font-weight: 600; }
+  .sb-item.read .sb-name { color: var(--text-secondary); }
+  .sb-star {
+    color: var(--pin); flex-shrink: 0;
+    width: 13px; height: 13px;
+  }
+  .sb-badge {
+    font-size: 10.5px; color: var(--text-secondary);
+    background: rgba(255,255,255,0.75); border: 0.5px solid var(--border-strong);
+    border-radius: 3px; padding: 1px 6px; font-weight: 500; flex-shrink: 0;
+  }
+  .sb-badge.you { background: var(--accent-soft); color: var(--accent-deep); border-color: var(--accent-soft-deep); }
+  .sb-time {
+    font-size: 11.5px; color: var(--text-tertiary);
+    flex-shrink: 0; font-variant-numeric: tabular-nums;
+  }
+
+  /* file-type icon colors */
+  .ft-md { color: var(--text-tertiary); }
+  .ft-html { color: #B7741C; }
+  .ft-png { color: #6D3FBF; }
+  .ft-txt { color: var(--text-tertiary); }
+  .ft-json { color: #B6493B; }
+
+  .sb-folder {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 10px; border-radius: 7px;
+    cursor: pointer; user-select: none;
+    transition: background 0.08s, border-color 0.08s;
+    border: 1px solid transparent;
+  }
+  .sb-folder:hover { background: var(--hover-bg); }
+  .sb-folder.selected {
+    background: var(--accent-soft);
+  }
+  .sb-folder.selected .sb-folder-name { color: var(--accent-deep); font-weight: 600; }
+  .sb-folder.selected .sb-folder-icon { color: var(--accent); }
+  .sb-folder.drop-target {
+    background: var(--drop-target-bg);
+    border-color: var(--drop-target-border);
+    border-style: dashed;
+  }
+  .sb-folder.drop-target .sb-folder-name { color: var(--accent-deep); }
+
+  .sb-folder-icon { width: 15px; height: 15px; color: var(--text-tertiary); flex-shrink: 0; }
+  .sb-folder-name { flex: 1; font-size: 13.5px; color: var(--text); font-weight: 500; letter-spacing: -0.005em; }
+  .sb-folder-count { font-size: 11.5px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+
+  .new-project {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 10px; margin-top: 4px;
+    color: var(--accent); font-size: 13px;
+    font-weight: 500; cursor: pointer;
+    border-radius: 6px;
+  }
+  .new-project:hover { background: var(--accent-soft); }
+  .new-project svg { width: 13px; height: 13px; }
+
+  .toast {
+    position: fixed; bottom: 56px; left: 50%;
+    transform: translateX(-50%);
+    background: var(--text);
+    color: white; font-size: 12.5px; font-weight: 500;
+    padding: 8px 14px;
+    border-radius: 8px;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.2);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s, transform 0.2s;
+  }
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(-6px);
+  }
+
+  .filing-hint {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 6px;
+    background: var(--accent);
+    color: white;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+    z-index: 10;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s;
+  }
+  .sb-item.armed .filing-hint { opacity: 1; }
+
+  .sidebar-scroll::-webkit-scrollbar { width: 8px; }
+  .sidebar-scroll::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.12); border-radius: 4px;
+    border: 2px solid transparent; background-clip: padding-box;
+  }
+</style>
+</head>
+<body>
+<div class="window">
+  <!-- titlebar -->
+  <div class="titlebar">
+    <div class="traffic-lights">
+      <div class="tl tl-close"></div><div class="tl tl-min"></div><div class="tl tl-max"></div>
+    </div>
+    <div class="titlebar-brand">Workbench</div>
+    <div class="titlebar-spacer"></div>
+    <div class="titlebar-action" title="Settings">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+        <circle cx="8" cy="8" r="2"/>
+        <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- search -->
+  <div class="sidebar-header">
+    <div class="search">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3 3"/></svg>
+      <input type="text" placeholder="Search files…">
+    </div>
+  </div>
+
+  <!-- quick capture -->
+  <div class="qc-section">
+    <div class="qc-label">Quick capture</div>
+    <div class="qc-input-wrap">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3v10M3 8h10"/></svg>
+      <input class="qc-input" type="text" id="qcInput" placeholder="Capture a note or paste…" autocomplete="off">
+    </div>
+    <div class="qc-flash" id="qcFlash">Added to Inbox · press Enter to add another</div>
+  </div>
+
+  <!-- scrollable list -->
+  <div class="sidebar-scroll">
+
+    <div class="sb-section" id="section-inbox">
+      <div class="sb-section-header" onclick="toggleSection('section-inbox')">
+        <div class="sb-section-title">Inbox <span class="sb-count" id="inboxCount">5</span></div>
+        <div class="sb-chevron">▾</div>
+      </div>
+      <div class="sb-list" id="inboxList">
+
+        <div class="sb-item unread" draggable="true" data-file="agf-positioning-v3.md">
+          <div class="sb-dot"></div>
+          <svg class="sb-star" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+          <div class="sb-name">agf-positioning-v3.md</div>
+          <div class="sb-badge">Claude</div>
+          <div class="sb-time">2m</div>
+          <div class="filing-hint">drag to a project →</div>
+        </div>
+
+        <div class="sb-item unread" draggable="true" data-file="vendor-risk-spec.html">
+          <div class="sb-dot"></div>
+          <svg class="sb-star" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+          <div class="sb-name">vendor-risk-spec.html</div>
+          <div class="sb-badge">Codex</div>
+          <div class="sb-time">12m</div>
+          <div class="filing-hint">drag to a project →</div>
+        </div>
+
+        <div class="sb-item unread" draggable="true" data-file="weekly-digest.md">
+          <div class="sb-dot"></div>
+          <svg class="sb-icon ft-md" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>
+          <div class="sb-name">weekly-digest.md</div>
+          <div class="sb-badge">Claude</div>
+          <div class="sb-time">1h</div>
+          <div class="filing-hint">drag to a project →</div>
+        </div>
+
+        <div class="sb-item read" draggable="true" data-file="meeting-prep.md">
+          <div class="sb-dot empty"></div>
+          <svg class="sb-icon ft-md" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>
+          <div class="sb-name">meeting-prep.md</div>
+          <div class="sb-time">3h</div>
+        </div>
+
+        <div class="sb-item read" draggable="true" data-file="image-spike.png">
+          <div class="sb-dot empty"></div>
+          <svg class="sb-icon ft-png" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+            <rect x="2.5" y="3" width="11" height="10" rx="1"/>
+            <circle cx="6" cy="7" r="1.2"/>
+            <path d="M2.5 11L6 8l3 3 2-1.5 2.5 2.5"/>
+          </svg>
+          <div class="sb-name">image-spike.png</div>
+          <div class="sb-time">yesterday</div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="sb-section" id="section-pinned">
+      <div class="sb-section-header" onclick="toggleSection('section-pinned')">
+        <div class="sb-section-title">Pinned <span class="sb-count">2</span></div>
+        <div class="sb-chevron">▾</div>
+      </div>
+      <div class="sb-list">
+        <div class="sb-item unread">
+          <div class="sb-dot"></div>
+          <svg class="sb-star" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+          <div class="sb-name">ongoing-spec.md</div>
+          <div class="sb-badge">Claude</div>
+          <div class="sb-time">2d</div>
+        </div>
+        <div class="sb-item read">
+          <div class="sb-dot empty"></div>
+          <svg class="sb-star" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+          <div class="sb-name">agent-state.md</div>
+          <div class="sb-badge">Codex</div>
+          <div class="sb-time">3d</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sb-section" id="section-projects">
+      <div class="sb-section-header" onclick="toggleSection('section-projects')">
+        <div class="sb-section-title">Projects</div>
+        <div class="sb-chevron">▾</div>
+      </div>
+      <div class="sb-list" id="projectsList">
+        <div class="sb-folder selected" data-project="AGRC">
+          <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+          <div class="sb-folder-name">AGRC</div>
+          <div class="sb-folder-count" data-count>3</div>
+        </div>
+        <div class="sb-folder" data-project="Advisory">
+          <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+          <div class="sb-folder-name">Advisory</div>
+          <div class="sb-folder-count" data-count>5</div>
+        </div>
+        <div class="sb-folder" data-project="Vellum">
+          <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+          <div class="sb-folder-name">Vellum</div>
+          <div class="sb-folder-count" data-count>47</div>
+        </div>
+        <div class="sb-folder" data-project="Krypton">
+          <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+          <div class="sb-folder-name">Krypton</div>
+          <div class="sb-folder-count" data-count>2</div>
+        </div>
+        <div class="sb-folder" data-project="Personal">
+          <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+          <div class="sb-folder-name">Personal</div>
+          <div class="sb-folder-count" data-count>4</div>
+        </div>
+        <div class="new-project">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3v10M3 8h10"/></svg>
+          New Project
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // ============ Section collapse =============
+  function toggleSection(id) {
+    document.getElementById(id).classList.toggle('collapsed');
+  }
+
+  // ============ Toast helper =============
+  const toastEl = document.getElementById('toast');
+  let toastTimer;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
+  }
+
+  // ============ Quick capture =============
+  const qcInput = document.getElementById('qcInput');
+  const qcFlash = document.getElementById('qcFlash');
+  const inboxList = document.getElementById('inboxList');
+  const inboxCount = document.getElementById('inboxCount');
+
+  function nowLabel() { return 'now'; }
+
+  function slugify(s) {
+    const base = (s.toLowerCase().match(/[a-z0-9 -]+/g) || ['note']).join('').trim();
+    return (base || 'note').replace(/\s+/g, '-').slice(0, 32) + '.md';
+  }
+
+  function makeInboxItem({name, badge, badgeClass, time}) {
+    const el = document.createElement('div');
+    el.className = 'sb-item unread new-arrival';
+    el.draggable = true;
+    el.dataset.file = name;
+    el.innerHTML = `
+      <div class="sb-dot"></div>
+      <svg class="sb-icon ft-md" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>
+      <div class="sb-name">${name}</div>
+      <div class="sb-badge ${badgeClass || ''}">${badge || 'You'}</div>
+      <div class="sb-time">${time}</div>
+      <div class="filing-hint">drag to a project →</div>
+    `;
+    wireDrag(el);
+    wireClickToFile(el);
+    return el;
+  }
+
+  qcInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && qcInput.value.trim()) {
+      const text = qcInput.value.trim();
+      const filename = slugify(text);
+      const item = makeInboxItem({ name: filename, badge: 'You', badgeClass: 'you', time: nowLabel() });
+      inboxList.prepend(item);
+      bumpInbox(1);
+      qcInput.value = '';
+      qcFlash.classList.add('show');
+      clearTimeout(qcInput._flashT);
+      qcInput._flashT = setTimeout(() => qcFlash.classList.remove('show'), 1800);
+    }
+  });
+
+  function bumpInbox(delta) {
+    const n = parseInt(inboxCount.textContent, 10) + delta;
+    inboxCount.textContent = Math.max(0, n);
+  }
+
+  // ============ Drag & drop =============
+  let armedItem = null;
+
+  function wireDrag(item) {
+    item.addEventListener('dragstart', (e) => {
+      armedItem = item;
+      item.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', item.dataset.file);
+      // delay so dragstart fires cleanly
+      setTimeout(() => item.classList.add('dragging'), 0);
+    });
+    item.addEventListener('dragend', () => {
+      item.classList.remove('dragging');
+      armedItem = null;
+      document.querySelectorAll('.sb-folder.drop-target').forEach(f => f.classList.remove('drop-target'));
+    });
+  }
+
+  function wireClickToFile(item) {
+    item.addEventListener('click', (e) => {
+      // click-to-file fallback: click a file once to "arm", then click a project to file
+      if (armedItem === item) {
+        item.classList.remove('armed');
+        armedItem = null;
+        return;
+      }
+      document.querySelectorAll('.sb-item.armed').forEach(i => i.classList.remove('armed'));
+      armedItem = item;
+      item.classList.add('armed');
+      toast('Click a project to file "' + item.dataset.file + '"');
+    });
+  }
+
+  // Wire existing items
+  document.querySelectorAll('.sb-item[draggable="true"]').forEach(item => {
+    wireDrag(item);
+    wireClickToFile(item);
+  });
+
+  document.querySelectorAll('.sb-folder[data-project]').forEach(folder => {
+    folder.addEventListener('dragover', (e) => {
+      if (armedItem) {
+        e.preventDefault();
+        folder.classList.add('drop-target');
+      }
+    });
+    folder.addEventListener('dragleave', () => folder.classList.remove('drop-target'));
+    folder.addEventListener('drop', (e) => {
+      e.preventDefault();
+      folder.classList.remove('drop-target');
+      if (armedItem) {
+        fileItem(armedItem, folder);
+      }
+    });
+    folder.addEventListener('click', () => {
+      if (armedItem && armedItem.classList.contains('armed')) {
+        fileItem(armedItem, folder);
+        armedItem.classList.remove('armed');
+        armedItem = null;
+      }
+    });
+  });
+
+  function fileItem(item, folder) {
+    const file = item.dataset.file;
+    const project = folder.dataset.project;
+    item.style.transition = 'opacity 0.2s, transform 0.2s';
+    item.style.opacity = '0';
+    item.style.transform = 'translateX(40px)';
+    setTimeout(() => {
+      item.remove();
+      bumpInbox(-1);
+      const countEl = folder.querySelector('[data-count]');
+      countEl.textContent = parseInt(countEl.textContent, 10) + 1;
+      toast(`Filed "${file}" → ${project}`);
+    }, 200);
+  }
+
+  // dismiss "armed" on outside click
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.sb-item') && !e.target.closest('.sb-folder')) {
+      document.querySelectorAll('.sb-item.armed').forEach(i => i.classList.remove('armed'));
+      armedItem = null;
+    }
+  });
+</script>
+</body>
+</html>

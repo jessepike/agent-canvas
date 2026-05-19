@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Workbench — Project mode</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Funnel+Sans:wght@300;400;500;600;700&family=Funnel+Display:wght@500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-ui: 'Funnel Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --font-display: 'Funnel Display', 'Funnel Sans', sans-serif;
+    --font-serif: 'Newsreader', 'Iowan Old Style', Georgia, serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+    --bg-desktop: #C8C5BC;
+    --bg-window: #FBFAF6;
+    --bg-sidebar: #EFEDE6;
+    --bg-middle: #F4F2EA;
+    --bg-doc: #FFFFFF;
+    --bg-titlebar-top: #F2F0E8;
+    --bg-titlebar-bot: #E7E4DA;
+
+    --border: #DDD9CC;
+    --border-soft: #E8E5D9;
+    --border-strong: #C6C1B0;
+
+    --text: #1B1A14;
+    --text-secondary: #6E6A5E;
+    --text-tertiary: #A09B8B;
+    --text-faded: #BFBAAB;
+
+    --accent: #1F5BD8;
+    --accent-deep: #173F95;
+    --accent-soft: #E5EBFA;
+
+    --pin: #C19433;
+    --pending: #C2691E;
+    --pending-bg: #FCEED9;
+    --pending-border: #E8C696;
+
+    --selected-bg: #FFFFFF;
+    --hover-bg: #E5E2D8;
+
+    --shadow-window: 0 28px 70px rgba(20, 18, 12, 0.30), 0 10px 24px rgba(20, 18, 12, 0.16);
+    --shadow-btn: 0 1px 0 rgba(255,255,255,0.6) inset, 0 1px 2px rgba(0,0,0,0.04);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg-desktop);
+    color: var(--text); font-size: 13.5px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+    display: flex; align-items: center; justify-content: center;
+    padding: 28px; min-height: 100vh;
+    letter-spacing: -0.005em;
+  }
+  .window {
+    width: 100%; max-width: 1380px;
+    height: calc(100vh - 56px); min-height: 760px;
+    background: var(--bg-window);
+    border-radius: 11px;
+    box-shadow: var(--shadow-window);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    border: 0.5px solid rgba(0,0,0,0.12);
+  }
+  .titlebar {
+    height: 38px;
+    background: linear-gradient(to bottom, var(--bg-titlebar-top), var(--bg-titlebar-bot));
+    border-bottom: 0.5px solid var(--border);
+    display: flex; align-items: center; padding: 0 14px;
+    position: relative;
+  }
+  .traffic-lights { display: flex; gap: 8px; }
+  .tl { width: 12px; height: 12px; border-radius: 50%; border: 0.5px solid rgba(0,0,0,0.12); }
+  .tl-close { background: #FF5F57; } .tl-min { background: #FEBC2E; } .tl-max { background: #28C840; }
+  .titlebar-title {
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 13px; font-weight: 600;
+  }
+  .titlebar-mode {
+    position: absolute; right: 14px; top: 50%;
+    transform: translateY(-50%);
+    font-size: 11.5px; color: var(--text-secondary);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .titlebar-mode .mode-pill {
+    background: var(--accent-soft); color: var(--accent-deep);
+    padding: 1px 7px; border-radius: 8px;
+    font-size: 11px; font-weight: 600;
+  }
+
+  .main { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+
+  /* ----- Sidebar ----- */
+  .sidebar {
+    width: 260px; background: var(--bg-sidebar);
+    border-right: 0.5px solid var(--border);
+    display: flex; flex-direction: column;
+    overflow: hidden; flex-shrink: 0;
+    padding: 12px 8px 8px;
+  }
+  .search {
+    position: relative; margin: 0 4px 10px;
+  }
+  .search svg {
+    position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
+    width: 13px; height: 13px; color: var(--text-tertiary);
+  }
+  .search input {
+    width: 100%; background: rgba(255,255,255,0.7);
+    border: 0.5px solid var(--border-strong); border-radius: 6px;
+    padding: 5px 10px 5px 26px;
+    font: inherit; font-size: 12.5px; color: var(--text); outline: none;
+  }
+  .sb-tag {
+    font-size: 10.5px; font-weight: 700;
+    letter-spacing: 0.08em; color: var(--text-secondary);
+    text-transform: uppercase;
+    padding: 12px 8px 6px;
+  }
+  .sb-tag:first-of-type { padding-top: 4px; }
+  .sb-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 6px;
+    cursor: pointer; user-select: none;
+    transition: background 0.08s;
+    font-size: 13px; color: var(--text);
+  }
+  .sb-item:hover { background: var(--hover-bg); }
+  .sb-item.selected {
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    font-weight: 600;
+  }
+  .sb-item.selected .sb-icon { color: var(--accent); }
+  .sb-item .sb-icon {
+    width: 14px; height: 14px;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+  .sb-item .sb-name { flex: 1; }
+  .sb-item .sb-count {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+  .sb-item.selected .sb-count { color: var(--accent-deep); }
+
+  /* ----- Middle column (project files) ----- */
+  .middle {
+    width: 0;
+    flex-shrink: 0;
+    background: var(--bg-middle);
+    border-right: 0.5px solid var(--border);
+    overflow: hidden;
+    transition: width 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+    display: flex; flex-direction: column;
+  }
+  .window.project-mode .middle { width: 340px; }
+
+  .middle-header {
+    padding: 18px 20px 14px;
+    border-bottom: 0.5px solid var(--border-soft);
+    flex-shrink: 0;
+  }
+  .middle-project-name {
+    font-family: var(--font-display);
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    line-height: 1.05;
+  }
+  .middle-project-meta {
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+    margin-top: 4px;
+    letter-spacing: 0.01em;
+  }
+  .middle-tabs {
+    display: flex;
+    gap: 2px;
+    margin-top: 14px;
+    background: rgba(0,0,0,0.04);
+    padding: 2px;
+    border-radius: 7px;
+  }
+  .tab {
+    flex: 1;
+    background: transparent;
+    border: 0;
+    padding: 4px 6px;
+    font: inherit;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    border-radius: 5px;
+    cursor: pointer;
+    letter-spacing: 0;
+    transition: background 0.12s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active {
+    background: #fff;
+    color: var(--text);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  }
+  .tab .tab-count {
+    margin-left: 4px;
+    color: var(--text-tertiary);
+    font-weight: 500;
+    font-size: 11px;
+  }
+  .tab.active .tab-count { color: var(--text-secondary); }
+
+  .file-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+  .file-row {
+    padding: 11px 20px;
+    cursor: pointer;
+    border-bottom: 0.5px solid var(--border-soft);
+    position: relative;
+  }
+  .file-row:last-child { border-bottom: 0; }
+  .file-row:hover { background: rgba(255,255,255,0.5); }
+  .file-row.selected {
+    background: #fff;
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  .file-row-top {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 3px;
+  }
+  .file-row-name {
+    font-size: 13.5px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    letter-spacing: -0.005em;
+  }
+  .file-row.unread .file-row-name { font-weight: 600; }
+  .file-row.read .file-row-name { color: var(--text-secondary); }
+  .file-row .star { color: var(--pin); width: 12px; height: 12px; flex-shrink: 0; }
+  .file-row .pending-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--pending);
+    box-shadow: 0 0 0 2.5px rgba(194,105,30,0.18);
+    flex-shrink: 0;
+  }
+  .file-row-bottom {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+  }
+  .agent-badge {
+    background: rgba(255,255,255,0.8);
+    border: 0.5px solid var(--border-strong);
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    letter-spacing: 0;
+  }
+  .agent-badge.persona { font-family: var(--font-serif); font-style: italic; font-weight: 500; padding: 0 6px; }
+  .agent-badge.codex { font-family: var(--font-mono); font-size: 10px; }
+  .file-row-time {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ----- Right column / viewer ----- */
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-doc);
+    overflow: hidden; min-width: 0;
+  }
+  .toolbar {
+    height: 46px;
+    background: var(--bg-doc);
+    border-bottom: 0.5px solid var(--border-soft);
+    display: flex; align-items: center;
+    justify-content: space-between;
+    padding: 0 18px 0 22px;
+  }
+  .breadcrumb { font-size: 12.5px; color: var(--text-secondary); display: flex; gap: 7px; align-items: center; }
+  .breadcrumb .sep { color: var(--text-faded); }
+  .breadcrumb .current { color: var(--text); font-weight: 500; }
+  .actions { display: flex; gap: 8px; }
+  .btn {
+    font-family: inherit; font-size: 12.5px; font-weight: 500;
+    padding: 5px 11px; border-radius: 6px;
+    border: 0.5px solid var(--border-strong);
+    background: linear-gradient(to bottom, #FFFFFF, #F5F3EC);
+    color: var(--text); cursor: pointer;
+    box-shadow: var(--shadow-btn);
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .btn-primary {
+    background: linear-gradient(to bottom, #3270E8, #1F4ECC);
+    color: white; border-color: var(--accent-deep);
+  }
+  .btn svg { width: 13px; height: 13px; }
+
+  .doc-scroll { flex: 1; overflow-y: auto; padding: 36px 60px 80px; }
+  .doc { max-width: 700px; margin: 0 auto; }
+  .doc h1 { font-family: var(--font-display); font-size: 30px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 14px; color: var(--text); }
+  .doc h2 { font-family: var(--font-display); font-size: 18px; font-weight: 600; letter-spacing: -0.012em; margin: 26px 0 10px; color: var(--text); }
+  .doc p { font-size: 14.5px; line-height: 1.65; color: #2A2823; margin: 0 0 14px; letter-spacing: -0.005em; }
+  .doc ul { margin: 0 0 16px; padding-left: 4px; list-style: none; }
+  .doc ul li { font-size: 14.5px; line-height: 1.6; color: #2A2823; padding-left: 18px; position: relative; margin-bottom: 6px; }
+  .doc ul li::before { content: ""; position: absolute; left: 4px; top: 0.65em; width: 5px; height: 5px; border-radius: 50%; background: var(--text-tertiary); }
+  .doc-meta { display: flex; gap: 10px; align-items: center; color: var(--text-tertiary); font-size: 12px; margin: 0 0 18px; }
+  .doc-meta .dot { width: 3px; height: 3px; background: var(--text-faded); border-radius: 50%; }
+  .doc-meta .persona-mention {
+    font-family: var(--font-serif); font-style: italic;
+    color: var(--text-secondary); font-size: 12.5px;
+  }
+
+  /* Empty state for project */
+  .empty-state {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 24px;
+    color: var(--text-tertiary);
+    text-align: center;
+  }
+  .empty-state svg { width: 36px; height: 36px; margin-bottom: 14px; opacity: 0.6; }
+  .empty-state-title { font-size: 14px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
+  .empty-state-body { font-size: 12.5px; max-width: 220px; line-height: 1.5; }
+
+  .file-list::-webkit-scrollbar, .doc-scroll::-webkit-scrollbar { width: 8px; }
+  .file-list::-webkit-scrollbar-thumb, .doc-scroll::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.12); border-radius: 4px;
+    border: 2px solid transparent; background-clip: padding-box;
+  }
+</style>
+</head>
+<body>
+<div class="window" id="appWindow">
+  <div class="titlebar">
+    <div class="traffic-lights">
+      <div class="tl tl-close"></div><div class="tl tl-min"></div><div class="tl tl-max"></div>
+    </div>
+    <div class="titlebar-title">Workbench</div>
+    <div class="titlebar-mode">
+      <span>view</span>
+      <span class="mode-pill" id="modePill">Inbox</span>
+    </div>
+  </div>
+
+  <div class="main">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="search">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3 3"/></svg>
+        <input type="text" placeholder="Search files…">
+      </div>
+
+      <div class="sb-tag">Views</div>
+      <div class="sb-item selected" data-view="inbox">
+        <svg class="sb-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 8.5h3l1 2h4l1-2h3v3.5a.5.5 0 0 1-.5.5h-11A.5.5 0 0 1 2 12z"/><path d="M2 8.5L4 3.5h8L14 8.5"/></svg>
+        <div class="sb-name">Inbox</div>
+        <div class="sb-count">3</div>
+      </div>
+      <div class="sb-item" data-view="pinned">
+        <svg class="sb-icon" viewBox="0 0 14 14" fill="currentColor" style="color: var(--pin)"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+        <div class="sb-name">Pinned</div>
+        <div class="sb-count">3</div>
+      </div>
+
+      <div class="sb-tag">Projects</div>
+      <div class="sb-item" data-view="project" data-project="AGRC" data-count="6">
+        <svg class="sb-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+        <div class="sb-name">AGRC</div>
+        <div class="sb-count">6</div>
+      </div>
+      <div class="sb-item" data-view="project" data-project="Advisory" data-count="5">
+        <svg class="sb-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+        <div class="sb-name">Advisory</div>
+        <div class="sb-count">5</div>
+      </div>
+      <div class="sb-item" data-view="project" data-project="Vellum" data-count="47">
+        <svg class="sb-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+        <div class="sb-name">Vellum</div>
+        <div class="sb-count">47</div>
+      </div>
+      <div class="sb-item" data-view="project" data-project="Krypton" data-count="2">
+        <svg class="sb-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+        <div class="sb-name">Krypton</div>
+        <div class="sb-count">2</div>
+      </div>
+      <div class="sb-item" data-view="project" data-project="Personal" data-count="0">
+        <svg class="sb-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+        <div class="sb-name">Personal</div>
+        <div class="sb-count">0</div>
+      </div>
+    </aside>
+
+    <!-- Middle column (project file list, expands when in project mode) -->
+    <aside class="middle" id="middle" aria-hidden="true">
+      <div id="middleContent"><!-- populated by JS --></div>
+    </aside>
+
+    <!-- Right column / viewer -->
+    <main class="content">
+      <div class="toolbar">
+        <div class="breadcrumb" id="breadcrumb">
+          <span>Inbox</span>
+          <span class="sep">›</span>
+          <span class="current">agf-positioning-v3.md</span>
+        </div>
+        <div class="actions">
+          <button class="btn" title="Toggle edit mode">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 13.5L4 13l8-8-1.5-1.5-8 8z"/><path d="M10 4l2 2"/></svg>
+            Edit
+          </button>
+          <button class="btn btn-primary" title="Send to Claude (⌘⏎)">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8l12-5-4 12-3-5z"/></svg>
+            Send to Claude
+          </button>
+        </div>
+      </div>
+      <div class="doc-scroll" id="docScroll">
+        <article class="doc" id="doc"><!-- populated by JS --></article>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+  // ---- Project data ----
+  const projects = {
+    AGRC: {
+      files: [
+        { name: 'agf-positioning-v3.md', persona: 'cto', backbone: 'claude', personaClass: 'persona', time: '2 min', pinned: true, read: false, doc: 'agf' },
+        { name: 'vendor-risk-spec.html', persona: 'codex', backbone: '', personaClass: 'codex', time: '12 min', pinned: true, read: false, doc: 'vendor' },
+        { name: 'agf-spec-v3.md', persona: 'cto', backbone: 'claude', personaClass: 'persona', time: '4 min', read: false, pending: true, doc: 'spec' },
+        { name: 'competitive-analysis.html', persona: 'claude', backbone: '', personaClass: '', time: '5 min', read: false, doc: 'comp' },
+        { name: 'risk-controls-q2.md', persona: 'ciso', backbone: 'claude', personaClass: 'persona', time: 'yest.', read: true, doc: 'risk' },
+        { name: 'board-deck-prep.md', persona: 'cpo', backbone: 'claude', personaClass: 'persona', time: '2d', read: true, doc: 'board' },
+      ]
+    },
+    Advisory: {
+      files: [
+        { name: 'q2-pricing-options.md', persona: 'cpo', backbone: 'claude', personaClass: 'persona', time: '34 min', read: false, doc: 'pricing' },
+        { name: 'deal-pipeline.md', persona: 'claude', backbone: '', personaClass: '', time: '1h', read: false, doc: 'pipeline' },
+        { name: 'redline-pending.md', persona: 'cpo', backbone: 'claude', personaClass: 'persona', time: '3h', pinned: true, read: true, doc: 'redline' },
+        { name: 'design-partner-list.md', persona: 'cpo', backbone: 'claude', personaClass: 'persona', time: '2d', read: true, doc: 'partners' },
+        { name: 'event-rsvp.md', persona: 'claude', backbone: '', personaClass: '', time: '4d', read: true, doc: 'event' },
+      ]
+    },
+    Vellum: { files: [], note: 'Vellum has 47 files — file list rendering omitted in this prototype to keep the demo focused on AGRC/Advisory.' },
+    Krypton: {
+      files: [
+        { name: 'ingest-latency-rca.md', persona: 'codex', backbone: '', personaClass: 'codex', time: '8 min', read: false, doc: 'latency' },
+        { name: 'sprint-review-notes.md', persona: 'codex', backbone: '', personaClass: 'codex', time: '3h', read: true, doc: 'sprint' },
+      ]
+    },
+    Personal: { files: [] }
+  };
+
+  // Document content (small, just enough to render plausibly)
+  const docs = {
+    agf: {
+      title: 'AGF Positioning v3.0',
+      personaLabel: 'cto · claude [AGRC]',
+      html: `
+        <h1>AGF Positioning v3.0</h1>
+        <div class="doc-meta">
+          <span class="persona-mention">cto</span><span>· claude · [AGRC]</span>
+          <span class="dot"></span><span>2 min ago</span>
+        </div>
+        <p>AGF is the secure AI governance platform for regulated enterprises. We unify policy, risk, and audit into a single system of record — built for scale, designed for trust.</p>
+        <h2>Six Pillars</h2>
+        <ul>
+          <li>Governance that adapts to your risk profile</li>
+          <li>Policy automation with built-in controls</li>
+          <li>Evidence capture and audit readiness</li>
+          <li>Enterprise-grade security across markets and personas</li>
+          <li>Operator workflows with human-in-the-loop checkpoints</li>
+          <li>Open APIs for assurance, attestation, and supply-chain disclosure</li>
+        </ul>
+        <h2>Why now</h2>
+        <p>Procurement teams at Tier-1 banks are rejecting AI proposals that cannot produce evidence of governed behavior on day one.</p>
+      `
+    },
+    vendor: {
+      title: 'vendor-risk-spec.html',
+      personaLabel: 'codex [AGRC]',
+      html: `
+        <h1>Vendor Risk Spec v0.4</h1>
+        <div class="doc-meta">
+          <span>codex</span><span>· [AGRC]</span>
+          <span class="dot"></span><span>12 min ago</span>
+        </div>
+        <p>A working spec for AGF's vendor-risk module: data model, control coverage, evaluation order, and the three trust boundaries that gate vendor onboarding.</p>
+        <h2>Trust boundaries</h2>
+        <ul>
+          <li><strong>Ingest:</strong> all vendor self-attestations enter through a single typed gateway.</li>
+          <li><strong>Evaluation:</strong> deterministic, sandboxed.</li>
+          <li><strong>Disclosure:</strong> default-deny on unsigned outputs.</li>
+        </ul>
+      `
+    },
+    spec: {
+      title: 'agf-spec-v3.md',
+      html: `
+        <h1>AGF Spec v3.0</h1>
+        <div class="doc-meta">
+          <span class="persona-mention">cto</span><span>· claude · [AGRC]</span>
+          <span class="dot"></span><span>4 min ago</span>
+          <span class="dot"></span><span style="color:var(--pending);font-weight:600;">pending edit</span>
+        </div>
+        <p>This document defines the Agent Graph Framework (AGF) v3.0. In v3.0, a workflow is a directed graph of steps executed by an agent runtime.</p>
+        <h2>Step semantics</h2>
+        <p>A step is the atomic unit of execution. Each step declares its input type, output type, and effect class.</p>
+      `
+    },
+    comp: {
+      title: 'competitive-analysis.html',
+      html: `<h1>Competitive Landscape Analysis</h1>
+        <div class="doc-meta"><span>claude</span><span>· [AGRC]</span><span class="dot"></span><span>5 min ago</span></div>
+        <p>Comprehensive overview of key competitors in the enterprise AI platform space — positioning, pricing, and defensible differentiation.</p>`
+    },
+    risk: {
+      title: 'risk-controls-q2.md',
+      html: `<h1>Risk Controls — Q2 review</h1>
+        <div class="doc-meta"><span class="persona-mention">ciso</span><span>· claude · [AGRC]</span><span class="dot"></span><span>yesterday</span></div>
+        <p>Quarterly review of control coverage. Eleven controls are at target; three need uplift before audit season.</p>`
+    },
+    board: {
+      title: 'board-deck-prep.md',
+      html: `<h1>Board deck prep — May</h1>
+        <div class="doc-meta"><span class="persona-mention">cpo</span><span>· claude · [AGRC]</span><span class="dot"></span><span>2 days ago</span></div>
+        <p>Working outline for next week's board update: revenue trajectory, ARR composition, and the AGF v3.0 positioning bet.</p>`
+    },
+    pricing: {
+      title: 'q2-pricing-options.md',
+      html: `<h1>Q2 Pricing Options</h1>
+        <div class="doc-meta"><span class="persona-mention">cpo</span><span>· claude · [Advisory]</span><span class="dot"></span><span>34 min ago</span></div>
+        <p>Three pricing structures under consideration for design-partner conversations: per-seat plus platform, per-operator, and tiered usage with floor.</p>`
+    },
+    pipeline: {
+      title: 'deal-pipeline.md',
+      html: `<h1>Deal pipeline — May 19</h1>
+        <div class="doc-meta"><span>claude</span><span>· [Advisory]</span><span class="dot"></span><span>1 hour ago</span></div>
+        <p>Five deals open. Two stalled &gt;21 days, both waiting on a redline. Two early-stage. One closing this week.</p>`
+    },
+    redline: {
+      title: 'redline-pending.md',
+      html: `<h1>Redlines awaiting response</h1>
+        <div class="doc-meta"><span class="persona-mention">cpo</span><span>· claude · [Advisory]</span><span class="dot"></span><span>3 hours ago</span></div>
+        <p>Two specific contract redlines waiting on Jesse's response. Both are minor scope clarifications.</p>`
+    },
+    partners: {
+      title: 'design-partner-list.md',
+      html: `<h1>Design partner candidates</h1>
+        <div class="doc-meta"><span class="persona-mention">cpo</span><span>· claude · [Advisory]</span><span class="dot"></span><span>2 days ago</span></div>
+        <p>Eight candidate firms by sector and AI maturity. Anthem and Charter are committed; six remain in conversation.</p>`
+    },
+    event: {
+      title: 'event-rsvp.md',
+      html: `<h1>FS-ISAC speaker invite</h1>
+        <div class="doc-meta"><span>claude</span><span>· [Advisory]</span><span class="dot"></span><span>4 days ago</span></div>
+        <p>RSVP deadline July 1. Topic suggested: governance under emergent-behavior regimes.</p>`
+    },
+    latency: {
+      title: 'ingest-latency-rca.md',
+      html: `<h1>Ingest latency — RCA</h1>
+        <div class="doc-meta"><span>codex</span><span>· [Krypton]</span><span class="dot"></span><span>8 min ago</span></div>
+        <p>Root cause: schema validator now runs per-row instead of per-batch. One-line fix; needs a corpus addition.</p>`
+    },
+    sprint: {
+      title: 'sprint-review-notes.md',
+      html: `<h1>Sprint review notes</h1>
+        <div class="doc-meta"><span>codex</span><span>· [Krypton]</span><span class="dot"></span><span>3 hours ago</span></div>
+        <p>Velocity steady. Two items rolled. One regression caught in CI before merge.</p>`
+    },
+    inbox: {
+      title: 'agf-positioning-v3.md',
+      html: docs => docs.agf.html
+    }
+  };
+
+  // ---- Mode switching ----
+  const win = document.getElementById('appWindow');
+  const middle = document.getElementById('middle');
+  const middleContent = document.getElementById('middleContent');
+  const breadcrumb = document.getElementById('breadcrumb');
+  const docEl = document.getElementById('doc');
+  const modePill = document.getElementById('modePill');
+
+  function renderEmptyProject(name) {
+    return `
+      <div class="middle-header">
+        <div class="middle-project-name">${name}</div>
+        <div class="middle-project-meta">0 files · empty</div>
+      </div>
+      <div class="empty-state">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 7v12a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1h-8L10 6H4a1 1 0 0 0-1 1z"/></svg>
+        <div class="empty-state-title">No files yet</div>
+        <div class="empty-state-body">Files filed into <em>${name}</em> from Inbox will appear here. Use ⌘⌃F or drag-to-file.</div>
+      </div>
+    `;
+  }
+
+  function renderProject(name) {
+    const proj = projects[name];
+    if (!proj || proj.files.length === 0) return renderEmptyProject(name);
+
+    const fileRows = proj.files.map((f, i) => `
+      <div class="file-row ${f.read ? 'read' : 'unread'} ${i === 0 ? 'selected' : ''}" data-doc="${f.doc}">
+        <div class="file-row-top">
+          ${f.pending ? '<div class="pending-dot" title="pending edit"></div>' : ''}
+          ${f.pinned ? '<svg class="star" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>' : ''}
+          <div class="file-row-name">${f.name}</div>
+        </div>
+        <div class="file-row-bottom">
+          <div class="agent-badge ${f.personaClass}">${f.persona}${f.backbone ? ' · ' + f.backbone : ''}</div>
+          <div class="file-row-time">${f.time}</div>
+        </div>
+      </div>
+    `).join('');
+
+    return `
+      <div class="middle-header">
+        <div class="middle-project-name">${name}</div>
+        <div class="middle-project-meta">${proj.files.length} files · 2 pinned · 1 pending edit</div>
+        <div class="middle-tabs">
+          <button class="tab active">All<span class="tab-count">${proj.files.length}</span></button>
+          <button class="tab">Recent<span class="tab-count">3</span></button>
+          <button class="tab">Pending<span class="tab-count">${proj.files.filter(f => f.pending).length}</span></button>
+          <button class="tab">Pinned<span class="tab-count">${proj.files.filter(f => f.pinned).length}</span></button>
+        </div>
+      </div>
+      <div class="file-list">
+        ${fileRows}
+      </div>
+    `;
+  }
+
+  function loadDoc(key) {
+    const d = docs[key];
+    if (!d) return;
+    docEl.innerHTML = d.html;
+  }
+
+  function switchTo(view, projectName) {
+    document.querySelectorAll('.sb-item').forEach(el => el.classList.remove('selected'));
+    if (view === 'inbox') {
+      win.classList.remove('project-mode');
+      middle.setAttribute('aria-hidden', 'true');
+      modePill.textContent = 'Inbox';
+      breadcrumb.innerHTML = '<span>Inbox</span><span class="sep">›</span><span class="current">agf-positioning-v3.md</span>';
+      document.querySelector('.sb-item[data-view="inbox"]').classList.add('selected');
+      loadDoc('agf');
+    } else if (view === 'pinned') {
+      win.classList.remove('project-mode');
+      middle.setAttribute('aria-hidden', 'true');
+      modePill.textContent = 'Pinned';
+      breadcrumb.innerHTML = '<span>Pinned</span><span class="sep">›</span><span class="current">3 pinned files</span>';
+      document.querySelector('.sb-item[data-view="pinned"]').classList.add('selected');
+      // For simplicity, render the AGRC pinned doc.
+      loadDoc('agf');
+    } else if (view === 'project') {
+      win.classList.add('project-mode');
+      middle.setAttribute('aria-hidden', 'false');
+      modePill.textContent = projectName;
+      middleContent.innerHTML = renderProject(projectName);
+      const proj = projects[projectName];
+      const firstFile = proj && proj.files && proj.files[0];
+      if (firstFile) {
+        breadcrumb.innerHTML = `<span>${projectName}</span><span class="sep">›</span><span class="current">${firstFile.name}</span>`;
+        loadDoc(firstFile.doc);
+      } else {
+        breadcrumb.innerHTML = `<span>${projectName}</span><span class="sep">›</span><span class="current">empty</span>`;
+        docEl.innerHTML = `<h1>${projectName}</h1><div class="doc-meta"><span>no files yet</span></div><p>This project has no files. They'll appear here as agents drop artifacts in or as you file from Inbox.</p>`;
+      }
+      document.querySelector(`.sb-item[data-project="${projectName}"]`).classList.add('selected');
+      // wire middle column row clicks
+      middleContent.querySelectorAll('.file-row').forEach(row => {
+        row.addEventListener('click', () => {
+          middleContent.querySelectorAll('.file-row').forEach(r => r.classList.remove('selected'));
+          row.classList.add('selected');
+          breadcrumb.innerHTML = `<span>${projectName}</span><span class="sep">›</span><span class="current">${row.querySelector('.file-row-name').textContent}</span>`;
+          loadDoc(row.dataset.doc);
+        });
+      });
+    }
+  }
+
+  document.querySelectorAll('.sb-item[data-view]').forEach(el => {
+    el.addEventListener('click', () => {
+      const view = el.dataset.view;
+      const proj = el.dataset.project;
+      switchTo(view, proj);
+    });
+  });
+
+  // Initial state
+  loadDoc('agf');
+</script>
+</body>
+</html>

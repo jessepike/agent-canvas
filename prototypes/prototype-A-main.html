@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Workbench — agf-positioning-v3.md</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Funnel+Sans:wght@300;400;500;600;700&family=Funnel+Display:wght@500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-ui: 'Funnel Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --font-display: 'Funnel Display', 'Funnel Sans', sans-serif;
+    --font-serif: 'Newsreader', 'Iowan Old Style', Georgia, serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+
+    --bg-desktop: #C8C5BC;
+    --bg-window: #FBFAF6;
+    --bg-sidebar: #EFEDE6;
+    --bg-doc: #FFFFFF;
+    --bg-titlebar-top: #F2F0E8;
+    --bg-titlebar-bot: #E7E4DA;
+
+    --border: #DDD9CC;
+    --border-soft: #E8E5D9;
+    --border-strong: #C6C1B0;
+
+    --text: #1B1A14;
+    --text-secondary: #6E6A5E;
+    --text-tertiary: #A09B8B;
+    --text-faded: #BFBAAB;
+
+    --accent: #1F5BD8;
+    --accent-deep: #173F95;
+    --accent-soft: #E5EBFA;
+
+    --pin: #C19433;
+    --pin-soft: #F6ECCF;
+
+    --pending: #C2691E;
+    --pending-bg: #FBEAD2;
+
+    --selected-bg: #FFFFFF;
+    --hover-bg: #E5E2D8;
+
+    --shadow-window: 0 28px 70px rgba(20, 18, 12, 0.30), 0 10px 24px rgba(20, 18, 12, 0.16);
+    --shadow-toolbar-btn: 0 1px 0 rgba(255,255,255,0.6) inset, 0 1px 2px rgba(0,0,0,0.04);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg-desktop);
+    color: var(--text);
+    font-size: 13.5px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 28px;
+    min-height: 100vh;
+    letter-spacing: -0.005em;
+  }
+
+  /* ---------- macOS window chrome ---------- */
+  .window {
+    width: 100%;
+    max-width: 1320px;
+    height: calc(100vh - 56px);
+    min-height: 740px;
+    background: var(--bg-window);
+    border-radius: 11px;
+    box-shadow: var(--shadow-window);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border: 0.5px solid rgba(0,0,0,0.12);
+  }
+  .titlebar {
+    height: 38px;
+    background: linear-gradient(to bottom, var(--bg-titlebar-top), var(--bg-titlebar-bot));
+    border-bottom: 0.5px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    flex-shrink: 0;
+    position: relative;
+    user-select: none;
+  }
+  .traffic-lights { display: flex; gap: 8px; }
+  .tl {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    border: 0.5px solid rgba(0,0,0,0.12);
+    transition: filter 0.1s;
+  }
+  .tl-close { background: #FF5F57; }
+  .tl-min { background: #FEBC2E; }
+  .tl-max { background: #28C840; }
+  .tl:hover { filter: brightness(0.92); }
+  .titlebar-title {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+
+  .main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar {
+    width: 280px;
+    background: var(--bg-sidebar);
+    border-right: 0.5px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .sidebar-header {
+    padding: 12px 12px 8px;
+    flex-shrink: 0;
+  }
+
+  .search {
+    position: relative;
+    margin-bottom: 8px;
+  }
+  .search svg {
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 13px; height: 13px;
+    color: var(--text-tertiary);
+    pointer-events: none;
+  }
+  .search input {
+    width: 100%;
+    background: rgba(255,255,255,0.7);
+    border: 0.5px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 5px 10px 5px 26px;
+    font-family: inherit;
+    font-size: 12.5px;
+    color: var(--text);
+    outline: none;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.5);
+  }
+  .search input:focus {
+    border-color: var(--accent);
+    background: #FFFFFF;
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .search input::placeholder { color: var(--text-tertiary); }
+
+  .qc-section {
+    margin-top: 4px;
+  }
+  .qc-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    padding: 8px 4px 6px;
+  }
+  .qc-input-wrap {
+    position: relative;
+  }
+  .qc-input-wrap svg {
+    position: absolute;
+    left: 8px; top: 50%;
+    transform: translateY(-50%);
+    width: 13px; height: 13px;
+    color: var(--text-tertiary);
+  }
+  .qc-input {
+    width: 100%;
+    background: transparent;
+    border: 1px dashed var(--border-strong);
+    border-radius: 6px;
+    padding: 6px 10px 6px 26px;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--text);
+    outline: none;
+  }
+  .qc-input::placeholder { color: var(--text-tertiary); }
+  .qc-input:focus {
+    border-style: solid;
+    border-color: var(--accent);
+    background: rgba(255,255,255,0.7);
+  }
+  .qc-hint {
+    margin-top: 5px;
+    padding: 0 4px;
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+    letter-spacing: -0.003em;
+  }
+  .qc-hint code {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    background: rgba(0,0,0,0.04);
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: var(--text-secondary);
+  }
+  .qc-hint code span { color: var(--accent); font-style: italic; }
+
+  .sidebar-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 8px 12px;
+  }
+
+  .sb-section {
+    margin-top: 14px;
+  }
+  .sb-section:first-child { margin-top: 6px; }
+  .sb-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 6px 4px;
+    user-select: none;
+    cursor: default;
+  }
+  .sb-section-title {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .sb-count {
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    background: rgba(0,0,0,0.04);
+    padding: 1px 6px;
+    border-radius: 8px;
+    letter-spacing: 0;
+  }
+  .sb-chevron {
+    color: var(--text-tertiary);
+    font-size: 10px;
+  }
+
+  .sb-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin: 0 -2px;
+    position: relative;
+    user-select: none;
+    transition: background 0.08s;
+  }
+  .sb-item:hover { background: var(--hover-bg); }
+  .sb-item.selected {
+    background: var(--selected-bg);
+    box-shadow: 0 0 0 0.5px var(--border), 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .sb-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+    margin-right: -1px;
+  }
+  .sb-dot.empty { background: transparent; }
+  .sb-icon {
+    width: 14px; height: 14px;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+  .sb-name {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 400;
+    letter-spacing: -0.005em;
+  }
+  .sb-item.unread .sb-name { font-weight: 600; color: var(--text); }
+  .sb-item.read .sb-name { color: var(--text-secondary); }
+  .sb-star {
+    color: var(--pin);
+    flex-shrink: 0;
+    width: 12px; height: 12px;
+  }
+  .sb-badge {
+    font-size: 10.5px;
+    color: var(--text-secondary);
+    background: rgba(255,255,255,0.7);
+    border: 0.5px solid var(--border-strong);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-weight: 500;
+    letter-spacing: 0;
+    flex-shrink: 0;
+  }
+  .sb-time {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sb-folder {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin: 0 -2px;
+    user-select: none;
+  }
+  .sb-folder:hover { background: var(--hover-bg); }
+  .sb-folder.selected {
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+  }
+  .sb-folder-icon {
+    width: 14px; height: 14px;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+  .sb-folder.selected .sb-folder-icon { color: var(--accent); }
+  .sb-folder-name {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text);
+    font-weight: 500;
+  }
+  .sb-folder.selected .sb-folder-name { color: var(--accent-deep); }
+  .sb-folder-count {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+  .sb-virtual { display: flex; flex-direction: column; gap: 1px; padding-bottom: 4px; }
+  .sb-folder.virtual .pin-icon { color: var(--pin); }
+  .sb-folder.virtual { padding: 5px 8px; }
+
+  .new-project {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px;
+    margin-top: 4px;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 6px;
+  }
+  .new-project:hover { color: var(--accent); background: var(--hover-bg); }
+
+  /* ---------- Main content area ---------- */
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-doc);
+    overflow: hidden;
+    min-width: 0;
+  }
+
+  .toolbar {
+    height: 46px;
+    background: var(--bg-doc);
+    border-bottom: 0.5px solid var(--border-soft);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 18px 0 22px;
+    flex-shrink: 0;
+  }
+
+  .breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    overflow: hidden;
+  }
+  .breadcrumb .crumb-sep { color: var(--text-faded); }
+  .breadcrumb .crumb-current {
+    color: var(--text);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .actions { display: flex; gap: 8px; }
+  .btn {
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    padding: 5px 11px;
+    border-radius: 6px;
+    border: 0.5px solid var(--border-strong);
+    background: linear-gradient(to bottom, #FFFFFF, #F5F3EC);
+    color: var(--text);
+    cursor: pointer;
+    box-shadow: var(--shadow-toolbar-btn);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    letter-spacing: -0.005em;
+    transition: filter 0.08s;
+  }
+  .btn:hover { filter: brightness(0.97); }
+  .btn-primary {
+    background: linear-gradient(to bottom, #3270E8, #1F4ECC);
+    color: white;
+    border-color: var(--accent-deep);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.18) inset, 0 1px 2px rgba(31,91,216,0.3);
+  }
+  .btn-primary:hover { filter: brightness(1.04); }
+  .btn svg { width: 13px; height: 13px; }
+  .btn-icon { padding: 5px 7px; }
+  .btn-toggle[aria-pressed="true"] {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent-deep);
+    box-shadow: 0 0 0 2px var(--accent-soft) inset;
+  }
+  .btn-toggle[aria-pressed="true"] svg { color: var(--accent-deep); }
+  .toolbar-sep {
+    width: 1px; height: 18px;
+    background: var(--border);
+    margin: 0 4px;
+  }
+  .kbd {
+    margin-left: 2px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    background: rgba(255,255,255,0.18);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: rgba(255,255,255,0.85);
+    letter-spacing: 0;
+  }
+  .btn-primary .kbd { background: rgba(255,255,255,0.18); color: rgba(255,255,255,0.92); }
+
+  /* doc.editing visual */
+  .doc.editing {
+    outline: 2px dashed var(--accent-soft);
+    outline-offset: 18px;
+    border-radius: 4px;
+  }
+  .doc.editing::before {
+    content: "Edit mode — local edits won't sync until you save";
+    display: block;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 4px;
+    margin-bottom: 14px;
+    letter-spacing: 0.01em;
+    text-transform: uppercase;
+  }
+
+  .doc-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 36px 60px 80px;
+  }
+  .doc {
+    max-width: 720px;
+    margin: 0 auto;
+  }
+
+  .doc h1 {
+    font-family: var(--font-display);
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    margin: 0 0 16px;
+  }
+  .doc .lede {
+    font-size: 16px;
+    line-height: 1.55;
+    color: #2C2A22;
+    margin: 0 0 24px;
+    letter-spacing: -0.008em;
+  }
+  .doc h2 {
+    font-family: var(--font-display);
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: -0.012em;
+    color: var(--text);
+    margin: 32px 0 12px;
+  }
+  .doc h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 24px 0 8px;
+    letter-spacing: -0.008em;
+  }
+  .doc p {
+    font-size: 14.5px;
+    line-height: 1.65;
+    color: #2A2823;
+    margin: 0 0 14px;
+    letter-spacing: -0.005em;
+  }
+  .doc ul {
+    margin: 0 0 16px;
+    padding-left: 4px;
+    list-style: none;
+  }
+  .doc ul li {
+    font-size: 14.5px;
+    line-height: 1.6;
+    color: #2A2823;
+    padding-left: 18px;
+    position: relative;
+    margin-bottom: 6px;
+  }
+  .doc ul li::before {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 0.65em;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--text-tertiary);
+  }
+  .doc a { color: var(--accent); text-decoration: none; border-bottom: 0.5px solid var(--accent-soft); }
+  .doc a:hover { border-bottom-color: var(--accent); }
+
+  .doc pre {
+    background: #1C2333;
+    color: #E8ECF5;
+    border-radius: 8px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin: 18px 0;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    border: 0.5px solid rgba(0,0,0,0.2);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset;
+  }
+  .tok-key { color: #FFAB70; }
+  .tok-str { color: #A5D6A7; }
+  .tok-num { color: #82AAFF; }
+  .tok-com { color: #6E7B95; font-style: italic; }
+  .tok-punc { color: #AAB4C8; }
+
+  .doc table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 18px 0;
+    font-size: 13.5px;
+  }
+  .doc th, .doc td {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 0.5px solid var(--border-soft);
+    letter-spacing: -0.005em;
+  }
+  .doc th {
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: #FAF8F1;
+    border-bottom: 0.5px solid var(--border);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  .doc tr:last-child td { border-bottom: 0; }
+
+  .doc blockquote {
+    margin: 18px 0;
+    padding: 4px 18px;
+    border-left: 2px solid var(--accent);
+    color: var(--text-secondary);
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  .doc-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 22px;
+    color: var(--text-tertiary);
+    font-size: 12px;
+  }
+  .doc-meta .dot {
+    width: 3px; height: 3px;
+    background: var(--text-faded);
+    border-radius: 50%;
+  }
+  .agent-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 1px 6px;
+    letter-spacing: 0;
+  }
+
+  /* Hide scrollbar styling for refined look */
+  .sidebar-scroll::-webkit-scrollbar,
+  .doc-scroll::-webkit-scrollbar {
+    width: 8px;
+  }
+  .sidebar-scroll::-webkit-scrollbar-thumb,
+  .doc-scroll::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.12);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  .sidebar-scroll::-webkit-scrollbar-track,
+  .doc-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+</style>
+</head>
+<body>
+<div class="window">
+  <!-- ===== titlebar ===== -->
+  <div class="titlebar">
+    <div class="traffic-lights">
+      <div class="tl tl-close"></div>
+      <div class="tl tl-min"></div>
+      <div class="tl tl-max"></div>
+    </div>
+    <div class="titlebar-title">Workbench</div>
+  </div>
+
+  <div class="main">
+    <!-- ===== sidebar ===== -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="search">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3 3"/></svg>
+          <input type="text" placeholder="Search files…">
+        </div>
+        <div class="qc-section">
+          <div class="qc-input-wrap">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3v10M3 8h10"/></svg>
+            <input class="qc-input" type="text" placeholder="Quick capture…">
+          </div>
+          <div class="qc-hint">saves to <code>Inbox/captures/2026-05-19-<span>{slug}</span>.md</code></div>
+        </div>
+      </div>
+
+      <div class="sidebar-scroll">
+        <!-- VIRTUAL COLLECTIONS -->
+        <div class="sb-section">
+          <div class="sb-virtual">
+            <div class="sb-folder virtual" data-view="pinned">
+              <svg class="sb-folder-icon pin-icon" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+              <div class="sb-folder-name">Pinned</div>
+              <div class="sb-folder-count">3</div>
+            </div>
+            <div class="sb-folder virtual" data-view="archive">
+              <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="3" rx="0.5"/><path d="M3 6v7a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V6"/><path d="M6.5 9h3"/></svg>
+              <div class="sb-folder-name">Archive</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- INBOX -->
+        <div class="sb-section">
+          <div class="sb-section-header">
+            <div class="sb-section-title">Inbox <span class="sb-count">3</span></div>
+            <div class="sb-chevron">▾</div>
+          </div>
+
+          <div class="sb-item unread selected" data-doc="agf">
+            <div class="sb-dot"></div>
+            <svg class="sb-star" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+            <div class="sb-name">agf-positioning-v3.md</div>
+            <div class="sb-badge">Claude</div>
+            <div class="sb-time">2m</div>
+          </div>
+
+          <div class="sb-item unread" data-doc="vendor">
+            <div class="sb-dot"></div>
+            <svg class="sb-star" viewBox="0 0 14 14" fill="currentColor"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+            <div class="sb-name">vendor-risk-spec.html</div>
+            <div class="sb-badge">Codex</div>
+            <div class="sb-time">12m</div>
+          </div>
+
+          <div class="sb-item unread" data-doc="digest">
+            <div class="sb-dot"></div>
+            <svg class="sb-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>
+            <div class="sb-name">weekly-digest.md</div>
+            <div class="sb-badge">Claude</div>
+            <div class="sb-time">1h</div>
+          </div>
+
+          <div class="sb-item read">
+            <div class="sb-dot empty"></div>
+            <svg class="sb-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>
+            <div class="sb-name">meeting-prep.md</div>
+            <div class="sb-time">3h</div>
+          </div>
+
+          <div class="sb-item read">
+            <div class="sb-dot empty"></div>
+            <svg class="sb-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="3" width="11" height="10" rx="1"/><circle cx="6" cy="7" r="1.2"/><path d="M2.5 11L6 8l3 3 2-1.5 2.5 2.5"/></svg>
+            <div class="sb-name">image-spike.png</div>
+            <div class="sb-time">yesterday</div>
+          </div>
+        </div>
+
+        <!-- PROJECTS -->
+        <div class="sb-section">
+          <div class="sb-section-header">
+            <div class="sb-section-title">Projects</div>
+            <div class="sb-chevron">▾</div>
+          </div>
+
+          <div class="sb-folder selected">
+            <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+            <div class="sb-folder-name">AGRC</div>
+            <div class="sb-folder-count">3</div>
+          </div>
+          <div class="sb-folder">
+            <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+            <div class="sb-folder-name">Advisory</div>
+            <div class="sb-folder-count">5</div>
+          </div>
+          <div class="sb-folder">
+            <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+            <div class="sb-folder-name">Vellum</div>
+            <div class="sb-folder-count">47</div>
+          </div>
+          <div class="sb-folder">
+            <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+            <div class="sb-folder-name">Krypton</div>
+            <div class="sb-folder-count">2</div>
+          </div>
+          <div class="sb-folder">
+            <svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+            <div class="sb-folder-name">Personal</div>
+            <div class="sb-folder-count">4</div>
+          </div>
+          <div class="new-project">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3v10M3 8h10"/></svg>
+            New Project
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ===== main content ===== -->
+    <main class="content">
+      <div class="toolbar">
+        <div class="breadcrumb">
+          <span>Inbox</span>
+          <span class="crumb-sep">›</span>
+          <span class="crumb-current" id="bc-current">agf-positioning-v3.md</span>
+        </div>
+        <div class="actions">
+          <button class="btn btn-icon" title="Open in Files">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 11v2h10v-2M8 3v8M5 6l3-3 3 3"/></svg>
+          </button>
+          <button class="btn btn-toggle" id="editToggle" aria-pressed="false" title="Toggle edit mode (e)">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 13.5L4 13l8-8-1.5-1.5-8 8z"/><path d="M10 4l2 2"/><path d="M2.5 13.5L3.2 11.3"/></svg>
+            Edit
+          </button>
+          <div class="toolbar-sep"></div>
+          <button class="btn btn-primary" id="sendToClaude" title="Send to Claude (⌘⏎)">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8l12-5-4 12-3-5z"/></svg>
+            Send to Claude
+            <span class="kbd">⌘⏎</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="doc-scroll">
+        <article class="doc" id="doc-pane">
+          <!-- Populated by JS -->
+        </article>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+  // ---------- Three sample documents ----------
+  const docs = {
+    agf: {
+      title: 'agf-positioning-v3.md',
+      html: `
+        <h1>AGF Positioning v3.0</h1>
+        <div class="doc-meta">
+          <span class="agent-pill">Claude</span>
+          <span>generated 2 minutes ago</span>
+          <span class="dot"></span>
+          <span>iCloud · AGRC</span>
+        </div>
+        <p class="lede">AGF is the secure AI governance platform for regulated enterprises. We unify policy, risk, and audit into a single system of record — built for scale, designed for trust.</p>
+
+        <h2>Six Pillars</h2>
+        <ul>
+          <li>Governance that adapts to your risk profile</li>
+          <li>Policy automation with built-in controls</li>
+          <li>Evidence capture and audit readiness</li>
+          <li>Enterprise-grade security across markets, personas, and use cases</li>
+          <li>Operator workflows with human-in-the-loop checkpoints</li>
+          <li>Open APIs for assurance, attestation, and supply-chain disclosure</li>
+        </ul>
+
+        <pre><span class="tok-key">const</span> agf <span class="tok-punc">=</span> <span class="tok-punc">{</span>
+  platform<span class="tok-punc">:</span> <span class="tok-str">"secure"</span><span class="tok-punc">,</span>
+  version<span class="tok-punc">:</span> <span class="tok-str">"3.0"</span><span class="tok-punc">,</span>
+  pillars<span class="tok-punc">:</span> <span class="tok-num">6</span><span class="tok-punc">,</span>
+  posture<span class="tok-punc">:</span> <span class="tok-str">"continuous-audit"</span><span class="tok-punc">,</span>
+<span class="tok-punc">};</span></pre>
+
+        <h2>Outcomes by Focus Area</h2>
+        <table>
+          <thead><tr><th>Focus Area</th><th>Outcome</th></tr></thead>
+          <tbody>
+            <tr><td>Risk Management</td><td>Reduced risk exposure and faster remediation</td></tr>
+            <tr><td>Compliance</td><td>Audit-ready with continuous evidence</td></tr>
+            <tr><td>Operational Efficiency</td><td>Automated workflows and lower manual tasks</td></tr>
+            <tr><td>Trust &amp; Assurance</td><td>Independent attestations on demand</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Why now</h2>
+        <p>Procurement teams at Tier-1 banks are rejecting AI proposals that cannot produce evidence of governed behavior on day one. AGF is the only platform where evidence is a side-effect of operating, not an artifact retrofitted later.</p>
+
+        <blockquote>"Show me the audit trail" is the new "show me the contract." AGF answers it in one click.</blockquote>
+
+        <h3>Next steps</h3>
+        <p>Pricing sheet to follow. Two design partners — Anthem and Charter Communications — are validating the v3.0 control catalog through end of quarter.</p>
+      `
+    },
+    digest: {
+      title: 'weekly-digest.md',
+      html: `
+        <h1>Weekly Digest — May 11–17</h1>
+        <div class="doc-meta">
+          <span class="agent-pill">Claude</span>
+          <span>generated 1 hour ago</span>
+          <span class="dot"></span>
+          <span>iCloud · Inbox</span>
+        </div>
+        <p class="lede">A condensed read of the last seven days across AGRC, Advisory, and Vellum. Five items want your attention; three can wait.</p>
+
+        <h2>What moved</h2>
+        <ul>
+          <li><strong>AGF v3.0 positioning</strong> landed with the AGRC team. Anthem confirmed they want to be cited as a design partner once messaging is locked.</li>
+          <li><strong>Vellum spec sign-off</strong> closed cycle 4 with Critical=0, High=0. Phase 0 scaffold can start.</li>
+          <li><strong>Krypton sprint review</strong> surfaced a latency regression on the ingest path; root cause is the new schema validator running per-row instead of per-batch.</li>
+        </ul>
+
+        <h2>Wants your attention</h2>
+        <ul>
+          <li>Advisory pipeline has two stalled deals (>21 days). Both are waiting on a single redline from your side.</li>
+          <li>Vellum decision ledger has one pending entry on format-preservation corpus expansion — needs a confidence tag.</li>
+          <li>Krypton ingest fix is a one-line change; CI will need a corpus addition to lock the regression.</li>
+        </ul>
+
+        <h2>Can wait</h2>
+        <ul>
+          <li>Personal: car service overdue by 11 days — no urgency.</li>
+          <li>AGRC: dashboard refresh request from Customer Success — low priority, scheduled for next quarter.</li>
+          <li>Advisory: speaker invite from the FS-ISAC March event — RSVP not due until July 1.</li>
+        </ul>
+
+        <h2>Numbers</h2>
+        <table>
+          <thead><tr><th>Stream</th><th>Open</th><th>Closed</th><th>Net</th></tr></thead>
+          <tbody>
+            <tr><td>AGRC</td><td>12</td><td>3</td><td>+9</td></tr>
+            <tr><td>Advisory</td><td>5</td><td>8</td><td>−3</td></tr>
+            <tr><td>Vellum</td><td>47</td><td>2</td><td>+45</td></tr>
+            <tr><td>Krypton</td><td>2</td><td>1</td><td>+1</td></tr>
+          </tbody>
+        </table>
+
+        <blockquote>The week's pattern: Vellum is accelerating from design into build; Advisory is bottlenecked on your inbox, not on the market.</blockquote>
+      `
+    },
+    vendor: {
+      title: 'vendor-risk-spec.html',
+      html: `
+        <h1>Vendor Risk Spec — v0.4</h1>
+        <div class="doc-meta">
+          <span class="agent-pill">Codex</span>
+          <span>generated 12 minutes ago</span>
+          <span class="dot"></span>
+          <span>iCloud · AGRC</span>
+        </div>
+        <p class="lede">A working spec for AGF's vendor-risk module: data model, control coverage, evaluation order, and the three trust boundaries that gate vendor onboarding.</p>
+
+        <h2>Scope</h2>
+        <p>This document defines how AGF ingests, evaluates, and continuously monitors third-party AI vendors. It does <em>not</em> cover the broader supply-chain attestation flow (see <a href="#">supply-chain-spec-v0.2.md</a>).</p>
+
+        <h2>Data model</h2>
+        <pre><span class="tok-key">type</span> <span class="tok-key">Vendor</span> <span class="tok-punc">=</span> <span class="tok-punc">{</span>
+  id<span class="tok-punc">:</span> <span class="tok-key">UUID</span><span class="tok-punc">,</span>
+  trust_tier<span class="tok-punc">:</span> <span class="tok-str">"red"</span> <span class="tok-punc">|</span> <span class="tok-str">"amber"</span> <span class="tok-punc">|</span> <span class="tok-str">"green"</span><span class="tok-punc">,</span>
+  controls<span class="tok-punc">:</span> <span class="tok-key">Control</span><span class="tok-punc">[]</span><span class="tok-punc">,</span>
+  last_attested<span class="tok-punc">:</span> <span class="tok-key">ISODate</span><span class="tok-punc">,</span>
+<span class="tok-punc">};</span></pre>
+
+        <h2>Trust boundaries</h2>
+        <ul>
+          <li><strong>Boundary 1 — Ingest:</strong> All vendor self-attestations enter through a single typed gateway. Untyped uploads are rejected.</li>
+          <li><strong>Boundary 2 — Evaluation:</strong> Control evaluation is deterministic and runs in a sandboxed evaluator process. No model calls are permitted inside this boundary.</li>
+          <li><strong>Boundary 3 — Disclosure:</strong> Surfacing to downstream consumers gates on signed evidence bundles; unsigned outputs are blocked.</li>
+        </ul>
+
+        <h2>Control catalog (excerpt)</h2>
+        <table>
+          <thead><tr><th>Control</th><th>Required</th><th>Evidence Type</th></tr></thead>
+          <tbody>
+            <tr><td>Model card present</td><td>Yes</td><td>Signed JSON</td></tr>
+            <tr><td>Data-flow diagram</td><td>Yes</td><td>PDF + hash</td></tr>
+            <tr><td>Eval results (recent)</td><td>Conditional</td><td>JSONL + signature</td></tr>
+            <tr><td>SBOM</td><td>Yes</td><td>SPDX 2.3+</td></tr>
+            <tr><td>Pentest summary</td><td>Tier &lt; amber</td><td>PDF</td></tr>
+          </tbody>
+        </table>
+
+        <blockquote>Default-deny on Boundary 3. A vendor cannot be surfaced if any required control is missing — there is no "in-review" surfacing state.</blockquote>
+
+        <h2>Open questions</h2>
+        <ul>
+          <li>How do we handle vendors who refuse to provide an SBOM but otherwise meet the bar?</li>
+          <li>Should re-attestation cadence be tier-derived or contractually set?</li>
+        </ul>
+      `
+    }
+  };
+
+  // ---------- Render doc & wire clicks ----------
+  const docPane = document.getElementById('doc-pane');
+  const breadcrumbCurrent = document.getElementById('bc-current');
+
+  function loadDoc(key) {
+    const d = docs[key];
+    if (!d) return;
+    docPane.innerHTML = d.html;
+    breadcrumbCurrent.textContent = d.title;
+    document.querySelectorAll('.sb-item').forEach(el => el.classList.remove('selected'));
+    const target = document.querySelector(`.sb-item[data-doc="${key}"]`);
+    if (target) target.classList.add('selected');
+  }
+
+  document.querySelectorAll('.sb-item[data-doc]').forEach(el => {
+    el.addEventListener('click', () => loadDoc(el.dataset.doc));
+  });
+
+  // ---------- Edit toggle ----------
+  const editToggle = document.getElementById('editToggle');
+  editToggle.addEventListener('click', () => {
+    const pressed = editToggle.getAttribute('aria-pressed') === 'true';
+    editToggle.setAttribute('aria-pressed', String(!pressed));
+    docPane.classList.toggle('editing', !pressed);
+  });
+  // 'e' shortcut for edit toggle
+  document.addEventListener('keydown', (e) => {
+    if (e.target.matches('input, textarea')) return;
+    if (e.key === 'e' && !e.metaKey && !e.ctrlKey) {
+      editToggle.click();
+    }
+    // ⌘⏎ → send
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      sendToast('Sent to Claude · running in [' + (window._currentDoc || 'AGRC') + ']');
+    }
+  });
+
+  // ---------- Send button ----------
+  const sendBtn = document.getElementById('sendToClaude');
+  sendBtn.addEventListener('click', () => sendToast('Sent to Claude · running in [AGRC]'));
+
+  function sendToast(msg) {
+    let t = document.getElementById('proto-a-toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'proto-a-toast';
+      t.style.cssText = 'position:fixed;bottom:60px;left:50%;transform:translateX(-50%);background:#1B1A14;color:#fff;font-family:Funnel Sans,sans-serif;font-size:12.5px;padding:9px 16px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.2);opacity:0;transition:opacity 0.2s,transform 0.2s;z-index:100;';
+      document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.style.opacity = '1';
+    t.style.transform = 'translateX(-50%) translateY(-6px)';
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateX(-50%)'; }, 2000);
+  }
+
+  // Initial render
+  loadDoc('agf');
+</script>
+</body>
+</html>

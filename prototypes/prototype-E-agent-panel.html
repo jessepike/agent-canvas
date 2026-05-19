@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Workbench — Agent panel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Funnel+Sans:wght@300;400;500;600;700&family=Funnel+Display:wght@500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-ui: 'Funnel Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --font-display: 'Funnel Display', 'Funnel Sans', sans-serif;
+    --font-serif: 'Newsreader', 'Iowan Old Style', Georgia, serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+    --bg-desktop: #C8C5BC;
+    --bg-window: #FBFAF6;
+    --bg-sidebar: #EFEDE6;
+    --bg-doc: #FFFFFF;
+    --bg-titlebar-top: #F2F0E8;
+    --bg-titlebar-bot: #E7E4DA;
+    --bg-agent-panel: #F4F1E8;
+
+    --border: #DDD9CC;
+    --border-soft: #E8E5D9;
+    --border-strong: #C6C1B0;
+
+    --text: #1B1A14;
+    --text-secondary: #6E6A5E;
+    --text-tertiary: #A09B8B;
+    --text-faded: #BFBAAB;
+
+    --accent: #1F5BD8;
+    --accent-deep: #173F95;
+    --accent-soft: #E5EBFA;
+
+    --pin: #C19433;
+
+    --status-idle: #B7B3A6;
+    --status-thinking: #1F5BD8;
+    --status-running: #25975C;
+    --status-error: #C04030;
+
+    /* persona colors — distinct treatment for custom personas */
+    --persona-cto: #2E5F8B;
+    --persona-cpo: #7B4FB8;
+    --persona-ciso: #B3503D;
+    --persona-codex: #4A4640;
+    --persona-claude: #5E5A50;
+
+    --shadow-window: 0 28px 70px rgba(20, 18, 12, 0.30), 0 10px 24px rgba(20, 18, 12, 0.16);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg-desktop);
+    color: var(--text); font-size: 13.5px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+    display: flex; align-items: center; justify-content: center;
+    padding: 28px; min-height: 100vh;
+    letter-spacing: -0.005em;
+  }
+
+  .window {
+    width: 100%; max-width: 1480px;
+    height: calc(100vh - 56px); min-height: 760px;
+    background: var(--bg-window);
+    border-radius: 11px;
+    box-shadow: var(--shadow-window);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    border: 0.5px solid rgba(0,0,0,0.12);
+  }
+  .titlebar {
+    height: 38px;
+    background: linear-gradient(to bottom, var(--bg-titlebar-top), var(--bg-titlebar-bot));
+    border-bottom: 0.5px solid var(--border);
+    display: flex; align-items: center; padding: 0 14px;
+    position: relative;
+  }
+  .traffic-lights { display: flex; gap: 8px; }
+  .tl { width: 12px; height: 12px; border-radius: 50%; border: 0.5px solid rgba(0,0,0,0.12); }
+  .tl-close { background: #FF5F57; } .tl-min { background: #FEBC2E; } .tl-max { background: #28C840; }
+  .titlebar-title {
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 13px; font-weight: 600;
+  }
+
+  .main { flex: 1; display: flex; overflow: hidden; }
+
+  /* ----- sidebar (collapsed, just enough to anchor visual context) ----- */
+  .sidebar {
+    width: 220px; background: var(--bg-sidebar);
+    border-right: 0.5px solid var(--border);
+    display: flex; flex-direction: column;
+    overflow: hidden; flex-shrink: 0;
+    padding: 12px 8px;
+  }
+  .sb-tag {
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em;
+    color: var(--text-secondary); text-transform: uppercase;
+    padding: 12px 6px 6px;
+  }
+  .sb-tag:first-child { padding-top: 4px; }
+  .sb-line {
+    display: flex; align-items: center; gap: 7px;
+    padding: 5px 8px; border-radius: 6px;
+    font-size: 13px; color: var(--text);
+    cursor: pointer;
+  }
+  .sb-line:hover { background: rgba(0,0,0,0.04); }
+  .sb-line.selected { background: #fff; box-shadow: 0 0 0 0.5px var(--border); }
+  .sb-line .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent);
+  }
+  .sb-line .star { color: var(--pin); }
+  .sb-line.muted { color: var(--text-secondary); }
+  .sb-line .pill {
+    font-size: 10.5px; padding: 0 5px; border-radius: 3px;
+    background: rgba(255,255,255,0.7); border: 0.5px solid var(--border-strong);
+    color: var(--text-secondary); margin-left: auto;
+  }
+  .sb-folder-icon { width: 13px; height: 13px; color: var(--text-tertiary); }
+  .sb-line.section-fold { color: var(--text); font-weight: 500; }
+  .sb-mini-svg { width: 12px; height: 12px; color: var(--text-tertiary); flex-shrink: 0; }
+
+  /* ----- content (main doc area, simplified) ----- */
+  .content {
+    flex: 1; display: flex; flex-direction: column;
+    background: var(--bg-doc); overflow: hidden; min-width: 0;
+  }
+  .toolbar {
+    height: 46px; background: var(--bg-doc);
+    border-bottom: 0.5px solid var(--border-soft);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 18px;
+  }
+  .breadcrumb { font-size: 12.5px; color: var(--text-secondary); }
+  .breadcrumb .crumb-current { color: var(--text); font-weight: 500; }
+  .doc-scroll { flex: 1; overflow-y: auto; padding: 30px 50px 50px; }
+  .doc { max-width: 660px; margin: 0 auto; color: #2A2823; }
+  .doc h1 { font-family: var(--font-display); font-size: 28px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 14px; color: var(--text); }
+  .doc p { font-size: 14px; line-height: 1.65; margin: 0 0 12px; letter-spacing: -0.005em; }
+  .doc h2 { font-family: var(--font-display); font-size: 17px; font-weight: 600; margin: 22px 0 8px; letter-spacing: -0.012em; color: var(--text); }
+  .doc-meta { display: flex; gap: 10px; align-items: center; color: var(--text-tertiary); font-size: 12px; margin: 0 0 16px; }
+  .doc-meta .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text-faded); }
+
+  /* ---------- AGENT PANEL ---------- */
+  .agent-panel {
+    width: 300px;
+    background: var(--bg-agent-panel);
+    border-left: 0.5px solid var(--border);
+    display: flex; flex-direction: column;
+    flex-shrink: 0; overflow: hidden;
+  }
+  .ap-header {
+    padding: 14px 14px 8px;
+    flex-shrink: 0;
+    border-bottom: 0.5px solid var(--border-soft);
+  }
+  .ap-title {
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .ap-title-text { display: flex; align-items: center; gap: 6px; }
+  .ap-title-text svg { width: 12px; height: 12px; color: var(--text-tertiary); }
+  .ap-count {
+    background: rgba(0,0,0,0.06);
+    color: var(--text-secondary);
+    padding: 1px 6px; border-radius: 8px;
+    font-size: 10.5px; letter-spacing: 0;
+  }
+
+  .variant-toggle {
+    display: flex; gap: 2px;
+    background: rgba(0,0,0,0.05);
+    border-radius: 6px;
+    padding: 2px;
+    margin-bottom: 6px;
+  }
+  .variant-btn {
+    flex: 1;
+    background: transparent;
+    border: 0; padding: 4px 6px;
+    border-radius: 4px;
+    font: inherit;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    letter-spacing: 0.01em;
+    transition: background 0.12s, color 0.12s;
+  }
+  .variant-btn:hover { color: var(--text); }
+  .variant-btn.active {
+    background: var(--bg-window);
+    color: var(--text);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  }
+  .variant-hint {
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+    margin-top: 2px;
+    line-height: 1.4;
+    padding: 0 2px;
+  }
+
+  .ap-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 10px 8px;
+  }
+  .ap-card {
+    background: #FFFFFF;
+    border-radius: 9px;
+    border: 0.5px solid var(--border-soft);
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    position: relative;
+  }
+  .ap-card.active { border-color: rgba(31,91,216,0.3); box-shadow: 0 1px 3px rgba(31,91,216,0.08); }
+  .ap-card .star {
+    position: absolute;
+    top: 12px; right: 12px;
+    width: 12px; height: 12px;
+    color: var(--pin);
+  }
+
+  /* === VARIANT A — EDITORIAL === */
+  /* Persona: italic serif, larger
+     Backbone: small mono uppercase tracked
+     Context: bracketed mono */
+  .vA .ap-persona {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: 21px;
+    font-weight: 500;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    color: var(--text);
+  }
+  .vA .ap-meta {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
+    letter-spacing: 0;
+  }
+  .vA .ap-backbone { text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; }
+  .vA .ap-context { color: var(--text-secondary); }
+
+  /* === VARIANT B — HIERARCHY BY WEIGHT === */
+  /* Persona: Funnel Display semibold
+     Backbone: small Funnel Sans 500 muted
+     Context: small Funnel Sans bracketed */
+  .vB .ap-persona {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 17px;
+    letter-spacing: -0.018em;
+    color: var(--text);
+  }
+  .vB .ap-meta {
+    margin-top: 3px;
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+    font-weight: 500;
+  }
+  .vB .ap-backbone { color: var(--text-secondary); }
+  .vB .ap-context { color: var(--text-tertiary); }
+
+  /* === VARIANT C — PERSONA-TYPED === */
+  /* prose personas (cto/cpo/ciso): italic Newsreader serif
+     code persona (codex): JetBrains Mono
+     generic (claude): Funnel Sans regular
+     Backbone: tiny uppercase tag
+     Context: bracketed mono */
+  .vC .ap-persona { font-size: 17px; letter-spacing: -0.012em; line-height: 1.1; }
+  .vC .ap-card[data-persona="cto"] .ap-persona,
+  .vC .ap-card[data-persona="cpo"] .ap-persona,
+  .vC .ap-card[data-persona="ciso"] .ap-persona {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: 21px;
+    font-weight: 500;
+  }
+  .vC .ap-card[data-persona="codex"] .ap-persona {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 14.5px;
+    letter-spacing: 0;
+  }
+  .vC .ap-card[data-persona="claude"] .ap-persona {
+    font-family: var(--font-ui);
+    font-weight: 500;
+    font-size: 15px;
+  }
+  .vC .ap-meta {
+    margin-top: 4px;
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+  }
+  .vC .ap-backbone { color: var(--text-secondary); }
+  .vC .ap-context { font-family: var(--font-mono); text-transform: none; letter-spacing: 0; color: var(--text-secondary); margin-left: 4px; }
+
+  /* persona colors applied across variants */
+  .ap-card[data-persona="cto"] .ap-persona { color: var(--persona-cto); }
+  .ap-card[data-persona="cpo"] .ap-persona { color: var(--persona-cpo); }
+  .ap-card[data-persona="ciso"] .ap-persona { color: var(--persona-ciso); }
+  .ap-card[data-persona="codex"] .ap-persona { color: var(--persona-codex); }
+  .ap-card[data-persona="claude"] .ap-persona { color: var(--persona-claude); }
+
+  /* status row */
+  .ap-status-row {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 0.5px solid var(--border-soft);
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    letter-spacing: -0.003em;
+  }
+  .status-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--status-idle);
+  }
+  .status-dot.thinking { background: var(--status-thinking); animation: pulse 1.4s ease-in-out infinite; }
+  .status-dot.running { background: var(--status-running); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(31,91,216,0.0); opacity: 1; }
+    50% { box-shadow: 0 0 0 4px rgba(31,91,216,0.18); opacity: 0.85; }
+  }
+  .status-running { animation: pulse 1.2s ease-in-out infinite; }
+
+  .ap-status-text { flex: 1; }
+  .ap-tool {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    background: rgba(31,91,216,0.06);
+    color: var(--accent-deep);
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+
+  .ap-footer {
+    border-top: 0.5px solid var(--border-soft);
+    padding: 12px 14px;
+    flex-shrink: 0;
+  }
+  .ap-connect {
+    display: flex; align-items: center; gap: 6px;
+    color: var(--accent);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 6px 8px;
+    margin: 0 -6px;
+    border-radius: 6px;
+  }
+  .ap-connect:hover { background: rgba(31,91,216,0.06); }
+  .ap-connect svg { width: 12px; height: 12px; }
+
+  /* scrollbars */
+  .ap-list::-webkit-scrollbar, .doc-scroll::-webkit-scrollbar { width: 8px; }
+  .ap-list::-webkit-scrollbar-thumb, .doc-scroll::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.12); border-radius: 4px;
+    border: 2px solid transparent; background-clip: padding-box;
+  }
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="traffic-lights">
+      <div class="tl tl-close"></div><div class="tl tl-min"></div><div class="tl tl-max"></div>
+    </div>
+    <div class="titlebar-title">Workbench</div>
+  </div>
+
+  <div class="main">
+
+    <!-- compact sidebar for context -->
+    <aside class="sidebar">
+      <div class="sb-tag">Inbox</div>
+      <div class="sb-line"><div class="dot"></div><svg class="sb-mini-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>agf-positioning-v3.md</div>
+      <div class="sb-line"><div class="dot"></div><svg class="sb-mini-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>vendor-risk-spec.html</div>
+      <div class="sb-line selected"><div class="dot"></div><svg class="sb-mini-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>weekly-digest.md</div>
+      <div class="sb-line muted"><svg class="sb-mini-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 13z"/><path d="M10 2.5V5.5h3"/></svg>meeting-prep.md</div>
+
+      <div class="sb-tag">Projects</div>
+      <div class="sb-line section-fold"><svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>AGRC</div>
+      <div class="sb-line section-fold"><svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>Advisory</div>
+      <div class="sb-line section-fold"><svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>Vellum</div>
+      <div class="sb-line section-fold"><svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>Krypton</div>
+      <div class="sb-line section-fold"><svg class="sb-folder-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4.5a1 1 0 0 1 1-1h3.5l1 1.5H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>Personal</div>
+    </aside>
+
+    <!-- main content -->
+    <main class="content">
+      <div class="toolbar">
+        <div class="breadcrumb">Inbox <span style="color:var(--text-faded);">›</span> <span class="crumb-current">weekly-digest.md</span></div>
+        <div style="color:var(--text-tertiary);font-size:11.5px;">5 agents · 2 active</div>
+      </div>
+      <div class="doc-scroll">
+        <article class="doc">
+          <h1>Weekly Digest — May 11–17</h1>
+          <div class="doc-meta">
+            <span>cto · claude [AGRC]</span><span class="dot"></span><span>generated 1 hour ago</span>
+          </div>
+          <p>A condensed read of the last seven days. The active workstreams converged around three themes: AGRC positioning, Vellum scaffolding, and a latent ingest regression in Krypton.</p>
+          <h2>What moved</h2>
+          <p>AGF v3.0 positioning landed; the CPO persona on Advisory drafted two pricing variants for design-partner conversations; CISO surfaced one open vendor-risk item before sign-off.</p>
+          <h2>What's running</h2>
+          <p>Two agents are currently in-flight (see panel right): CTO is composing tomorrow's morning brief; CISO is executing a tool call against the airisktools control-eval. Neither blocks anything urgent.</p>
+        </article>
+      </div>
+    </main>
+
+    <!-- ===== AGENT PANEL ===== -->
+    <aside class="agent-panel" id="agentPanel">
+      <div class="ap-header">
+        <div class="ap-title">
+          <div class="ap-title-text">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6"/><path d="M5 8.5l2 2 4-4.5"/></svg>
+            Agents
+          </div>
+          <div class="ap-count">5</div>
+        </div>
+        <div class="variant-toggle" role="tablist">
+          <button class="variant-btn active" data-variant="A">Editorial</button>
+          <button class="variant-btn" data-variant="B">Weighted</button>
+          <button class="variant-btn" data-variant="C">Typed</button>
+        </div>
+        <div class="variant-hint" id="variantHint">
+          Persona in italic Newsreader serif, separator dot, backbone in tracked-uppercase mono, context bracketed in mono.
+        </div>
+      </div>
+
+      <div class="ap-list vA" id="agentList">
+
+        <div class="ap-card active" data-persona="cto">
+          <svg class="star" viewBox="0 0 14 14" fill="currentColor" aria-label="Default for AGRC"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+          <div class="ap-persona">cto</div>
+          <div class="ap-meta">
+            <span class="ap-backbone">claude</span> · <span class="ap-context">[AGRC]</span>
+          </div>
+          <div class="ap-status-row">
+            <div class="status-dot thinking"></div>
+            <div class="ap-status-text">Thinking — composing morning brief</div>
+          </div>
+        </div>
+
+        <div class="ap-card" data-persona="cpo">
+          <div class="ap-persona">cpo</div>
+          <div class="ap-meta">
+            <span class="ap-backbone">claude</span> · <span class="ap-context">[Advisory]</span>
+          </div>
+          <div class="ap-status-row">
+            <div class="status-dot"></div>
+            <div class="ap-status-text">Idle · last reply 14 min</div>
+          </div>
+        </div>
+
+        <div class="ap-card" data-persona="codex">
+          <div class="ap-persona">codex</div>
+          <div class="ap-meta">
+            <span class="ap-context">[agentic-research]</span>
+          </div>
+          <div class="ap-status-row">
+            <div class="status-dot"></div>
+            <div class="ap-status-text">Idle · last reply 1 h</div>
+          </div>
+        </div>
+
+        <div class="ap-card active" data-persona="ciso">
+          <div class="ap-persona">ciso</div>
+          <div class="ap-meta">
+            <span class="ap-backbone">claude</span> · <span class="ap-context">[airisktools]</span>
+          </div>
+          <div class="ap-status-row">
+            <div class="status-dot running"></div>
+            <div class="ap-status-text">Running</div>
+            <span class="ap-tool">control_eval</span>
+          </div>
+        </div>
+
+        <div class="ap-card" data-persona="claude">
+          <svg class="star" viewBox="0 0 14 14" fill="currentColor" aria-label="Default for Vellum"><path d="M7 1l1.8 4 4.2.4-3.2 2.8 1 4.1L7 10.2 3.2 12.3l1-4.1L1 5.4l4.2-.4z"/></svg>
+          <div class="ap-persona">claude</div>
+          <div class="ap-meta">
+            <span class="ap-context">[Vellum]</span>
+          </div>
+          <div class="ap-status-row">
+            <div class="status-dot"></div>
+            <div class="ap-status-text">Idle · last reply 3 h</div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="ap-footer">
+        <div class="ap-connect">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 3v10M3 8h10"/></svg>
+          Connect agent
+        </div>
+      </div>
+    </aside>
+
+  </div>
+</div>
+
+<script>
+  // ---- Typography variant toggle ----
+  const list = document.getElementById('agentList');
+  const hint = document.getElementById('variantHint');
+  const hints = {
+    A: 'Persona in italic Newsreader serif, separator dot, backbone in tracked-uppercase mono, context bracketed in mono.',
+    B: 'Persona in Funnel Display semibold, backbone & context in muted Funnel Sans. Hierarchy by weight + color.',
+    C: 'Persona-typed: prose personas in italic serif, codex in JetBrains Mono, generic claude in Funnel Sans. Backbone in tracked uppercase.'
+  };
+  document.querySelectorAll('.variant-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.variant-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const v = btn.dataset.variant;
+      list.classList.remove('vA', 'vB', 'vC');
+      list.classList.add('v' + v);
+      hint.textContent = hints[v];
+    });
+  });
+</script>
+</body>
+</html>
