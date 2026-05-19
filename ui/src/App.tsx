@@ -1,23 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen, TauriEvent } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import { RenderedView } from "./components/RenderedView";
 import { SourceView } from "./components/SourceView";
 import {
   addAgentSession,
   archiveFile,
+  copyPathsToInbox,
+  copyTextToClipboard,
+  deleteFile,
+  getDefaultActionVerb,
   getBootstrapInfo,
+  getProjectDefaultAgent,
   listAgentSessions,
   listInbox,
   listProjectFiles,
   listPersonas,
   listProjects,
+  moveFileToArchive,
+  moveFileToProject,
   openDocument,
   parseDocument,
+  revealInFinder,
   sendToClipboard,
+  setDefaultActionVerb,
+  setProjectDefaultAgent,
+  targetFileExists,
   togglePin,
   writeDocument,
   type BootstrapInfo,
   type AgentSession,
+  type ConflictStrategy,
   type FileMetadata,
   type PersonaRegistry
 } from "./ipc";
@@ -37,6 +50,24 @@ type FsEventPayload = {
   kind: string;
   path: string | null;
 };
+
+type TauriDragDropPayload = {
+  paths?: string[];
+};
+
+type AgentMenu = {
+  x: number;
+  y: number;
+  session: AgentSession;
+} | null;
+
+type FileMenu = {
+  x: number;
+  y: number;
+  file: FileMetadata;
+} | null;
+
+const ACTION_VERBS = ["Review", "Revise", "Expand", "Critique", "Summarize", "Respond to"] as const;
 
 export default function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapInfo | null>(null);
@@ -64,27 +95,42 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [handoffToast, setHandoffToast] = useState<string | null>(null);
+  const [sendPopoverOpen, setSendPopoverOpen] = useState(false);
+  const [showAgentPicker, setShowAgentPicker] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [defaultAgentId, setDefaultAgentId] = useState<string | null>(null);
+  const [defaultActionVerb, setDefaultActionVerbState] = useState("Review");
+  const [sendActionVerb, setSendActionVerb] = useState("Review");
+  const [customActionVerb, setCustomActionVerb] = useState("");
+  const [sendNote, setSendNote] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [arrivedPaths, setArrivedPaths] = useState<Set<string>>(new Set());
+  const [agentMenu, setAgentMenu] = useState<AgentMenu>(null);
+  const [fileMenu, setFileMenu] = useState<FileMenu>(null);
+  const [pendingSendPath, setPendingSendPath] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const currentProjectKey = currentProject ?? "Inbox";
 
   const refresh = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [nextBootstrap, nextFiles, nextProjects, nextPersonas, nextSessions] = await Promise.all([
+      const [nextBootstrap, nextFiles, nextProjects, nextPersonas, nextSessions, nextDefaultVerb] = await Promise.all([
         getBootstrapInfo(),
         listInbox(),
         listProjects(),
         listPersonas(),
-        listAgentSessions()
+        listAgentSessions(),
+        getDefaultActionVerb()
       ]);
       setBootstrap(nextBootstrap);
       setFiles(nextFiles);
       setProjects(nextProjects);
       setPersonas(nextPersonas);
       setSessions(nextSessions);
+      setDefaultActionVerbState(nextDefaultVerb);
       setSelectedPath((current) => current ?? nextFiles[0]?.path ?? null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -115,6 +161,28 @@ export default function App() {
     () => [...files, ...projectFiles].find((file) => file.path === selectedPath) ?? null,
     [files, projectFiles, selectedPath]
   );
+  const sendButtonLabel = useMemo(
+    () => sendLabelForSessions(sessions, defaultAgentId),
+    [defaultAgentId, sessions]
+  );
+  const defaultAgent = useMemo(
+    () => sessions.find((session) => session.id === defaultAgentId) ?? null,
+    [defaultAgentId, sessions]
+  );
+
+  useEffect(() => {
+    let disposed = false;
+    void getProjectDefaultAgent(currentProjectKey)
+      .then((sessionId) => {
+        if (!disposed) {
+          setDefaultAgentId(sessionId);
+        }
+      })
+      .catch((caught) => setError(caught instanceof Error ? caught.message : String(caught)));
+    return () => {
+      disposed = true;
+    };
+  }, [currentProjectKey]);
 
   const openArtifact = useCallback(async (file: FileMetadata) => {
     setSelectedPath(file.path);
@@ -254,26 +322,82 @@ export default function App() {
     setSavedAt(null);
   }
 
-  const sendCurrentArtifact = useCallback(async () => {
+  const openSendPopover = useCallback((forceAgentPicker = false) => {
+    if (sessions.length === 0) {
+      setShowSessionForm(true);
+      return;
+    }
     if (!artifact) {
       return;
     }
-    const note = window.prompt("Optional note for Claude") ?? "";
+    const defaultIsPreset = ACTION_VERBS.includes(defaultActionVerb as (typeof ACTION_VERBS)[number]);
+    const defaultSession = sessions.find((session) => session.id === defaultAgentId) ?? null;
+    const nextSelectedAgent = defaultSession?.id ?? (sessions.length === 1 ? sessions[0]?.id ?? null : null);
+    setSelectedAgentId(nextSelectedAgent);
+    setShowAgentPicker(forceAgentPicker || (sessions.length > 1 && !defaultSession));
+    setSendActionVerb(defaultIsPreset ? defaultActionVerb : "Custom");
+    setCustomActionVerb(defaultIsPreset ? "" : defaultActionVerb);
+    setSendNote("");
+    setSendPopoverOpen(true);
+  }, [artifact, defaultActionVerb, defaultAgentId, sessions]);
+
+  const sendCurrentArtifact = useCallback(async (actionVerb: string, note: string) => {
+    if (!artifact) {
+      return;
+    }
+    const verb = actionVerb.trim() || "Review";
     try {
+      const targetAgent = sessions.find((session) => session.id === selectedAgentId) ?? defaultAgent;
+      if (sessions.length > 1 && !targetAgent) {
+        setShowAgentPicker(true);
+        return;
+      }
       await sendToClipboard({
         path: artifact.path,
-        project: projectForPath(artifact.path),
-        persona: selectedFile?.persona ?? "claude",
         contents: artifact.source,
-        note: note.trim() ? note : null
+        note: note.trim() ? note : null,
+        action_verb: verb
       });
+      await setDefaultActionVerb(verb);
+      setDefaultActionVerbState(verb);
+      setSendPopoverOpen(false);
       const message = "Copied to clipboard — paste into your Claude / Codex session";
       setHandoffToast(message);
       window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3500);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
-  }, [artifact, selectedFile]);
+  }, [artifact, defaultAgent, selectedAgentId, sessions]);
+
+  const setDefaultAgentForProject = useCallback(
+    async (session: AgentSession) => {
+      try {
+        await setProjectDefaultAgent(currentProjectKey, session.id);
+        setDefaultAgentId(session.id);
+        setAgentMenu(null);
+        const message = `Default agent set to ${agentSessionLabel(session)} for ${currentProjectKey}`;
+        setHandoffToast(message);
+        window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3000);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [currentProjectKey]
+  );
+
+  const switchAgentDefault = useCallback(async () => {
+    if (sessions.length === 0) {
+      setShowSessionForm(true);
+      return;
+    }
+    const options = sessions.map((session, index) => `${index + 1}. ${agentSessionLabel(session)}`).join("\n");
+    const answer = window.prompt(`Switch default agent for ${currentProjectKey}:\n${options}`, "1");
+    const index = answer ? Number.parseInt(answer, 10) - 1 : Number.NaN;
+    const session = sessions[index];
+    if (session) {
+      await setDefaultAgentForProject(session);
+    }
+  }, [currentProjectKey, sessions, setDefaultAgentForProject]);
 
   const toggleCurrentPin = useCallback(async () => {
     if (!artifact) {
@@ -293,11 +417,223 @@ export default function App() {
     await refresh();
   }, [artifact, refresh]);
 
+  const ingestDroppedPaths = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0) {
+        return;
+      }
+      try {
+        const copied = await copyPathsToInbox(paths);
+        setArrivedPaths((current) => new Set([...current, ...copied.map((file) => file.path)]));
+        const first = copied[0];
+        if (first) {
+          const message = `+ ${first.name}`;
+          setHandoffToast(message);
+          window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+        }
+        await refresh();
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [refresh]
+  );
+
+  const openFileDialog = useCallback(async () => {
+    try {
+      const selection = await open({ multiple: true, directory: false });
+      const paths = Array.isArray(selection) ? selection : selection ? [selection] : [];
+      await ingestDroppedPaths(paths);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [ingestDroppedPaths]);
+
+  const moveInboxFileToProject = useCallback(
+    async (path: string, project: string) => {
+      const file = files.find((candidate) => candidate.path === path);
+      if (!file) {
+        return;
+      }
+      try {
+        const strategy = await conflictStrategyForTarget("project", file.name, project);
+        if (strategy === "cancel") {
+          return;
+        }
+        const moved = await moveFileToProject(path, project, strategy);
+        const message = `Moved ${moved.name} → ${project}`;
+        setHandoffToast(message);
+        window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+        setArtifact(null);
+        setSelectedPath(null);
+        await refresh();
+        if (currentProject === project) {
+          setProjectFiles(await listProjectFiles(project));
+        }
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [currentProject, files, refresh]
+  );
+
+  const moveKnownFileToProject = useCallback(
+    async (file: FileMetadata, project: string) => {
+      try {
+        const strategy = await conflictStrategyForTarget("project", file.name, project);
+        if (strategy === "cancel") {
+          return;
+        }
+        const moved = await moveFileToProject(file.path, project, strategy);
+        const message = `Moved ${moved.name} → ${project}`;
+        setHandoffToast(message);
+        window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+        if (artifact?.path === file.path) {
+          setArtifact(null);
+          setSelectedPath(null);
+        }
+        setFileMenu(null);
+        await refresh();
+        if (currentProject === project) {
+          setProjectFiles(await listProjectFiles(project));
+        }
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [artifact?.path, currentProject, refresh]
+  );
+
+  const moveInboxFileToArchive = useCallback(
+    async (path: string) => {
+      const file = files.find((candidate) => candidate.path === path);
+      if (!file) {
+        return;
+      }
+      try {
+        const strategy = await conflictStrategyForTarget("archive", file.name);
+        if (strategy === "cancel") {
+          return;
+        }
+        const moved = await moveFileToArchive(path, strategy);
+        const message = `Moved ${moved.name} → Archive`;
+        setHandoffToast(message);
+        window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+        setArtifact(null);
+        setSelectedPath(null);
+        await refresh();
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [files, refresh]
+  );
+
+  const moveKnownFileToArchive = useCallback(
+    async (file: FileMetadata) => {
+      try {
+        const strategy = await conflictStrategyForTarget("archive", file.name);
+        if (strategy === "cancel") {
+          return;
+        }
+        const moved = await moveFileToArchive(file.path, strategy);
+        const message = `Moved ${moved.name} → Archive`;
+        setHandoffToast(message);
+        window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+        if (artifact?.path === file.path) {
+          setArtifact(null);
+          setSelectedPath(null);
+        }
+        setFileMenu(null);
+        await refresh();
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [artifact?.path, refresh]
+  );
+
+  const deleteArtifact = useCallback(
+    async (file: FileMetadata) => {
+      if (!window.confirm(`Delete ${file.name}? This permanently removes the file from disk.`)) {
+        return;
+      }
+      try {
+        await deleteFile(file.path);
+        if (artifact?.path === file.path) {
+          setArtifact(null);
+          setSelectedPath(null);
+        }
+        setFileMenu(null);
+        await refresh();
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [artifact?.path, refresh]
+  );
+
+  const sendFileFromMenu = useCallback(
+    async (file: FileMetadata) => {
+      setFileMenu(null);
+      if (artifact?.path !== file.path) {
+        setPendingSendPath(file.path);
+        await openArtifact(file);
+        return;
+      }
+      openSendPopover(true);
+    },
+    [artifact?.path, openArtifact, openSendPopover]
+  );
+
+  useEffect(() => {
+    if (pendingSendPath && artifact?.path === pendingSendPath) {
+      setPendingSendPath(null);
+      openSendPopover(true);
+    }
+  }, [artifact?.path, openSendPopover, pendingSendPath]);
+
+  useEffect(() => {
+    let disposed = false;
+    const unlisten = listen<TauriDragDropPayload>(TauriEvent.DRAG_DROP, (event) => {
+      if (disposed) {
+        return;
+      }
+      void ingestDroppedPaths(event.payload.paths ?? []);
+    });
+    return () => {
+      disposed = true;
+      void unlisten.then((dispose) => dispose());
+    };
+  }, [ingestDroppedPaths]);
+
+  useEffect(() => {
+    function handleWindowDragOver(event: DragEvent) {
+      if (event.dataTransfer?.types.includes("Files")) {
+        event.preventDefault();
+      }
+    }
+    function handleWindowDrop(event: DragEvent) {
+      const paths = pathsFromDataTransfer(event.dataTransfer);
+      if (paths.length > 0) {
+        event.preventDefault();
+        void ingestDroppedPaths(paths);
+      }
+    }
+    window.addEventListener("dragover", handleWindowDragOver);
+    window.addEventListener("drop", handleWindowDrop);
+    return () => {
+      window.removeEventListener("dragover", handleWindowDragOver);
+      window.removeEventListener("drop", handleWindowDrop);
+    };
+  }, [ingestDroppedPaths]);
+
   const paletteItems = useMemo(() => {
     const actions = [
-      { section: "ACTIONS", label: "Send to Claude", run: sendCurrentArtifact },
+      { section: "ACTIONS", label: sendButtonLabel, run: openSendPopover },
       { section: "ACTIONS", label: "Toggle Pin", run: toggleCurrentPin },
       { section: "ACTIONS", label: "Archive", run: archiveCurrent },
+      { section: "ACTIONS", label: "Switch Agent Default...", run: switchAgentDefault },
       { section: "COMMANDS", label: "Open Project", run: () => projects[0] && void openProject(projects[0]) }
     ];
     const fileItems = files.map((file) => ({
@@ -308,7 +644,7 @@ export default function App() {
     const allItems = [...actions, ...fileItems];
     const query = paletteQuery.trim().toLowerCase();
     return query ? allItems.filter((item) => item.label.toLowerCase().includes(query)) : allItems;
-  }, [archiveCurrent, files, openArtifact, openProject, paletteQuery, projects, sendCurrentArtifact, toggleCurrentPin]);
+  }, [archiveCurrent, files, openArtifact, openProject, openSendPopover, paletteQuery, projects, sendButtonLabel, switchAgentDefault, toggleCurrentPin]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -317,7 +653,7 @@ export default function App() {
       }
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
-        void sendCurrentArtifact();
+        openSendPopover(event.shiftKey);
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -341,7 +677,7 @@ export default function App() {
       }
       if (event.key === "s") {
         event.preventDefault();
-        void sendCurrentArtifact();
+        openSendPopover();
       }
       if (event.key === "p") {
         event.preventDefault();
@@ -369,7 +705,7 @@ export default function App() {
     openArtifact,
     selectedFile,
     selectedPath,
-    sendCurrentArtifact,
+    openSendPopover,
     toggleCurrentPin
   ]);
 
@@ -392,6 +728,9 @@ export default function App() {
           <button className="titlebar-action" type="button" onClick={refresh} disabled={isLoading}>
             {isLoading ? "Scanning" : "Rescan"}
           </button>
+          <button className="titlebar-open" type="button" onClick={() => void openFileDialog()} aria-label="Open file">
+            +
+          </button>
         </header>
         <div className="main-shell">
           <aside className="sidebar">
@@ -405,7 +744,11 @@ export default function App() {
               <span className="section-label">Inbox</span>
               <span className="count">{files.length}</span>
             </div>
-            <div className="file-list">
+            <div
+              className={`file-list ${dropTarget === "inbox" ? "drop-target" : ""}`}
+              onDragEnter={() => setDropTarget("inbox")}
+              onDragLeave={() => setDropTarget((current) => (current === "inbox" ? null : current))}
+            >
               {files.length === 0 ? (
                 <div className="empty-list">
                   Empty inbox
@@ -419,6 +762,15 @@ export default function App() {
                     }`}
                     key={file.path}
                     type="button"
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.setData("text/agentcanvas-path", file.path);
+                      event.dataTransfer.effectAllowed = "move";
+                    }}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setFileMenu({ x: event.clientX, y: event.clientY, file });
+                    }}
                     onClick={() => {
                       setMode("inbox");
                       setCurrentProject(null);
@@ -439,15 +791,55 @@ export default function App() {
             </div>
             {projects.map((project) => (
               <button
-                className={`project-row ${project === currentProject ? "selected" : ""}`}
+                className={`project-row ${project === currentProject ? "selected" : ""} ${
+                  dropTarget === `project:${project}` ? "drop-target" : ""
+                }`}
                 key={project}
                 type="button"
+                onDragOver={(event) => {
+                  if (event.dataTransfer.types.includes("text/agentcanvas-path")) {
+                    event.preventDefault();
+                    setDropTarget(`project:${project}`);
+                  }
+                }}
+                onDragLeave={() => setDropTarget((current) => (current === `project:${project}` ? null : current))}
+                onDrop={(event) => {
+                  const path = event.dataTransfer.getData("text/agentcanvas-path");
+                  if (path) {
+                    event.preventDefault();
+                    setDropTarget(null);
+                    void moveInboxFileToProject(path, project);
+                  }
+                }}
                 onClick={() => void openProject(project)}
               >
                 <span>{project}</span>
                 <span className="file-time">0</span>
               </button>
             ))}
+            <button
+              className={`project-row archive-row ${dropTarget === "archive" ? "drop-target" : ""}`}
+              type="button"
+              onDragOver={(event) => {
+                if (event.dataTransfer.types.includes("text/agentcanvas-path")) {
+                  event.preventDefault();
+                  setDropTarget("archive");
+                }
+              }}
+              onDragLeave={() => setDropTarget((current) => (current === "archive" ? null : current))}
+              onDrop={(event) => {
+                const path = event.dataTransfer.getData("text/agentcanvas-path");
+                if (path) {
+                  event.preventDefault();
+                  setDropTarget(null);
+                  void moveInboxFileToArchive(path);
+                }
+              }}
+              onClick={() => void archiveCurrent()}
+            >
+              <span>Archive</span>
+              <span className="file-time">↘</span>
+            </button>
           </aside>
           {mode === "project" ? (
             <aside className="middle">
@@ -461,6 +853,10 @@ export default function App() {
                     className={`middle-file ${file.path === selectedPath ? "selected" : ""}`}
                     key={file.path}
                     type="button"
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setFileMenu({ x: event.clientX, y: event.clientY, file });
+                    }}
                     onClick={() => void openArtifact(file)}
                   >
                     <span>{file.name}</span>
@@ -487,8 +883,8 @@ export default function App() {
                 >
                   {artifact?.kind === "html" ? (sourceMode ? "Render" : "View Source") : editMode ? "Preview" : "Edit"}
                 </button>
-                <button className="primary" type="button" onClick={() => void sendCurrentArtifact()} disabled={!artifact}>
-                  Send to Claude
+                <button className="primary" type="button" onClick={() => openSendPopover()} disabled={!artifact && sessions.length > 0}>
+                  {sendButtonLabel}
                 </button>
                 <button type="button" onClick={() => void saveArtifact()} disabled={!artifact?.dirty || isSaving}>
                   {isSaving ? "Saving" : "Save"}
@@ -532,6 +928,26 @@ export default function App() {
               </article>
             )}
             {error ? <p className="error-banner">{error}</p> : null}
+            {sendPopoverOpen ? (
+              <SendPopover
+                label={sendButtonLabel}
+                actionVerb={sendActionVerb}
+                customActionVerb={customActionVerb}
+                note={sendNote}
+                onActionVerbChange={setSendActionVerb}
+                onCustomActionVerbChange={(value) => {
+                  setCustomActionVerb(value);
+                  setSendActionVerb("Custom");
+                }}
+                onNoteChange={setSendNote}
+                sessions={sessions}
+                showAgentPicker={showAgentPicker}
+                selectedAgentId={selectedAgentId}
+                onSelectedAgentChange={setSelectedAgentId}
+                onCancel={() => setSendPopoverOpen(false)}
+                onSend={() => void sendCurrentArtifact(sendActionVerb === "Custom" ? customActionVerb : sendActionVerb, sendNote)}
+              />
+            ) : null}
           </section>
           {sessions.length === 0 && !showSessionForm ? (
             <aside className="agent-gutter">
@@ -577,12 +993,20 @@ export default function App() {
               ) : null}
               <div className="agent-session-list">
                 {sessions.map((session) => (
-                  <article className="agent-card" key={session.id}>
+                  <article
+                    className={`agent-card ${session.id === defaultAgentId ? "default-agent" : ""}`}
+                    key={session.id}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setAgentMenu({ x: event.clientX, y: event.clientY, session });
+                    }}
+                  >
                     <div className="agent-card-top">
                       <span className={`badge persona-badge badge-${session.persona}`}>{labelForPersona(session.persona)}</span>
                       <span className="backbone-tag">{session.backbone}</span>
                     </div>
                     <div className="agent-context">[{session.context || "current"}]</div>
+                    {session.id === defaultAgentId ? <div className="agent-default">default for {currentProjectKey}</div> : null}
                   </article>
                 ))}
               </div>
@@ -659,8 +1083,190 @@ export default function App() {
             </div>
           </div>
         ) : null}
+        {agentMenu ? (
+          <div className="context-menu-backdrop" onMouseDown={() => setAgentMenu(null)}>
+            <div
+              className="context-menu"
+              style={{ left: agentMenu.x, top: agentMenu.y }}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <button type="button" onClick={() => void setDefaultAgentForProject(agentMenu.session)}>
+                Set as default for {currentProjectKey}
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {fileMenu ? (
+          <div className="context-menu-backdrop" onMouseDown={() => setFileMenu(null)}>
+            <div
+              className="context-menu file-context-menu"
+              style={{ left: fileMenu.x, top: fileMenu.y }}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <button type="button" onClick={() => { setFileMenu(null); void openArtifact(fileMenu.file); }}>
+                Open
+              </button>
+              <button type="button" onClick={() => { setFileMenu(null); void togglePin(fileMenu.file.path).then(refresh); }}>
+                Toggle Pin (⌘P)
+              </button>
+              <div className="context-menu-label">File to Project</div>
+              {projects.map((project) => (
+                <button key={project} type="button" onClick={() => void moveKnownFileToProject(fileMenu.file, project)}>
+                  {project}
+                </button>
+              ))}
+              <button type="button" onClick={() => void moveKnownFileToArchive(fileMenu.file)}>
+                Archive (⌘⌫)
+              </button>
+              <button type="button" onClick={() => void sendFileFromMenu(fileMenu.file)}>
+                Send to Agent... (⌘⏎)
+              </button>
+              <button type="button" onClick={() => { setFileMenu(null); void revealInFinder(fileMenu.file.path); }}>
+                Reveal in Finder
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const message = `Copied ${fileMenu.file.relative_path}`;
+                  void copyTextToClipboard(fileMenu.file.relative_path);
+                  setHandoffToast(message);
+                  setFileMenu(null);
+                  window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+                }}
+              >
+                Copy Path (relative)
+              </button>
+              <button className="danger-item" type="button" onClick={() => void deleteArtifact(fileMenu.file)}>
+                Delete...
+              </button>
+            </div>
+          </div>
+        ) : null}
       </section>
     </main>
+  );
+}
+
+type SendPopoverProps = {
+  label: string;
+  actionVerb: string;
+  customActionVerb: string;
+  note: string;
+  onActionVerbChange: (verb: string) => void;
+  onCustomActionVerbChange: (verb: string) => void;
+  onNoteChange: (note: string) => void;
+  sessions: AgentSession[];
+  showAgentPicker: boolean;
+  selectedAgentId: string | null;
+  onSelectedAgentChange: (sessionId: string) => void;
+  onCancel: () => void;
+  onSend: () => void;
+};
+
+function SendPopover({
+  label,
+  actionVerb,
+  customActionVerb,
+  note,
+  onActionVerbChange,
+  onCustomActionVerbChange,
+  onNoteChange,
+  sessions,
+  showAgentPicker,
+  selectedAgentId,
+  onSelectedAgentChange,
+  onCancel,
+  onSend
+}: SendPopoverProps) {
+  const noteRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    noteRef.current?.focus();
+  }, []);
+
+  return (
+    <div className="send-popover-backdrop" onMouseDown={onCancel}>
+      <form
+        className="send-popover"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSend();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+          }
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            onSend();
+          }
+        }}
+      >
+        <header>{label}</header>
+        {showAgentPicker ? (
+          <label className="agent-picker">
+            <span>Agent</span>
+            <select value={selectedAgentId ?? ""} onChange={(event) => onSelectedAgentChange(event.target.value)}>
+              <option value="" disabled>
+                Choose agent
+              </option>
+              {sessions.map((session) => (
+                <option key={session.id} value={session.id}>
+                  {agentSessionLabel(session)}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <fieldset>
+          <legend>Action</legend>
+          <div className="action-grid">
+            {ACTION_VERBS.map((verb) => (
+              <label key={verb}>
+                <input
+                  type="radio"
+                  name="send-action"
+                  value={verb}
+                  checked={actionVerb === verb}
+                  onChange={() => onActionVerbChange(verb)}
+                />
+                <span>{verb}</span>
+              </label>
+            ))}
+            <label className="custom-action">
+              <input
+                type="radio"
+                name="send-action"
+                value="Custom"
+                checked={actionVerb === "Custom"}
+                onChange={() => onActionVerbChange("Custom")}
+              />
+              <span>Custom:</span>
+              <input
+                value={customActionVerb}
+                onChange={(event) => onCustomActionVerbChange(event.target.value)}
+                onFocus={() => onActionVerbChange("Custom")}
+                placeholder="Action verb"
+              />
+            </label>
+          </div>
+        </fieldset>
+        <label className="send-note">
+          <span>Note (optional)</span>
+          <textarea ref={noteRef} value={note} onChange={(event) => onNoteChange(event.target.value)} rows={3} />
+        </label>
+        <footer>
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="primary" type="submit">
+            Send ↵
+          </button>
+        </footer>
+      </form>
+    </div>
   );
 }
 
@@ -672,20 +1278,54 @@ function htmlExtension(extension: string): boolean {
   return extension === "html" || extension === "htm";
 }
 
-function projectForPath(path: string): string {
-  const marker = "/Projects/";
-  const index = path.indexOf(marker);
-  if (index === -1) {
-    return "Inbox";
-  }
-  return path.slice(index + marker.length).split(/[\\/]/)[0] || "Inbox";
-}
-
 function labelForPersona(persona: string): string {
   if (persona === "agf-architect") {
     return "AGF";
   }
   return persona;
+}
+
+function sendLabelForSessions(sessions: AgentSession[], defaultSessionId: string | null): string {
+  if (sessions.length === 0) {
+    return "Send to Agent";
+  }
+  if (sessions.length === 1) {
+    return `Send to ${agentSessionLabel(sessions[0])}`;
+  }
+  const defaultSession = sessions.find((session) => session.id === defaultSessionId);
+  return defaultSession ? `Send to ${agentSessionLabel(defaultSession)}` : "Send to Agent";
+}
+
+function agentSessionLabel(session: AgentSession): string {
+  return `${session.persona}·${session.backbone}`;
+}
+
+function pathsFromDataTransfer(dataTransfer: DataTransfer | null): string[] {
+  if (!dataTransfer) {
+    return [];
+  }
+  return Array.from(dataTransfer.files)
+    .map((file) => (file as File & { path?: string }).path)
+    .filter((path): path is string => Boolean(path));
+}
+
+async function conflictStrategyForTarget(
+  target: "project" | "archive",
+  filename: string,
+  project?: string
+): Promise<ConflictStrategy> {
+  const exists = await targetFileExists(target, filename, project);
+  if (!exists) {
+    return "keep_both";
+  }
+  const answer = window.prompt(`Replace ${filename}? Type "replace", "keep", or "cancel".`, "keep");
+  if (answer?.toLowerCase() === "replace") {
+    return "replace";
+  }
+  if (answer?.toLowerCase() === "keep") {
+    return "keep_both";
+  }
+  return "cancel";
 }
 
 function moveSelection(

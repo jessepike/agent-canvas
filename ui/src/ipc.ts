@@ -49,10 +49,9 @@ export type PersonaRegistry = z.infer<typeof PersonaRegistry>;
 export const SendPayload = z
   .object({
     path: z.string(),
-    project: z.string(),
-    persona: z.string(),
     contents: z.string(),
-    note: z.string().nullable()
+    note: z.string().nullable(),
+    action_verb: z.string()
   })
   .strict();
 export type SendPayload = z.infer<typeof SendPayload>;
@@ -138,12 +137,46 @@ export async function listProjects(): Promise<string[]> {
   }
 }
 
+export async function getProjectDefaultAgent(project: string): Promise<string | null> {
+  try {
+    const result = await invoke<unknown>("get_project_default_agent", { project });
+    return z.string().nullable().parse(result);
+  } catch (caught) {
+    throw ipcError("get_project_default_agent", caught);
+  }
+}
+
+export async function setProjectDefaultAgent(project: string, sessionId: string): Promise<void> {
+  try {
+    await invoke<unknown>("set_project_default_agent", { project, sessionId });
+  } catch (caught) {
+    throw ipcError("set_project_default_agent", caught);
+  }
+}
+
 export async function listPersonas(): Promise<PersonaRegistry> {
   try {
     const result = await invoke<unknown>("list_personas");
     return PersonaRegistry.parse(result);
   } catch (caught) {
     throw ipcError("list_personas", caught);
+  }
+}
+
+export async function getDefaultActionVerb(): Promise<string> {
+  try {
+    const result = await invoke<unknown>("get_default_action_verb");
+    return z.string().parse(result);
+  } catch (caught) {
+    throw ipcError("get_default_action_verb", caught);
+  }
+}
+
+export async function setDefaultActionVerb(verb: string): Promise<void> {
+  try {
+    await invoke<unknown>("set_default_action_verb", { verb });
+  } catch (caught) {
+    throw ipcError("set_default_action_verb", caught);
   }
 }
 
@@ -171,6 +204,73 @@ export async function archiveFile(path: string): Promise<string> {
     return z.string().parse(result);
   } catch (caught) {
     throw ipcError("archive_file", caught);
+  }
+}
+
+export type ConflictStrategy = "replace" | "keep_both" | "cancel";
+
+export async function copyPathsToInbox(paths: string[]): Promise<FileMetadata[]> {
+  try {
+    const result = await invoke<unknown>("copy_paths_to_inbox", { paths });
+    return z.array(FileMetadata).parse(result);
+  } catch (caught) {
+    throw ipcError("copy_paths_to_inbox", caught);
+  }
+}
+
+export async function moveFileToProject(
+  path: string,
+  project: string,
+  strategy: ConflictStrategy
+): Promise<FileMetadata> {
+  try {
+    const result = await invoke<unknown>("move_file_to_project", { path, project, strategy });
+    return FileMetadata.parse(result);
+  } catch (caught) {
+    throw ipcError("move_file_to_project", caught);
+  }
+}
+
+export async function moveFileToArchive(path: string, strategy: ConflictStrategy): Promise<FileMetadata> {
+  try {
+    const result = await invoke<unknown>("move_file_to_archive", { path, strategy });
+    return FileMetadata.parse(result);
+  } catch (caught) {
+    throw ipcError("move_file_to_archive", caught);
+  }
+}
+
+export async function copyTextToClipboard(text: string): Promise<string> {
+  try {
+    const result = await invoke<unknown>("copy_text_to_clipboard", { text });
+    return z.string().parse(result);
+  } catch (caught) {
+    throw ipcError("copy_text_to_clipboard", caught);
+  }
+}
+
+export async function revealInFinder(path: string): Promise<void> {
+  try {
+    await invoke<unknown>("reveal_in_finder", { path });
+  } catch (caught) {
+    throw ipcError("reveal_in_finder", caught);
+  }
+}
+
+export async function deleteFile(path: string): Promise<void> {
+  try {
+    await invoke<unknown>("delete_file", { path });
+  } catch (caught) {
+    throw ipcError("delete_file", caught);
+  }
+}
+
+export async function targetFileExists(target: "project" | "archive", filename: string, project?: string): Promise<boolean> {
+  try {
+    const result = await invoke<unknown>("target_file_exists", { target, project: project ?? null, filename });
+    return z.boolean().parse(result);
+  } catch (caught) {
+    throw ipcError("target_file_exists", caught);
   }
 }
 

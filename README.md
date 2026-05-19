@@ -4,6 +4,17 @@ AgentCanvas is a local Mac workbench for reviewing, lightly source-editing, and 
 
 This repo was formerly Vellum. The old executable-block editor spec is preserved in `legacy/` only for parser, corpus, atomic-save, and Tauri carry-forward.
 
+## Recent
+
+v0.1.1 tightens the first real-use loop:
+
+- Send-to-Agent now copies a prompt-ready payload with a relative AgentCanvas path, fenced source, optional note, and explicit action verb.
+- Send opens a popover with Review/Revise/Expand/Critique/Summarize/Respond-to/custom action choices.
+- Agent session labels are dynamic, with per-project defaults and a picker shortcut for multi-agent sessions.
+- Finder files can be dropped into Inbox; Inbox rows can be dragged to Projects or Archive.
+- File rows now have a right-click menu for open, pin, file-to-project, archive, send, reveal, copy relative path, and delete.
+- A titlebar `+` opens a native file picker and copies selected files into Inbox.
+
 ## v0.1.0
 
 - iCloud substrate: `~/iCloud/AgentCanvas/` backed by `~/Library/Mobile Documents/com~apple~CloudDocs/AgentCanvas/`
@@ -44,7 +55,7 @@ orb run -m dev bash -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/vellum && carg
 
 ## Release Notes
 
-v0.1.0 ships ad-hoc/dev only. Notarization and signed binaries are deferred.
+v0.1.1 ships ad-hoc/dev only. Notarization and signed binaries are deferred.
 
 ## License
 

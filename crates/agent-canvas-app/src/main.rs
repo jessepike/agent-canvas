@@ -84,10 +84,9 @@ struct PersonaRegistry {
 #[derive(Debug, Clone, Deserialize)]
 struct SendPayload {
     path: String,
-    project: String,
-    persona: String,
     contents: String,
     note: Option<String>,
+    action_verb: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +104,14 @@ struct AddAgentSessionInput {
     persona: String,
     backbone: String,
     context: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ConflictStrategy {
+    Replace,
+    KeepBoth,
+    Cancel,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -146,6 +153,7 @@ fn list_projects(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
             .is_dir()
             && let Some(name) = entry.file_name().to_str()
         {
+            upsert_project(&state.db, name, None)?;
             projects.push(name.to_owned());
         }
     }
@@ -154,8 +162,76 @@ fn list_projects(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+fn get_project_default_agent(
+    state: tauri::State<AppState>,
+    project: String,
+) -> Result<Option<String>, String> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    let default_agent_session_id = conn
+        .query_row(
+            "SELECT default_agent_session_id FROM projects WHERE name = ?1",
+            params![project],
+            |row| row.get(0),
+        )
+        .ok();
+    Ok(default_agent_session_id)
+}
+
+#[tauri::command]
+fn set_project_default_agent(
+    state: tauri::State<AppState>,
+    project: String,
+    session_id: String,
+) -> Result<(), String> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    let session_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM agent_sessions WHERE id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if session_exists == 0 {
+        return Err("agent session not found".to_owned());
+    }
+    conn.execute(
+        r#"
+        INSERT INTO projects(name, default_agent_session_id, updated_at)
+        VALUES (?1, ?2, strftime('%s','now'))
+        ON CONFLICT(name) DO UPDATE SET
+          default_agent_session_id = excluded.default_agent_session_id,
+          updated_at = excluded.updated_at
+        "#,
+        params![project, session_id],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn list_personas(state: tauri::State<AppState>) -> Result<PersonaRegistry, String> {
     resolve_personas(&state.paths.persona_registry, &state.db)
+}
+
+#[tauri::command]
+fn get_default_action_verb(state: tauri::State<AppState>) -> Result<String, String> {
+    get_setting(&state.db, "default_action_verb")
+        .map(|value| value.unwrap_or_else(|| "Review".to_owned()))
+}
+
+#[tauri::command]
+fn set_default_action_verb(state: tauri::State<AppState>, verb: String) -> Result<(), String> {
+    let verb = verb.trim();
+    if verb.is_empty() {
+        return Err("action verb cannot be empty".to_owned());
+    }
+    set_setting(&state.db, "default_action_verb", verb)
 }
 
 #[tauri::command]
@@ -202,8 +278,130 @@ fn archive_file(state: tauri::State<AppState>, path: String) -> Result<String, S
 }
 
 #[tauri::command]
-fn send_to_clipboard(payload: SendPayload) -> Result<String, String> {
-    let formatted = format_send_payload(&payload);
+fn copy_paths_to_inbox(
+    state: tauri::State<AppState>,
+    paths: Vec<String>,
+) -> Result<Vec<FileMetadata>, String> {
+    let mut copied = Vec::new();
+    for path in paths {
+        let source = PathBuf::from(path);
+        ensure_regular_file(&source)?;
+        let file_name = source
+            .file_name()
+            .ok_or_else(|| "dropped file has no filename".to_owned())?;
+        let target = unique_path(&state.paths.inbox_dir.join(file_name));
+        fs::copy(&source, &target).map_err(|error| error.to_string())?;
+        let file = metadata_for_file(&target, &state.paths.canvas_root)?;
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        upsert_file_state(&conn, &file)?;
+        copied.push(file);
+    }
+    Ok(copied)
+}
+
+#[tauri::command]
+fn move_file_to_project(
+    state: tauri::State<AppState>,
+    path: String,
+    project: String,
+    strategy: ConflictStrategy,
+) -> Result<FileMetadata, String> {
+    let project = safe_project_segment(&project)?;
+    move_file_to_target(
+        &state,
+        &path,
+        &state.paths.projects_dir.join(project),
+        false,
+        strategy,
+    )
+}
+
+#[tauri::command]
+fn move_file_to_archive(
+    state: tauri::State<AppState>,
+    path: String,
+    strategy: ConflictStrategy,
+) -> Result<FileMetadata, String> {
+    move_file_to_target(&state, &path, &state.paths.archive_dir, true, strategy)
+}
+
+#[tauri::command]
+fn target_file_exists(
+    state: tauri::State<AppState>,
+    target: String,
+    project: Option<String>,
+    filename: String,
+) -> Result<bool, String> {
+    if filename.contains('/') || filename.contains('\\') || filename.is_empty() {
+        return Err("invalid filename".to_owned());
+    }
+    let dir = match target.as_str() {
+        "archive" => state.paths.archive_dir.clone(),
+        "project" => {
+            let project = project.ok_or_else(|| "project is required".to_owned())?;
+            state
+                .paths
+                .projects_dir
+                .join(safe_project_segment(&project)?)
+        }
+        _ => return Err("invalid target".to_owned()),
+    };
+    Ok(dir.join(filename).exists())
+}
+
+#[tauri::command]
+fn copy_text_to_clipboard(text: String) -> Result<String, String> {
+    write_clipboard(&text)?;
+    Ok(text)
+}
+
+#[tauri::command]
+fn reveal_in_finder(path: String) -> Result<(), String> {
+    let path = absolute_doc_path(&path)?;
+    ensure_regular_file(path)?;
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .status()
+            .map_err(|error| error.to_string())?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err("open -R failed".to_owned());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        Err("Reveal in Finder is only available on macOS".to_owned())
+    }
+}
+
+#[tauri::command]
+fn delete_file(state: tauri::State<AppState>, path: String) -> Result<(), String> {
+    let source = absolute_doc_path(&path)?;
+    ensure_regular_file(source)?;
+    ensure_under_root(source, &state.paths.canvas_root)?;
+    fs::remove_file(source).map_err(|error| error.to_string())?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute("DELETE FROM files WHERE path = ?1", params![path])
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn send_to_clipboard(
+    state: tauri::State<AppState>,
+    payload: SendPayload,
+) -> Result<String, String> {
+    let formatted = format_send_payload(&payload, &state.paths.canvas_root)?;
     write_clipboard(&formatted)?;
     Ok(formatted)
 }
@@ -464,10 +662,67 @@ fn open_state_db(path: &Path) -> Result<Connection, String> {
           source TEXT NOT NULL,
           updated_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS projects (
+          name TEXT PRIMARY KEY,
+          default_agent_session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
+          updated_at INTEGER NOT NULL
+        );
         "#,
     )
     .map_err(|error| error.to_string())?;
     Ok(db)
+}
+
+fn get_setting(db: &Mutex<Connection>, key: &str) -> Result<Option<String>, String> {
+    let conn = db.lock().map_err(|_| "state db lock poisoned".to_owned())?;
+    let value = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .ok();
+    Ok(value)
+}
+
+fn set_setting(db: &Mutex<Connection>, key: &str, value: &str) -> Result<(), String> {
+    let conn = db.lock().map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute(
+        r#"
+        INSERT INTO settings(key, value, updated_at)
+        VALUES (?1, ?2, strftime('%s','now'))
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+        "#,
+        params![key, value],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn upsert_project(
+    db: &Mutex<Connection>,
+    name: &str,
+    default_agent_session_id: Option<&str>,
+) -> Result<(), String> {
+    let conn = db.lock().map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute(
+        r#"
+        INSERT INTO projects(name, default_agent_session_id, updated_at)
+        VALUES (?1, ?2, strftime('%s','now'))
+        ON CONFLICT(name) DO UPDATE SET
+          updated_at = excluded.updated_at
+        "#,
+        params![name, default_agent_session_id],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn list_files_under(
@@ -590,13 +845,10 @@ fn upsert_file_state(conn: &Connection, file: &FileMetadata) -> Result<(), Strin
 }
 
 fn is_supported_artifact(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some("md" | "markdown" | "html" | "htm")
-    )
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| !name.starts_with('.'))
+        .unwrap_or(false)
 }
 
 fn resolve_personas(
@@ -725,6 +977,10 @@ fn display_label(name: &str) -> String {
 }
 
 fn unique_archive_path(target: &Path) -> PathBuf {
+    unique_path(target)
+}
+
+fn unique_path(target: &Path) -> PathBuf {
     if !target.exists() {
         return target.to_path_buf();
     }
@@ -746,13 +1002,105 @@ fn unique_archive_path(target: &Path) -> PathBuf {
     unreachable!("archive path suffix search is unbounded")
 }
 
-fn format_send_payload(payload: &SendPayload) -> String {
-    let note = payload.note.as_deref().unwrap_or("").trim();
-    let note = if note.is_empty() { "" } else { note };
-    format!(
-        "Path: {}\nProject: {}\nPersona inferred: {}\n\n{}\n\n-- Jesse's note: {}",
-        payload.path, payload.project, payload.persona, payload.contents, note
+fn move_file_to_target(
+    state: &AppState,
+    source: &str,
+    target_dir: &Path,
+    archived: bool,
+    strategy: ConflictStrategy,
+) -> Result<FileMetadata, String> {
+    if matches!(strategy, ConflictStrategy::Cancel) {
+        return Err("move cancelled".to_owned());
+    }
+    let source = absolute_doc_path(source)?;
+    ensure_regular_file(source)?;
+    ensure_under_root(source, &state.paths.canvas_root)?;
+    fs::create_dir_all(target_dir).map_err(|error| error.to_string())?;
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| "move source has no filename".to_owned())?;
+    let target = target_dir.join(file_name);
+    let target = if target.exists() {
+        match strategy {
+            ConflictStrategy::Replace => {
+                fs::remove_file(&target).map_err(|error| error.to_string())?;
+                target
+            }
+            ConflictStrategy::KeepBoth => unique_path(&target),
+            ConflictStrategy::Cancel => return Err("move cancelled".to_owned()),
+        }
+    } else {
+        target
+    };
+
+    fs::rename(source, &target).map_err(|error| error.to_string())?;
+    let mut file = metadata_for_file(&target, &state.paths.canvas_root)?;
+    file.archived = archived;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute(
+        "UPDATE files SET path = ?1, archived = ?2 WHERE path = ?3",
+        params![
+            file.path,
+            if archived { 1 } else { 0 },
+            source.to_string_lossy()
+        ],
     )
+    .map_err(|error| error.to_string())?;
+    upsert_file_state(&conn, &file)?;
+    Ok(file)
+}
+
+fn ensure_under_root(path: &Path, root: &Path) -> Result<(), String> {
+    path.strip_prefix(root)
+        .map(|_| ())
+        .map_err(|_| "path must live under AgentCanvas root".to_owned())
+}
+
+fn format_send_payload(payload: &SendPayload, canvas_root: &Path) -> Result<String, String> {
+    let note = payload.note.as_deref().unwrap_or("").trim();
+    let note_block = if note.is_empty() {
+        String::new()
+    } else {
+        format!("My note: {note}\n\n")
+    };
+    let relative_path = relative_canvas_path(&payload.path, canvas_root)?;
+    let language = language_from_path(&payload.path);
+    let fence = if language.is_empty() {
+        "```".to_owned()
+    } else {
+        format!("```{language}")
+    };
+    let action = payload.action_verb.trim();
+    let action = if action.is_empty() { "Review" } else { action };
+
+    Ok(format!(
+        "I'm sending you `{relative_path}` from my AgentCanvas.\n\n{note_block}Contents:\n\n{fence}\n{}\n```\n\nAction: {action}",
+        payload.contents
+    ))
+}
+
+fn relative_canvas_path(path: &str, canvas_root: &Path) -> Result<String, String> {
+    let path = Path::new(path);
+    let relative = path
+        .strip_prefix(canvas_root)
+        .map_err(|_| "send payload path must live under AgentCanvas root".to_owned())?;
+    Ok(relative.to_string_lossy().into_owned())
+}
+
+fn language_from_path(path: &str) -> &'static str {
+    match Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("md" | "markdown") => "markdown",
+        Some("html" | "htm") => "html",
+        _ => "",
+    }
 }
 
 fn unix_now() -> i64 {
@@ -851,9 +1199,20 @@ fn main() {
             list_inbox,
             list_projects,
             list_project_files,
+            get_project_default_agent,
+            set_project_default_agent,
             list_personas,
+            get_default_action_verb,
+            set_default_action_verb,
             toggle_pin,
             archive_file,
+            copy_paths_to_inbox,
+            move_file_to_project,
+            move_file_to_archive,
+            target_file_exists,
+            copy_text_to_clipboard,
+            reveal_in_finder,
+            delete_file,
             send_to_clipboard,
             list_agent_sessions,
             add_agent_session,
@@ -887,5 +1246,54 @@ fn fs_event_payload(event: WatchEvent) -> FsEventPayload {
             kind: "renamed",
             path: Some(to.to_string_lossy().into_owned()),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn send_payload_uses_relative_path_fence_note_and_action() {
+        let root =
+            Path::new("/Users/jessepike/Library/Mobile Documents/com~apple~CloudDocs/AgentCanvas");
+        let payload = SendPayload {
+            path: root.join("Inbox/test.md").to_string_lossy().into_owned(),
+            contents: "# Test\n\nBody".to_owned(),
+            note: Some("Tighten this.".to_owned()),
+            action_verb: "Revise".to_owned(),
+        };
+
+        let formatted = format_send_payload(&payload, root).expect("payload formats");
+
+        assert_eq!(
+            formatted,
+            "I'm sending you `Inbox/test.md` from my AgentCanvas.\n\nMy note: Tighten this.\n\nContents:\n\n```markdown\n# Test\n\nBody\n```\n\nAction: Revise"
+        );
+        assert!(!formatted.contains("Path:"));
+        assert!(!formatted.contains("/Users/jessepike/Library/Mobile Documents"));
+    }
+
+    #[test]
+    fn send_payload_omits_empty_note_and_defaults_action() {
+        let root =
+            Path::new("/Users/jessepike/Library/Mobile Documents/com~apple~CloudDocs/AgentCanvas");
+        let payload = SendPayload {
+            path: root
+                .join("Archive/report.html")
+                .to_string_lossy()
+                .into_owned(),
+            contents: "<h1>Report</h1>".to_owned(),
+            note: Some("   ".to_owned()),
+            action_verb: " ".to_owned(),
+        };
+
+        let formatted = format_send_payload(&payload, root).expect("payload formats");
+
+        assert_eq!(
+            formatted,
+            "I'm sending you `Archive/report.html` from my AgentCanvas.\n\nContents:\n\n```html\n<h1>Report</h1>\n```\n\nAction: Review"
+        );
+        assert!(!formatted.contains("My note:"));
     }
 }

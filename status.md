@@ -1,10 +1,36 @@
 ---
 project: agent-canvas
 updated: 2026-05-19
-stage: v0.1.0 shipped
+stage: v0.1.1 patch implemented
 ---
 
 # AgentCanvas — Status
+
+## v0.1.1 Patch Summary
+
+AgentCanvas v0.1.1 patch implemented on 2026-05-19 per `docs/PATCH-SPEC-v0.1.1.md`.
+
+Commit/tag blocker: Codex could not write to `.git` in this sandbox. `git add` failed creating `.git/index.lock` with `Operation not permitted`; `touch .git/codex-write-test` also failed. Slice work is present in the working tree, but local atomic commits and `v0.1.1` tag must be created outside this sandbox.
+
+## v0.1.1 Slice Results
+
+| Slice | Result |
+|---|---|
+| 1 — Restructured payload + dynamic label | Implemented. Payload uses relative path, fenced source, optional `My note`, and `Action:` verb; Rust unit tests cover Markdown and HTML payloads. Button/palette labels now derive from declared agent sessions. |
+| 2 — Send popover | Implemented. Send opens a popover with preset/custom action verbs, optional note, Enter-to-send, Esc-to-cancel, and persisted last-used verb in SQLite `settings`. |
+| 3 — Default agent per project | Implemented. Added `projects.default_agent_session_id`, right-click agent-card default action, command palette default switch, per-project label resolution, and Shift+Cmd+Enter picker path. |
+| 4 — Drag and drop | Implemented. Finder drops copy files to Inbox with collision suffixes; in-app row drag moves files to project/archive with conflict strategy and state row path updates. Drop targets use existing visual-system tokens. |
+| 5 — Context menu + open dialog | Implemented. File row context menu includes Open, Toggle Pin, File to Project, Archive, Send to Agent, Reveal in Finder, Copy Path, and Delete. Titlebar `+` opens native file picker and copies to Inbox. |
+| 6 — Smoke + release | Partially completed. README Recent updated; crate, UI package, and Tauri versions bumped to 0.1.1. Verification commands are recorded below. Commit and tag are blocked by `.git` write permissions in this sandbox. |
+
+## v0.1.1 Verification
+
+- `orb run -m dev pnpm --dir ui run build` passes. Vite still reports the known large-chunk warning.
+- `orb run -m dev cargo fmt --all --check` passes after formatting.
+- `orb run -m dev cargo clippy --workspace -- -D warnings` passes.
+- `orb run -m dev cargo test --workspace` passes: 64 tests.
+- `orb run -m dev cargo run -p vellum-corpus` passes all 67 corpus fixtures byte-identical.
+- Local `git tag v0.1.1` failed because `.git/refs/tags/v0.1.1.lock` cannot be created in this sandbox (`Operation not permitted`).
 
 ## Summary
 
