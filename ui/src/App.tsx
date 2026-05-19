@@ -4,6 +4,7 @@ import { RenderedView } from "./components/RenderedView";
 import { SourceView } from "./components/SourceView";
 import {
   addAgentSession,
+  archiveFile,
   getBootstrapInfo,
   listAgentSessions,
   listInbox,
@@ -12,6 +13,7 @@ import {
   openDocument,
   parseDocument,
   sendToClipboard,
+  togglePin,
   writeDocument,
   type BootstrapInfo,
   type AgentSession,
@@ -45,6 +47,9 @@ export default function App() {
   const [sessionPersona, setSessionPersona] = useState("cto");
   const [sessionBackbone, setSessionBackbone] = useState("claude");
   const [sessionContext, setSessionContext] = useState("AGRC");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [paletteIndex, setPaletteIndex] = useState(0);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<OpenArtifact | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -234,17 +239,62 @@ export default function App() {
     }
   }, [artifact, selectedFile]);
 
+  const toggleCurrentPin = useCallback(async () => {
+    if (!artifact) {
+      return;
+    }
+    await togglePin(artifact.path);
+    await refresh();
+  }, [artifact, refresh]);
+
+  const archiveCurrent = useCallback(async () => {
+    if (!artifact) {
+      return;
+    }
+    await archiveFile(artifact.path);
+    setArtifact(null);
+    setSelectedPath(null);
+    await refresh();
+  }, [artifact, refresh]);
+
+  const paletteItems = useMemo(() => {
+    const actions = [
+      { section: "ACTIONS", label: "Send to Claude", run: sendCurrentArtifact },
+      { section: "ACTIONS", label: "Toggle Pin", run: toggleCurrentPin },
+      { section: "ACTIONS", label: "Archive", run: archiveCurrent },
+      { section: "COMMANDS", label: "Open Project", run: () => undefined }
+    ];
+    const fileItems = files.map((file) => ({
+      section: "FILES",
+      label: file.name,
+      run: () => void openArtifact(file)
+    }));
+    const allItems = [...actions, ...fileItems];
+    const query = paletteQuery.trim().toLowerCase();
+    return query ? allItems.filter((item) => item.label.toLowerCase().includes(query)) : allItems;
+  }, [archiveCurrent, files, openArtifact, paletteQuery, sendCurrentArtifact, toggleCurrentPin]);
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
         void sendCurrentArtifact();
       }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen(true);
+      }
     }
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [sendCurrentArtifact]);
+
+  useEffect(() => {
+    if (paletteIndex >= paletteItems.length) {
+      setPaletteIndex(0);
+    }
+  }, [paletteIndex, paletteItems.length]);
 
   return (
     <main className="desktop">
@@ -426,6 +476,61 @@ export default function App() {
             </aside>
           )}
         </div>
+        {paletteOpen ? (
+          <div className="palette-backdrop" onMouseDown={() => setPaletteOpen(false)}>
+            <section className="palette" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="palette-search">
+                <input
+                  autoFocus
+                  value={paletteQuery}
+                  onChange={(event) => {
+                    setPaletteQuery(event.target.value);
+                    setPaletteIndex(0);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      setPaletteOpen(false);
+                    }
+                    if (event.key === "ArrowDown") {
+                      event.preventDefault();
+                      setPaletteIndex((current) => Math.min(current + 1, Math.max(0, paletteItems.length - 1)));
+                    }
+                    if (event.key === "ArrowUp") {
+                      event.preventDefault();
+                      setPaletteIndex((current) => Math.max(0, current - 1));
+                    }
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      const item = paletteItems[paletteIndex];
+                      if (item) {
+                        void item.run();
+                        setPaletteOpen(false);
+                      }
+                    }
+                  }}
+                  placeholder="Search actions, files, commands"
+                />
+                <span>Esc</span>
+              </div>
+              <div className="palette-results">
+                {paletteItems.map((item, index) => (
+                  <button
+                    className={`palette-row ${index === paletteIndex ? "active" : ""}`}
+                    key={`${item.section}-${item.label}`}
+                    type="button"
+                    onClick={() => {
+                      void item.run();
+                      setPaletteOpen(false);
+                    }}
+                  >
+                    <span>{item.section}</span>
+                    <strong>{item.label}</strong>
+                  </button>
+                ))}
+              </div>
+            </section>
+          </div>
+        ) : null}
       </section>
     </main>
   );

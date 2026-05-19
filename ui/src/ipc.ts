@@ -156,6 +156,24 @@ export async function sendToClipboard(payload: SendPayload): Promise<string> {
   }
 }
 
+export async function togglePin(path: string): Promise<boolean> {
+  try {
+    const result = await invoke<unknown>("toggle_pin", { path });
+    return z.boolean().parse(result);
+  } catch (caught) {
+    throw ipcError("toggle_pin", caught);
+  }
+}
+
+export async function archiveFile(path: string): Promise<string> {
+  try {
+    const result = await invoke<unknown>("archive_file", { path });
+    return z.string().parse(result);
+  } catch (caught) {
+    throw ipcError("archive_file", caught);
+  }
+}
+
 export async function listAgentSessions(): Promise<AgentSession[]> {
   try {
     const result = await invoke<unknown>("list_agent_sessions");

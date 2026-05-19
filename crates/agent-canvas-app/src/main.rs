@@ -159,6 +159,49 @@ fn list_personas(state: tauri::State<AppState>) -> Result<PersonaRegistry, Strin
 }
 
 #[tauri::command]
+fn toggle_pin(state: tauri::State<AppState>, path: String) -> Result<bool, String> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    let current: i64 = conn
+        .query_row(
+            "SELECT pinned FROM files WHERE path = ?1",
+            params![path],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    let next = if current == 0 { 1 } else { 0 };
+    conn.execute(
+        "UPDATE files SET pinned = ?1 WHERE path = ?2",
+        params![next, path],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(next == 1)
+}
+
+#[tauri::command]
+fn archive_file(state: tauri::State<AppState>, path: String) -> Result<String, String> {
+    let source = absolute_doc_path(&path)?;
+    ensure_regular_file(source)?;
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| "archive source has no filename".to_owned())?;
+    let target = unique_archive_path(&state.paths.archive_dir.join(file_name));
+    fs::rename(source, &target).map_err(|error| error.to_string())?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute(
+        "UPDATE files SET path = ?1, archived = 1 WHERE path = ?2",
+        params![target.to_string_lossy(), path],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 fn send_to_clipboard(payload: SendPayload) -> Result<String, String> {
     let formatted = format_send_payload(&payload);
     write_clipboard(&formatted)?;
@@ -443,8 +486,9 @@ fn list_files_under(
         if !entry.file_type().is_file() || !is_supported_artifact(entry.path()) {
             continue;
         }
-        let file = metadata_for_file(entry.path(), canvas_root)?;
+        let mut file = metadata_for_file(entry.path(), canvas_root)?;
         upsert_file_state(&conn, &file)?;
+        hydrate_file_state(&conn, &mut file)?;
         files.push(file);
     }
 
@@ -455,6 +499,22 @@ fn list_files_under(
             .then_with(|| left.name.cmp(&right.name))
     });
     Ok(files)
+}
+
+fn hydrate_file_state(conn: &Connection, file: &mut FileMetadata) -> Result<(), String> {
+    let state: Option<(i64, i64, Option<i64>)> = conn
+        .query_row(
+            "SELECT pinned, archived, last_read_at FROM files WHERE path = ?1",
+            params![file.path],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .ok();
+    if let Some((pinned, archived, last_read_at)) = state {
+        file.pinned = pinned != 0;
+        file.archived = archived != 0;
+        file.last_read_at = last_read_at;
+    }
+    Ok(())
 }
 
 fn metadata_for_file(path: &Path, canvas_root: &Path) -> Result<FileMetadata, String> {
@@ -664,6 +724,28 @@ fn display_label(name: &str) -> String {
     }
 }
 
+fn unique_archive_path(target: &Path) -> PathBuf {
+    if !target.exists() {
+        return target.to_path_buf();
+    }
+    let stem = target
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("artifact");
+    let extension = target.extension().and_then(|extension| extension.to_str());
+    for index in 1.. {
+        let candidate_name = match extension {
+            Some(extension) => format!("{stem}-{index}.{extension}"),
+            None => format!("{stem}-{index}"),
+        };
+        let candidate = target.with_file_name(candidate_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("archive path suffix search is unbounded")
+}
+
 fn format_send_payload(payload: &SendPayload) -> String {
     let note = payload.note.as_deref().unwrap_or("").trim();
     let note = if note.is_empty() { "" } else { note };
@@ -770,6 +852,8 @@ fn main() {
             list_projects,
             list_project_files,
             list_personas,
+            toggle_pin,
+            archive_file,
             send_to_clipboard,
             list_agent_sessions,
             add_agent_session,
