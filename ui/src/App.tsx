@@ -9,6 +9,7 @@ import {
   listProjects,
   openDocument,
   parseDocument,
+  sendToClipboard,
   writeDocument,
   type BootstrapInfo,
   type FileMetadata,
@@ -43,6 +44,7 @@ export default function App() {
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [handoffToast, setHandoffToast] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -187,6 +189,39 @@ export default function App() {
     setSavedAt(null);
   }
 
+  const sendCurrentArtifact = useCallback(async () => {
+    if (!artifact) {
+      return;
+    }
+    const note = window.prompt("Optional note for Claude") ?? "";
+    try {
+      await sendToClipboard({
+        path: artifact.path,
+        project: projectForPath(artifact.path),
+        persona: selectedFile?.persona ?? "claude",
+        contents: artifact.source,
+        note: note.trim() ? note : null
+      });
+      const message = "Copied to clipboard — paste into your Claude / Codex session";
+      setHandoffToast(message);
+      window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3500);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [artifact, selectedFile]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        void sendCurrentArtifact();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [sendCurrentArtifact]);
+
   return (
     <main className="desktop">
       <section className="window-shell" aria-label="AgentCanvas">
@@ -265,7 +300,7 @@ export default function App() {
                 >
                   {artifact?.kind === "html" ? (sourceMode ? "Render" : "View Source") : editMode ? "Preview" : "Edit"}
                 </button>
-                <button className="primary" type="button" disabled={!artifact}>
+                <button className="primary" type="button" onClick={() => void sendCurrentArtifact()} disabled={!artifact}>
                   Send to Claude
                 </button>
                 <button type="button" onClick={() => void saveArtifact()} disabled={!artifact?.dirty || isSaving}>
@@ -281,6 +316,7 @@ export default function App() {
             ) : null}
             {personas?.warning ? <div className="registry-warning">{personas.warning}</div> : null}
             {savedAt ? <div className="saved-toast">Saved {savedAt}</div> : null}
+            {handoffToast ? <div className="handoff-toast">{handoffToast}</div> : null}
             {artifact ? (
               editMode || sourceMode ? (
                 <section className="source-panel" aria-label="Source editor">
@@ -325,6 +361,15 @@ function markdownExtension(extension: string): boolean {
 
 function htmlExtension(extension: string): boolean {
   return extension === "html" || extension === "htm";
+}
+
+function projectForPath(path: string): string {
+  const marker = "/Projects/";
+  const index = path.indexOf(marker);
+  if (index === -1) {
+    return "Inbox";
+  }
+  return path.slice(index + marker.length).split(/[\\/]/)[0] || "Inbox";
 }
 
 function labelForPersona(persona: string): string {

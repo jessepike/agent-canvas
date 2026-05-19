@@ -46,6 +46,17 @@ export const PersonaRegistry = z
   .strict();
 export type PersonaRegistry = z.infer<typeof PersonaRegistry>;
 
+export const SendPayload = z
+  .object({
+    path: z.string(),
+    project: z.string(),
+    persona: z.string(),
+    contents: z.string(),
+    note: z.string().nullable()
+  })
+  .strict();
+export type SendPayload = z.infer<typeof SendPayload>;
+
 export const BootstrapInfo = z
   .object({
     canvas_root: z.string(),
@@ -112,6 +123,15 @@ export async function listPersonas(): Promise<PersonaRegistry> {
     return PersonaRegistry.parse(result);
   } catch (caught) {
     throw ipcError("list_personas", caught);
+  }
+}
+
+export async function sendToClipboard(payload: SendPayload): Promise<string> {
+  try {
+    const result = await invoke<unknown>("send_to_clipboard", { payload });
+    return z.string().parse(result);
+  } catch (caught) {
+    throw ipcError("send_to_clipboard", caught);
   }
 }
 

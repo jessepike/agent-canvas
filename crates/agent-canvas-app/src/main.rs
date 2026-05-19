@@ -7,8 +7,14 @@ use std::{
     time::UNIX_EPOCH,
 };
 
+#[cfg(target_os = "macos")]
+use std::{
+    io::Write,
+    process::{Command, Stdio},
+};
+
 use rusqlite::{Connection, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 use vellum_core::{
     block::patch::BlockPatch,
@@ -75,6 +81,15 @@ struct PersonaRegistry {
     warning: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct SendPayload {
+    path: String,
+    project: String,
+    persona: String,
+    contents: String,
+    note: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct FsEventPayload {
     kind: &'static str,
@@ -96,7 +111,10 @@ fn list_project_files(
     state: tauri::State<AppState>,
     project: String,
 ) -> Result<Vec<FileMetadata>, String> {
-    let project_dir = state.paths.projects_dir.join(safe_project_segment(&project)?);
+    let project_dir = state
+        .paths
+        .projects_dir
+        .join(safe_project_segment(&project)?);
     list_files_under(&project_dir, &state.paths.canvas_root, &state.db)
 }
 
@@ -105,7 +123,10 @@ fn list_projects(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
     let mut projects = Vec::new();
     for entry in fs::read_dir(&state.paths.projects_dir).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
-        if entry.file_type().map_err(|error| error.to_string())?.is_dir()
+        if entry
+            .file_type()
+            .map_err(|error| error.to_string())?
+            .is_dir()
             && let Some(name) = entry.file_name().to_str()
         {
             projects.push(name.to_owned());
@@ -118,6 +139,13 @@ fn list_projects(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
 #[tauri::command]
 fn list_personas(state: tauri::State<AppState>) -> Result<PersonaRegistry, String> {
     resolve_personas(&state.paths.persona_registry, &state.db)
+}
+
+#[tauri::command]
+fn send_to_clipboard(payload: SendPayload) -> Result<String, String> {
+    let formatted = format_send_payload(&payload);
+    write_clipboard(&formatted)?;
+    Ok(formatted)
 }
 
 #[tauri::command]
@@ -212,7 +240,12 @@ impl AgentCanvasPaths {
             .join("AgentCanvas");
         let persona_registry = std::env::var_os("AGENTCANVAS_PERSONA_REGISTRY")
             .map(PathBuf::from)
-            .unwrap_or_else(|| home.join("code").join("_shared").join("pike-agents").join("plugins"));
+            .unwrap_or_else(|| {
+                home.join("code")
+                    .join("_shared")
+                    .join("pike-agents")
+                    .join("plugins")
+            });
 
         Ok(Self {
             cloud_docs_root,
@@ -335,7 +368,12 @@ fn list_files_under(
         files.push(file);
     }
 
-    files.sort_by(|left, right| right.mtime.cmp(&left.mtime).then_with(|| left.name.cmp(&right.name)));
+    files.sort_by(|left, right| {
+        right
+            .mtime
+            .cmp(&left.mtime)
+            .then_with(|| left.name.cmp(&right.name))
+    });
     Ok(files)
 }
 
@@ -399,7 +437,12 @@ fn upsert_file_state(conn: &Connection, file: &FileMetadata) -> Result<(), Strin
           size = excluded.size,
           mtime = excluded.mtime
         "#,
-        params![file.path, file.last_seen_hash.as_slice(), file.size as i64, file.mtime],
+        params![
+            file.path,
+            file.last_seen_hash.as_slice(),
+            file.size as i64,
+            file.mtime
+        ],
     )
     .map_err(|error| error.to_string())?;
 
@@ -425,9 +468,13 @@ fn resolve_personas(
 
     if registry_root.exists() {
         for &(name, fallback_color) in builtin_persona_colors() {
-            let path = registry_root.join(name).join("agents").join(format!("{name}.md"));
+            let path = registry_root
+                .join(name)
+                .join("agents")
+                .join(format!("{name}.md"));
             if let Ok(source) = fs::read_to_string(&path) {
-                let color = frontmatter_value(&source, "color").unwrap_or_else(|| fallback_color.to_owned());
+                let color = frontmatter_value(&source, "color")
+                    .unwrap_or_else(|| fallback_color.to_owned());
                 personas.push(Persona {
                     name: name.to_owned(),
                     color,
@@ -457,7 +504,12 @@ fn resolve_personas(
               source = excluded.source,
               updated_at = excluded.updated_at
             "#,
-            params![persona.name, persona.color, persona.display_label, persona.source],
+            params![
+                persona.name,
+                persona.color,
+                persona.display_label,
+                persona.source
+            ],
         )
         .map_err(|error| error.to_string())?;
     }
@@ -532,8 +584,47 @@ fn display_label(name: &str) -> String {
     }
 }
 
+fn format_send_payload(payload: &SendPayload) -> String {
+    let note = payload.note.as_deref().unwrap_or("").trim();
+    let note = if note.is_empty() { "" } else { note };
+    format!(
+        "Path: {}\nProject: {}\nPersona inferred: {}\n\n{}\n\n-- Jesse's note: {}",
+        payload.path, payload.project, payload.persona, payload.contents, note
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn write_clipboard(contents: &str) -> Result<(), String> {
+    let mut child = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| "pbcopy stdin unavailable".to_owned())?
+        .write_all(contents.as_bytes())
+        .map_err(|error| error.to_string())?;
+    let status = child.wait().map_err(|error| error.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("pbcopy failed".to_owned())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn write_clipboard(contents: &str) -> Result<(), String> {
+    fs::write("/tmp/agentcanvas-clipboard.txt", contents).map_err(|error| error.to_string())
+}
+
 fn safe_project_segment(project: &str) -> Result<&str, String> {
-    if project.is_empty() || project.contains('/') || project.contains('\\') || project == "." || project == ".." {
+    if project.is_empty()
+        || project.contains('/')
+        || project.contains('\\')
+        || project == "."
+        || project == ".."
+    {
         Err("invalid project name".to_owned())
     } else {
         Ok(project)
@@ -583,10 +674,7 @@ fn main() {
                 let payload = fs_event_payload(event);
                 let _ = app_handle.emit("agentcanvas://fs-event", payload);
             })?;
-            *state
-                .watcher
-                .lock()
-                .map_err(|_| "watcher lock poisoned")? = Some(watcher);
+            *state.watcher.lock().map_err(|_| "watcher lock poisoned")? = Some(watcher);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -595,6 +683,7 @@ fn main() {
             list_projects,
             list_project_files,
             list_personas,
+            send_to_clipboard,
             parse_document,
             save_document,
             open_document,
