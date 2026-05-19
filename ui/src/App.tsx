@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { RenderedView } from "./components/RenderedView";
 import { SourceView } from "./components/SourceView";
@@ -54,6 +54,8 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [paletteIndex, setPaletteIndex] = useState(0);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<OpenArtifact | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -209,6 +211,16 @@ export default function App() {
     };
   }, [refresh, reloadOpenArtifact]);
 
+  useEffect(() => {
+    function handleFocus() {
+      void refresh();
+      void reloadOpenArtifact();
+    }
+
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
+  }, [refresh, reloadOpenArtifact]);
+
   const saveArtifact = useCallback(async () => {
     if (!artifact) {
       return;
@@ -300,6 +312,9 @@ export default function App() {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (isTextInput(event.target)) {
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
         void sendCurrentArtifact();
@@ -308,11 +323,55 @@ export default function App() {
         event.preventDefault();
         setPaletteOpen(true);
       }
+      if (event.key === "j") {
+        event.preventDefault();
+        moveSelection(1, files, selectedPath, setSelectedPath);
+      }
+      if (event.key === "k") {
+        event.preventDefault();
+        moveSelection(-1, files, selectedPath, setSelectedPath);
+      }
+      if (event.key === "Enter" && selectedFile) {
+        event.preventDefault();
+        void openArtifact(selectedFile);
+      }
+      if (event.key === "e") {
+        event.preventDefault();
+        setEditMode((current) => !current);
+      }
+      if (event.key === "s") {
+        event.preventDefault();
+        void sendCurrentArtifact();
+      }
+      if (event.key === "p") {
+        event.preventDefault();
+        void toggleCurrentPin();
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key === "Backspace") {
+        event.preventDefault();
+        void archiveCurrent();
+      }
+      if (event.key === "/") {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+      if (event.key === "?") {
+        event.preventDefault();
+        setShortcutsOpen((current) => !current);
+      }
     }
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [sendCurrentArtifact]);
+  }, [
+    archiveCurrent,
+    files,
+    openArtifact,
+    selectedFile,
+    selectedPath,
+    sendCurrentArtifact,
+    toggleCurrentPin
+  ]);
 
   useEffect(() => {
     if (paletteIndex >= paletteItems.length) {
@@ -339,7 +398,7 @@ export default function App() {
             <div className="sidebar-header">
               <label className="search">
                 <span>Search</span>
-                <input placeholder="Search artifacts" />
+                <input ref={searchRef} placeholder="Search artifacts" />
               </label>
             </div>
             <div className="section-header">
@@ -585,6 +644,21 @@ export default function App() {
             </section>
           </div>
         ) : null}
+        {shortcutsOpen ? (
+          <div className="shortcuts-overlay">
+            <div className="shortcuts-card">
+              <strong>Keyboard</strong>
+              <span>j/k nav</span>
+              <span>Enter open</span>
+              <span>e edit</span>
+              <span>s send</span>
+              <span>p pin</span>
+              <span>Cmd+Backspace archive</span>
+              <span>/ search</span>
+              <span>Cmd+K palette</span>
+            </div>
+          </div>
+        ) : null}
       </section>
     </main>
   );
@@ -612,6 +686,33 @@ function labelForPersona(persona: string): string {
     return "AGF";
   }
   return persona;
+}
+
+function moveSelection(
+  direction: 1 | -1,
+  files: FileMetadata[],
+  selectedPath: string | null,
+  setSelectedPath: (path: string | null) => void
+) {
+  if (files.length === 0) {
+    return;
+  }
+  const current = files.findIndex((file) => file.path === selectedPath);
+  const next = current === -1 ? 0 : Math.min(files.length - 1, Math.max(0, current + direction));
+  setSelectedPath(files[next]?.path ?? null);
+}
+
+function isTextInput(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  return (
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT" ||
+    target.isContentEditable ||
+    Boolean(target.closest(".cm-editor"))
+  );
 }
 
 function fileName(path: string): string {

@@ -982,3 +982,35 @@ button:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.shortcuts-overlay {
+  position: fixed;
+  right: 34px;
+  bottom: 34px;
+  z-index: 900;
+}
+
+.shortcuts-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 7px 14px;
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--bg-window);
+  box-shadow: var(--shadow-window);
+}
+
+.shortcuts-card strong {
+  grid-column: 1 / -1;
+  color: var(--text);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.shortcuts-card span {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
