@@ -9,7 +9,7 @@ Status: `todo` / `in-progress` / `blocked` / `done` / `cut`.
 | 1 | done | Migration scaffolding: package rename, legacy docs, fresh React shell, context docs |
 | 2 | done | iCloud substrate, SQLite state, inbox list view |
 | 3 | done | Markdown render, edit mode, atomic save with conflict banner |
-| 4 | todo | Sandboxed HTML render and source toggle |
+| 4 | done | Sandboxed HTML render and source toggle |
 | 5 | todo | Recursive watcher, debounce, UI invalidation |
 | 6 | todo | Persona registry from pike-agents with SQLite cache and fallback |
 | 7 | todo | Pasteboard Send-to-Claude payload |

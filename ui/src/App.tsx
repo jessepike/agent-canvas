@@ -30,6 +30,7 @@ export default function App() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<OpenArtifact | null>(null);
   const [editMode, setEditMode] = useState(false);
+  const [sourceMode, setSourceMode] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -86,6 +87,7 @@ export default function App() {
         kind
       });
       setEditMode(false);
+      setSourceMode(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -191,8 +193,19 @@ export default function App() {
                 Inbox <span>/</span> <strong>{selectedFile?.name ?? "Select a file"}</strong>
               </div>
               <div className="toolbar-actions">
-                <button type="button" onClick={() => setEditMode((current) => !current)} disabled={!artifact}>
-                  {editMode ? "Preview" : "Edit"}
+                <button
+                  type="button"
+                  onClick={() =>
+                    artifact?.kind === "html"
+                      ? setSourceMode((current) => !current)
+                      : setEditMode((current) => !current)
+                  }
+                  disabled={!artifact}
+                >
+                  {artifact?.kind === "html" ? (sourceMode ? "Render" : "View Source") : editMode ? "Preview" : "Edit"}
+                </button>
+                <button className="primary" type="button" disabled={!artifact}>
+                  Send to Claude
                 </button>
                 <button type="button" onClick={() => void saveArtifact()} disabled={!artifact?.dirty || isSaving}>
                   {isSaving ? "Saving" : "Save"}
@@ -207,7 +220,7 @@ export default function App() {
             ) : null}
             {savedAt ? <div className="saved-toast">Saved {savedAt}</div> : null}
             {artifact ? (
-              editMode ? (
+              editMode || sourceMode ? (
                 <section className="source-panel" aria-label="Source editor">
                   <SourceView value={artifact.source} onChange={updateSource} onSave={saveArtifact} />
                 </section>
@@ -215,11 +228,15 @@ export default function App() {
                 <section className="rendered-panel" aria-label="Rendered Markdown">
                   <RenderedView blocks={artifact.blocks} />
                 </section>
+              ) : artifact.kind === "html" ? (
+                <section className="html-panel" aria-label="Rendered HTML">
+                  <iframe title={fileName(artifact.path)} sandbox="allow-same-origin" srcDoc={artifact.source} />
+                </section>
               ) : (
                 <article className="document placeholder-document">
-                  <p className="eyebrow">{artifact.kind.toUpperCase()} artifact</p>
+                  <p className="eyebrow">Unsupported artifact</p>
                   <h1>{fileName(artifact.path)}</h1>
-                  <p>HTML rendering lands in Slice 4. Use Edit to inspect the source for now.</p>
+                  <p>This v0 viewer supports Markdown and HTML only.</p>
                 </article>
               )
             ) : (
