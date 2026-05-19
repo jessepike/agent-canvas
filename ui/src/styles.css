@@ -338,12 +338,38 @@ button:hover {
 }
 
 .content-pane {
+  position: relative;
   display: flex;
   min-width: 0;
   flex: 1;
   flex-direction: column;
   overflow: hidden;
   background: var(--bg-doc);
+}
+
+.conflict-banner {
+  margin: 12px 18px 0;
+  border: 0.5px solid var(--pending-border);
+  border-radius: 6px;
+  padding: 9px 12px;
+  color: var(--pending-deep);
+  background: var(--pending-bg);
+  font-size: 13px;
+}
+
+.saved-toast {
+  position: absolute;
+  right: 66px;
+  bottom: 24px;
+  z-index: 20;
+  border: 0.5px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  color: var(--accent-deep);
+  background: var(--accent-soft);
+  font-size: 12.5px;
+  font-weight: 600;
+  box-shadow: var(--shadow-toolbar-btn);
 }
 
 .toolbar {
@@ -414,6 +440,125 @@ button:hover {
   color: #2a2823;
   font-size: 14.5px;
   line-height: 1.65;
+}
+
+.source-panel,
+.rendered-panel {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.source-view,
+.rendered-view {
+  flex: 1;
+  min-width: 0;
+}
+
+.source-view {
+  border-top: 0.5px solid var(--border-soft);
+}
+
+.cm-editor {
+  height: 100%;
+  color: var(--text);
+  background: var(--bg-doc);
+}
+
+.cm-scroller {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.rendered-view {
+  overflow: auto;
+  padding: 34px 54px 54px;
+}
+
+.ProseMirror {
+  width: min(700px, 100%);
+  min-height: 100%;
+  margin: 0 auto;
+  outline: none;
+  color: #2a2823;
+  font-family: var(--font-serif);
+  font-size: 16px;
+  line-height: 1.68;
+}
+
+.ProseMirror h1,
+.ProseMirror h2,
+.ProseMirror h3 {
+  color: var(--text);
+  font-family: var(--font-display);
+  line-height: 1.14;
+  letter-spacing: -0.02em;
+}
+
+.ProseMirror h1 {
+  margin: 0 0 16px;
+  font-size: 32px;
+}
+
+.ProseMirror h2 {
+  margin: 28px 0 10px;
+  font-size: 22px;
+}
+
+.ProseMirror p {
+  margin: 0 0 14px;
+}
+
+.ProseMirror code,
+.ProseMirror pre {
+  font-family: var(--font-mono);
+}
+
+.ProseMirror pre {
+  overflow: auto;
+  border: 0.5px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--bg-sidebar);
+  font-size: 12px;
+}
+
+.ProseMirror blockquote {
+  margin: 18px 0;
+  border-left: 3px solid var(--border-strong);
+  padding-left: 16px;
+  color: var(--text-secondary);
+}
+
+.pm-primitive,
+.pm-frontmatter {
+  display: grid;
+  gap: 5px;
+  margin: 12px 0;
+  border: 0.5px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--bg-sidebar);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+}
+
+.pm-primitive-label {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.pm-badge {
+  width: fit-content;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--text-secondary);
+  background: var(--bg-window);
+  font-size: 11px;
 }
 
 .placeholder-document {

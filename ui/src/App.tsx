@@ -1,14 +1,41 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getBootstrapInfo, listInbox, listProjects, type BootstrapInfo, type FileMetadata } from "./ipc";
+import { RenderedView } from "./components/RenderedView";
+import { SourceView } from "./components/SourceView";
+import {
+  getBootstrapInfo,
+  listInbox,
+  listProjects,
+  openDocument,
+  parseDocument,
+  writeDocument,
+  type BootstrapInfo,
+  type FileMetadata
+} from "./ipc";
+import type { Block } from "./types/blocks";
 import "./styles.css";
+
+type OpenArtifact = {
+  path: string;
+  source: string;
+  baseHash: number[];
+  blocks: Block[];
+  dirty: boolean;
+  kind: "md" | "html" | "unsupported";
+};
 
 export default function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapInfo | null>(null);
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [artifact, setArtifact] = useState<OpenArtifact | null>(null);
+  const [editMode, setEditMode] = useState(false);
+  const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isOpening, setIsOpening] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const refresh = useCallback(async () => {
     setIsLoading(true);
@@ -38,6 +65,66 @@ export default function App() {
     () => files.find((file) => file.path === selectedPath) ?? null,
     [files, selectedPath]
   );
+
+  const openArtifact = useCallback(async (file: FileMetadata) => {
+    setSelectedPath(file.path);
+    setIsOpening(true);
+    setConflict(false);
+    setError(null);
+    setSavedAt(null);
+
+    try {
+      const opened = await openDocument(file.path);
+      const kind = markdownExtension(file.extension) ? "md" : htmlExtension(file.extension) ? "html" : "unsupported";
+      const blocks = kind === "md" ? await parseDocument(opened.source) : [];
+      setArtifact({
+        path: opened.path,
+        source: opened.source,
+        baseHash: opened.base_hash,
+        blocks,
+        dirty: false,
+        kind
+      });
+      setEditMode(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setIsOpening(false);
+    }
+  }, []);
+
+  const saveArtifact = useCallback(async () => {
+    if (!artifact) {
+      return;
+    }
+    setIsSaving(true);
+    setConflict(false);
+    setError(null);
+    try {
+      const result = await writeDocument(artifact.path, artifact.source, artifact.baseHash);
+      const blocks = artifact.kind === "md" ? await parseDocument(artifact.source) : [];
+      setArtifact({ ...artifact, baseHash: result.new_hash, blocks, dirty: false });
+      const stamp = currentTime();
+      setSavedAt(stamp);
+      window.setTimeout(() => setSavedAt((current) => (current === stamp ? null : current)), 3000);
+      await refresh();
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      if (message.startsWith("CONFLICT:")) {
+        setConflict(true);
+      } else {
+        setError(message);
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  }, [artifact, refresh]);
+
+  function updateSource(next: string) {
+    setArtifact((current) => (current ? { ...current, source: next, dirty: true } : current));
+    setConflict(false);
+    setSavedAt(null);
+  }
 
   return (
     <main className="desktop">
@@ -77,7 +164,7 @@ export default function App() {
                     className={`file-row ${file.path === selectedPath ? "selected" : ""}`}
                     key={file.path}
                     type="button"
-                    onClick={() => setSelectedPath(file.path)}
+                    onClick={() => void openArtifact(file)}
                   >
                     <span className="arrival-dot" />
                     <span className="file-name">{file.name}</span>
@@ -103,36 +190,46 @@ export default function App() {
               <div className="breadcrumb">
                 Inbox <span>/</span> <strong>{selectedFile?.name ?? "Select a file"}</strong>
               </div>
+              <div className="toolbar-actions">
+                <button type="button" onClick={() => setEditMode((current) => !current)} disabled={!artifact}>
+                  {editMode ? "Preview" : "Edit"}
+                </button>
+                <button type="button" onClick={() => void saveArtifact()} disabled={!artifact?.dirty || isSaving}>
+                  {isSaving ? "Saving" : "Save"}
+                </button>
+              </div>
             </div>
-            <article className="document placeholder-document">
-              {selectedFile ? (
-                <>
-                  <p className="eyebrow">{selectedFile.extension.toUpperCase()} artifact</p>
-                  <h1>{selectedFile.name}</h1>
-                  <dl className="metadata-grid">
-                    <div>
-                      <dt>Path</dt>
-                      <dd>{selectedFile.relative_path}</dd>
-                    </div>
-                    <div>
-                      <dt>Size</dt>
-                      <dd>{formatBytes(selectedFile.size)}</dd>
-                    </div>
-                    <div>
-                      <dt>Modified</dt>
-                      <dd>{new Date(selectedFile.mtime * 1000).toLocaleString()}</dd>
-                    </div>
-                  </dl>
-                </>
+            {conflict ? (
+              <div className="conflict-banner" role="alert">
+                {fileName(artifact?.path ?? "File")} changed on disk since open. Save aborted — reload or copy your edit
+                elsewhere.
+              </div>
+            ) : null}
+            {savedAt ? <div className="saved-toast">Saved {savedAt}</div> : null}
+            {artifact ? (
+              editMode ? (
+                <section className="source-panel" aria-label="Source editor">
+                  <SourceView value={artifact.source} onChange={updateSource} onSave={saveArtifact} />
+                </section>
+              ) : artifact.kind === "md" ? (
+                <section className="rendered-panel" aria-label="Rendered Markdown">
+                  <RenderedView blocks={artifact.blocks} />
+                </section>
               ) : (
-                <>
-                  <p className="eyebrow">Ready</p>
-                  <h1>Select a file.</h1>
-                  <p>Drop Markdown or HTML artifacts into the AgentCanvas inbox and rescan.</p>
-                </>
-              )}
-              {error ? <p className="error-banner">{error}</p> : null}
-            </article>
+                <article className="document placeholder-document">
+                  <p className="eyebrow">{artifact.kind.toUpperCase()} artifact</p>
+                  <h1>{fileName(artifact.path)}</h1>
+                  <p>HTML rendering lands in Slice 4. Use Edit to inspect the source for now.</p>
+                </article>
+              )
+            ) : (
+              <article className="document placeholder-document">
+                <p className="eyebrow">Ready</p>
+                <h1>{isOpening ? "Opening..." : "Select a file."}</h1>
+                <p>Drop Markdown or HTML artifacts into the AgentCanvas inbox and rescan.</p>
+              </article>
+            )}
+            {error ? <p className="error-banner">{error}</p> : null}
           </section>
           <aside className="agent-gutter">
             <button type="button">+ Connect</button>
@@ -143,6 +240,18 @@ export default function App() {
   );
 }
 
+function markdownExtension(extension: string): boolean {
+  return extension === "md" || extension === "markdown";
+}
+
+function htmlExtension(extension: string): boolean {
+  return extension === "html" || extension === "htm";
+}
+
+function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
+
 function formatTime(epochSeconds: number): string {
   if (!epochSeconds) {
     return "--:--";
@@ -151,12 +260,10 @@ function formatTime(epochSeconds: number): string {
   return `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+function currentTime(): string {
+  const date = new Date();
+  return `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}:${date
+    .getSeconds()
+    .toString()
+    .padStart(2, "0")}`;
 }
