@@ -33,6 +33,7 @@ struct AgentCanvasPaths {
     projects_dir: PathBuf,
     archive_dir: PathBuf,
     state_db: PathBuf,
+    persona_registry: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,6 +58,21 @@ struct FileMetadata {
     pinned: bool,
     archived: bool,
     last_read_at: Option<i64>,
+    persona: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct Persona {
+    name: String,
+    color: String,
+    display_label: String,
+    source: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PersonaRegistry {
+    personas: Vec<Persona>,
+    warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -97,6 +113,11 @@ fn list_projects(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
     }
     projects.sort();
     Ok(projects)
+}
+
+#[tauri::command]
+fn list_personas(state: tauri::State<AppState>) -> Result<PersonaRegistry, String> {
+    resolve_personas(&state.paths.persona_registry, &state.db)
 }
 
 #[tauri::command]
@@ -189,6 +210,9 @@ impl AgentCanvasPaths {
             .join("Library")
             .join("Application Support")
             .join("AgentCanvas");
+        let persona_registry = std::env::var_os("AGENTCANVAS_PERSONA_REGISTRY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join("code").join("_shared").join("pike-agents").join("plugins"));
 
         Ok(Self {
             cloud_docs_root,
@@ -198,6 +222,7 @@ impl AgentCanvasPaths {
             canvas_root,
             user_symlink,
             state_db: app_support.join("state.db"),
+            persona_registry,
         })
     }
 
@@ -276,6 +301,13 @@ fn open_state_db(path: &Path) -> Result<Connection, String> {
           created_at INTEGER NOT NULL,
           status TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS personas (
+          name TEXT PRIMARY KEY,
+          color TEXT NOT NULL,
+          display_label TEXT NOT NULL,
+          source TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
         "#,
     )
     .map_err(|error| error.to_string())?;
@@ -337,6 +369,7 @@ fn metadata_for_file(path: &Path, canvas_root: &Path) -> Result<FileMetadata, St
         pinned: false,
         archived: false,
         last_read_at: None,
+        persona: infer_persona(path),
     })
 }
 
@@ -381,6 +414,122 @@ fn is_supported_artifact(path: &Path) -> bool {
             .as_deref(),
         Some("md" | "markdown" | "html" | "htm")
     )
+}
+
+fn resolve_personas(
+    registry_root: &Path,
+    db: &Mutex<Connection>,
+) -> Result<PersonaRegistry, String> {
+    let mut personas = Vec::new();
+    let mut warning = None;
+
+    if registry_root.exists() {
+        for &(name, fallback_color) in builtin_persona_colors() {
+            let path = registry_root.join(name).join("agents").join(format!("{name}.md"));
+            if let Ok(source) = fs::read_to_string(&path) {
+                let color = frontmatter_value(&source, "color").unwrap_or_else(|| fallback_color.to_owned());
+                personas.push(Persona {
+                    name: name.to_owned(),
+                    color,
+                    display_label: display_label(name),
+                    source: "pike-agents".to_owned(),
+                });
+            }
+        }
+        if personas.is_empty() {
+            warning = Some("persona registry unavailable, using defaults".to_owned());
+            personas = builtin_personas();
+        }
+    } else {
+        warning = Some("persona registry unavailable, using defaults".to_owned());
+        personas = builtin_personas();
+    }
+
+    let conn = db.lock().map_err(|_| "state db lock poisoned".to_owned())?;
+    for persona in &personas {
+        conn.execute(
+            r#"
+            INSERT INTO personas(name, color, display_label, source, updated_at)
+            VALUES (?1, ?2, ?3, ?4, strftime('%s','now'))
+            ON CONFLICT(name) DO UPDATE SET
+              color = excluded.color,
+              display_label = excluded.display_label,
+              source = excluded.source,
+              updated_at = excluded.updated_at
+            "#,
+            params![persona.name, persona.color, persona.display_label, persona.source],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+
+    Ok(PersonaRegistry { personas, warning })
+}
+
+fn frontmatter_value(source: &str, key: &str) -> Option<String> {
+    let mut lines = source.lines();
+    if lines.next()? != "---" {
+        return None;
+    }
+
+    for line in lines {
+        if line == "---" {
+            break;
+        }
+        if let Some((candidate, value)) = line.split_once(':')
+            && candidate.trim() == key
+        {
+            return Some(value.trim().trim_matches('"').to_owned());
+        }
+    }
+    None
+}
+
+fn infer_persona(path: &Path) -> String {
+    let lower = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    builtin_persona_colors()
+        .iter()
+        .find_map(|(name, _)| lower.contains(name).then(|| (*name).to_owned()))
+        .unwrap_or_else(|| "claude".to_owned())
+}
+
+fn builtin_personas() -> Vec<Persona> {
+    builtin_persona_colors()
+        .iter()
+        .map(|(name, color)| Persona {
+            name: (*name).to_owned(),
+            color: (*color).to_owned(),
+            display_label: display_label(name),
+            source: "built-in".to_owned(),
+        })
+        .collect()
+}
+
+fn builtin_persona_colors() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("cpo", "blue"),
+        ("cto", "indigo"),
+        ("cfo", "green"),
+        ("cro", "orange"),
+        ("cmo", "purple"),
+        ("ciso", "red"),
+        ("krypton", "magenta"),
+        ("forge", "amber"),
+        ("agf-architect", "teal"),
+        ("claude", "neutral"),
+        ("codex", "neutral"),
+    ]
+}
+
+fn display_label(name: &str) -> String {
+    if name == "agf-architect" {
+        "AGF Architect".to_owned()
+    } else {
+        name.to_ascii_uppercase()
+    }
 }
 
 fn safe_project_segment(project: &str) -> Result<&str, String> {
@@ -445,6 +594,7 @@ fn main() {
             list_inbox,
             list_projects,
             list_project_files,
+            list_personas,
             parse_document,
             save_document,
             open_document,

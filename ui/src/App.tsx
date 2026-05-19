@@ -5,12 +5,14 @@ import { SourceView } from "./components/SourceView";
 import {
   getBootstrapInfo,
   listInbox,
+  listPersonas,
   listProjects,
   openDocument,
   parseDocument,
   writeDocument,
   type BootstrapInfo,
-  type FileMetadata
+  type FileMetadata,
+  type PersonaRegistry
 } from "./ipc";
 import type { Block } from "./types/blocks";
 import "./styles.css";
@@ -33,6 +35,7 @@ export default function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapInfo | null>(null);
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
+  const [personas, setPersonas] = useState<PersonaRegistry | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<OpenArtifact | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -49,14 +52,16 @@ export default function App() {
     setIsLoading(true);
     setError(null);
     try {
-      const [nextBootstrap, nextFiles, nextProjects] = await Promise.all([
+      const [nextBootstrap, nextFiles, nextProjects, nextPersonas] = await Promise.all([
         getBootstrapInfo(),
         listInbox(),
-        listProjects()
+        listProjects(),
+        listPersonas()
       ]);
       setBootstrap(nextBootstrap);
       setFiles(nextFiles);
       setProjects(nextProjects);
+      setPersonas(nextPersonas);
       setSelectedPath((current) => current ?? nextFiles[0]?.path ?? null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -226,7 +231,7 @@ export default function App() {
                   >
                     <span className="arrival-dot" />
                     <span className="file-name">{file.name}</span>
-                    <span className={`badge badge-${file.extension}`}>{file.extension}</span>
+                    <span className={`badge persona-badge badge-${file.persona}`}>{labelForPersona(file.persona)}</span>
                     <span className="file-time">{formatTime(file.mtime)}</span>
                   </button>
                 ))
@@ -274,6 +279,7 @@ export default function App() {
                 elsewhere.
               </div>
             ) : null}
+            {personas?.warning ? <div className="registry-warning">{personas.warning}</div> : null}
             {savedAt ? <div className="saved-toast">Saved {savedAt}</div> : null}
             {artifact ? (
               editMode || sourceMode ? (
@@ -319,6 +325,13 @@ function markdownExtension(extension: string): boolean {
 
 function htmlExtension(extension: string): boolean {
   return extension === "html" || extension === "htm";
+}
+
+function labelForPersona(persona: string): string {
+  if (persona === "agf-architect") {
+    return "AGF";
+  }
+  return persona;
 }
 
 function fileName(path: string): string {

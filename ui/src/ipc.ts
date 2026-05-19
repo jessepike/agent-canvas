@@ -22,10 +22,29 @@ export const FileMetadata = z
     last_seen_hash: Hash32,
     pinned: z.boolean(),
     archived: z.boolean(),
-    last_read_at: z.number().nullable()
+    last_read_at: z.number().nullable(),
+    persona: z.string()
   })
   .strict();
 export type FileMetadata = z.infer<typeof FileMetadata>;
+
+export const Persona = z
+  .object({
+    name: z.string(),
+    color: z.string(),
+    display_label: z.string(),
+    source: z.string()
+  })
+  .strict();
+export type Persona = z.infer<typeof Persona>;
+
+export const PersonaRegistry = z
+  .object({
+    personas: z.array(Persona),
+    warning: z.string().nullable()
+  })
+  .strict();
+export type PersonaRegistry = z.infer<typeof PersonaRegistry>;
 
 export const BootstrapInfo = z
   .object({
@@ -84,6 +103,15 @@ export async function listProjects(): Promise<string[]> {
     return z.array(z.string()).parse(result);
   } catch (caught) {
     throw ipcError("list_projects", caught);
+  }
+}
+
+export async function listPersonas(): Promise<PersonaRegistry> {
+  try {
+    const result = await invoke<unknown>("list_personas");
+    return PersonaRegistry.parse(result);
+  } catch (caught) {
+    throw ipcError("list_personas", caught);
   }
 }
 
