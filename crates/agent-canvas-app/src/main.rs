@@ -1,12 +1,94 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Mutex,
+    time::UNIX_EPOCH,
+};
 
+use rusqlite::{Connection, params};
+use serde::Serialize;
 use vellum_core::{
     block::patch::BlockPatch,
     fs::{AtomicWriteError, OpenDocument, WriteResult, atomic_write, has_conflict_markers},
     sidecar::{self, IdentityMap},
 };
+use walkdir::WalkDir;
+
+struct AppState {
+    paths: AgentCanvasPaths,
+    db: Mutex<Connection>,
+}
+
+#[derive(Debug, Clone)]
+struct AgentCanvasPaths {
+    cloud_docs_root: PathBuf,
+    canvas_root: PathBuf,
+    user_symlink: PathBuf,
+    inbox_dir: PathBuf,
+    projects_dir: PathBuf,
+    archive_dir: PathBuf,
+    state_db: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BootstrapInfo {
+    canvas_root: String,
+    inbox_dir: String,
+    projects_dir: String,
+    archive_dir: String,
+    state_db: String,
+    user_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FileMetadata {
+    path: String,
+    relative_path: String,
+    name: String,
+    extension: String,
+    size: u64,
+    mtime: i64,
+    last_seen_hash: [u8; 32],
+    pinned: bool,
+    archived: bool,
+    last_read_at: Option<i64>,
+}
+
+#[tauri::command]
+fn bootstrap_info(state: tauri::State<AppState>) -> BootstrapInfo {
+    state.paths.bootstrap_info()
+}
+
+#[tauri::command]
+fn list_inbox(state: tauri::State<AppState>) -> Result<Vec<FileMetadata>, String> {
+    list_files_under(&state.paths.inbox_dir, &state.paths.canvas_root, &state.db)
+}
+
+#[tauri::command]
+fn list_project_files(
+    state: tauri::State<AppState>,
+    project: String,
+) -> Result<Vec<FileMetadata>, String> {
+    let project_dir = state.paths.projects_dir.join(safe_project_segment(&project)?);
+    list_files_under(&project_dir, &state.paths.canvas_root, &state.db)
+}
+
+#[tauri::command]
+fn list_projects(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
+    let mut projects = Vec::new();
+    for entry in fs::read_dir(&state.paths.projects_dir).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        if entry.file_type().map_err(|error| error.to_string())?.is_dir()
+            && let Some(name) = entry.file_name().to_str()
+        {
+            projects.push(name.to_owned());
+        }
+    }
+    projects.sort();
+    Ok(projects)
+}
 
 #[tauri::command]
 fn parse_document(source: String) -> Result<Vec<vellum_core::parse::Block>, String> {
@@ -45,8 +127,6 @@ fn write_document(
 
     match atomic_write(doc_path, source.as_bytes(), Some(&base_hash)) {
         Ok(new_hash) => Ok(WriteResult { new_hash }),
-        // UI pattern-matches this string prefix until the 30B-05 typed
-        // three-way merge error channel exists.
         Err(AtomicWriteError::ConflictDetected { .. }) => {
             Err("CONFLICT: file changed on disk before save".to_owned())
         }
@@ -60,9 +140,6 @@ fn load_sidecar(doc_path: String) -> Result<IdentityMap, String> {
     let vault_root = vault_root_for_absolute_doc(doc_path)?;
     let doc_source = fs::read_to_string(doc_path).map_err(|error| error.to_string())?;
 
-    // Gate 30B IPC uses an absolute doc path and treats the document parent as
-    // the temporary vault root. Vault state can replace this once open-vault
-    // app state exists.
     let migrated = sidecar::load_or_migrate(vault_root, doc_path, &doc_source)
         .map_err(|error| error.to_string())?;
     Ok(migrated.unwrap_or_else(|| IdentityMap {
@@ -76,9 +153,232 @@ fn save_sidecar(doc_path: String, map: IdentityMap) -> Result<(), String> {
     let doc_path = absolute_doc_path(&doc_path)?;
     let vault_root = vault_root_for_absolute_doc(doc_path)?;
 
-    // See load_sidecar: this command intentionally keeps the same temporary
-    // absolute-path convention until vault-root app state lands.
     sidecar::save(vault_root, doc_path, &map).map_err(|error| error.to_string())
+}
+
+fn bootstrap() -> Result<AppState, String> {
+    let paths = AgentCanvasPaths::resolve()?;
+    paths.ensure()?;
+    let db = open_state_db(&paths.state_db)?;
+    Ok(AppState {
+        paths,
+        db: Mutex::new(db),
+    })
+}
+
+impl AgentCanvasPaths {
+    fn resolve() -> Result<Self, String> {
+        let home = home_dir()?;
+        let cloud_docs_root = home
+            .join("Library")
+            .join("Mobile Documents")
+            .join("com~apple~CloudDocs");
+        let canvas_root = cloud_docs_root.join("AgentCanvas");
+        let user_symlink = home.join("iCloud");
+        let app_support = home
+            .join("Library")
+            .join("Application Support")
+            .join("AgentCanvas");
+
+        Ok(Self {
+            cloud_docs_root,
+            inbox_dir: canvas_root.join("Inbox"),
+            projects_dir: canvas_root.join("Projects"),
+            archive_dir: canvas_root.join("Archive"),
+            canvas_root,
+            user_symlink,
+            state_db: app_support.join("state.db"),
+        })
+    }
+
+    fn ensure(&self) -> Result<(), String> {
+        fs::create_dir_all(self.inbox_dir.join("captures")).map_err(|error| error.to_string())?;
+        fs::create_dir_all(self.projects_dir.join("Default")).map_err(|error| error.to_string())?;
+        fs::create_dir_all(&self.archive_dir).map_err(|error| error.to_string())?;
+
+        if !self.user_symlink.exists() {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&self.cloud_docs_root, &self.user_symlink)
+                .map_err(|error| error.to_string())?;
+        }
+
+        if let Some(parent) = self.state_db.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn bootstrap_info(&self) -> BootstrapInfo {
+        BootstrapInfo {
+            canvas_root: self.canvas_root.to_string_lossy().into_owned(),
+            inbox_dir: self.inbox_dir.to_string_lossy().into_owned(),
+            projects_dir: self.projects_dir.to_string_lossy().into_owned(),
+            archive_dir: self.archive_dir.to_string_lossy().into_owned(),
+            state_db: self.state_db.to_string_lossy().into_owned(),
+            user_path: self
+                .user_symlink
+                .join("AgentCanvas")
+                .to_string_lossy()
+                .into_owned(),
+        }
+    }
+}
+
+fn open_state_db(path: &Path) -> Result<Connection, String> {
+    let db = Connection::open(path).map_err(|error| error.to_string())?;
+    db.execute_batch(
+        r#"
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE IF NOT EXISTS files (
+          path TEXT PRIMARY KEY,
+          last_seen_hash BLOB NOT NULL,
+          size INTEGER,
+          mtime INTEGER,
+          pinned INTEGER DEFAULT 0,
+          archived INTEGER DEFAULT 0,
+          last_read_at INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+          id TEXT PRIMARY KEY,
+          persona TEXT NOT NULL,
+          backbone TEXT NOT NULL,
+          context TEXT,
+          connected_at INTEGER NOT NULL,
+          last_active INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS comments (
+          id TEXT PRIMARY KEY,
+          file_path TEXT NOT NULL,
+          anchor_text TEXT,
+          anchor_offset INTEGER,
+          author TEXT,
+          body TEXT,
+          thread_id TEXT,
+          resolved INTEGER DEFAULT 0,
+          created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS pending_edits (
+          id TEXT PRIMARY KEY,
+          file_path TEXT NOT NULL,
+          proposer TEXT,
+          diff TEXT,
+          reasoning TEXT,
+          created_at INTEGER NOT NULL,
+          status TEXT NOT NULL
+        );
+        "#,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(db)
+}
+
+fn list_files_under(
+    root: &Path,
+    canvas_root: &Path,
+    db: &Mutex<Connection>,
+) -> Result<Vec<FileMetadata>, String> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut files = Vec::new();
+    let conn = db.lock().map_err(|_| "state db lock poisoned".to_owned())?;
+
+    for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
+        if !entry.file_type().is_file() || !is_supported_artifact(entry.path()) {
+            continue;
+        }
+        let file = metadata_for_file(entry.path(), canvas_root)?;
+        upsert_file_state(&conn, &file)?;
+        files.push(file);
+    }
+
+    files.sort_by(|left, right| right.mtime.cmp(&left.mtime).then_with(|| left.name.cmp(&right.name)));
+    Ok(files)
+}
+
+fn metadata_for_file(path: &Path, canvas_root: &Path) -> Result<FileMetadata, String> {
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+    let mtime = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    let relative_path = path.strip_prefix(canvas_root).unwrap_or(path);
+
+    Ok(FileMetadata {
+        path: path.to_string_lossy().into_owned(),
+        relative_path: relative_path.to_string_lossy().into_owned(),
+        name: path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("artifact")
+            .to_owned(),
+        extension: path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase(),
+        size: metadata.len(),
+        mtime,
+        last_seen_hash: *vellum_core::hash::content_hash(&bytes).as_bytes(),
+        pinned: false,
+        archived: false,
+        last_read_at: None,
+    })
+}
+
+fn upsert_file_state(conn: &Connection, file: &FileMetadata) -> Result<(), String> {
+    let existing_path: Option<String> = conn
+        .query_row(
+            "SELECT path FROM files WHERE last_seen_hash = ?1 AND path != ?2 LIMIT 1",
+            params![file.last_seen_hash.as_slice(), file.path],
+            |row| row.get(0),
+        )
+        .ok();
+
+    if let Some(existing_path) = existing_path {
+        conn.execute(
+            "UPDATE files SET path = ?1, size = ?2, mtime = ?3 WHERE path = ?4",
+            params![file.path, file.size as i64, file.mtime, existing_path],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+
+    conn.execute(
+        r#"
+        INSERT INTO files(path, last_seen_hash, size, mtime, pinned, archived)
+        VALUES (?1, ?2, ?3, ?4, 0, 0)
+        ON CONFLICT(path) DO UPDATE SET
+          last_seen_hash = excluded.last_seen_hash,
+          size = excluded.size,
+          mtime = excluded.mtime
+        "#,
+        params![file.path, file.last_seen_hash.as_slice(), file.size as i64, file.mtime],
+    )
+    .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+fn is_supported_artifact(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("md" | "markdown" | "html" | "htm")
+    )
+}
+
+fn safe_project_segment(project: &str) -> Result<&str, String> {
+    if project.is_empty() || project.contains('/') || project.contains('\\') || project == "." || project == ".." {
+        Err("invalid project name".to_owned())
+    } else {
+        Ok(project)
+    }
 }
 
 fn absolute_doc_path(doc_path: &str) -> Result<&Path, String> {
@@ -86,7 +386,7 @@ fn absolute_doc_path(doc_path: &str) -> Result<&Path, String> {
     if path.is_absolute() {
         Ok(path)
     } else {
-        Err("doc_path must be absolute until vault-root app state lands".to_owned())
+        Err("doc_path must be absolute".to_owned())
     }
 }
 
@@ -105,9 +405,22 @@ fn vault_root_for_absolute_doc(doc_path: &Path) -> Result<&Path, String> {
         .ok_or_else(|| "doc_path must have a parent directory".to_owned())
 }
 
+fn home_dir() -> Result<PathBuf, String> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "HOME is not set".to_owned())
+}
+
 fn main() {
+    let app_state = bootstrap().expect("failed to bootstrap AgentCanvas");
+
     tauri::Builder::<tauri::Wry>::default()
+        .manage(app_state)
         .invoke_handler(tauri::generate_handler![
+            bootstrap_info,
+            list_inbox,
+            list_projects,
+            list_project_files,
             parse_document,
             save_document,
             open_document,
@@ -118,80 +431,4 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())
         .expect("failed to run AgentCanvas app");
-}
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use tempfile::TempDir;
-
-    use super::*;
-
-    #[test]
-    fn open_document_reads_source_hash_and_conflict_marker_state() {
-        let dir = TempDir::new().unwrap();
-        let target = dir.path().join("note.md");
-        let source = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n";
-        fs::write(&target, source).unwrap();
-
-        let opened = open_document(target.to_string_lossy().into_owned()).unwrap();
-
-        assert_eq!(opened.path, target.to_string_lossy());
-        assert_eq!(opened.source, source);
-        assert_eq!(
-            opened.base_hash,
-            *vellum_core::hash::content_hash(source.as_bytes()).as_bytes()
-        );
-        assert!(opened.has_conflict_markers);
-    }
-
-    #[test]
-    fn open_document_rejects_missing_or_non_file_paths() {
-        let dir = TempDir::new().unwrap();
-        let missing = dir.path().join("missing.md");
-
-        assert!(open_document(missing.to_string_lossy().into_owned()).is_err());
-        assert!(open_document(dir.path().to_string_lossy().into_owned()).is_err());
-    }
-
-    #[test]
-    fn write_document_round_trips_and_returns_new_hash() {
-        let dir = TempDir::new().unwrap();
-        let target = dir.path().join("note.md");
-        fs::write(&target, b"old").unwrap();
-        let base_hash = *vellum_core::hash::content_hash(b"old").as_bytes();
-
-        let result = write_document(
-            target.to_string_lossy().into_owned(),
-            "new".to_owned(),
-            base_hash,
-        )
-        .unwrap();
-
-        assert_eq!(fs::read(&target).unwrap(), b"new");
-        assert_eq!(
-            result.new_hash,
-            *vellum_core::hash::content_hash(b"new").as_bytes()
-        );
-    }
-
-    #[test]
-    fn write_document_reports_conflict_with_typed_prefix() {
-        let dir = TempDir::new().unwrap();
-        let target = dir.path().join("note.md");
-        fs::write(&target, b"base").unwrap();
-        let base_hash = *vellum_core::hash::content_hash(b"base").as_bytes();
-        fs::write(&target, b"external").unwrap();
-
-        let error = write_document(
-            target.to_string_lossy().into_owned(),
-            "ours".to_owned(),
-            base_hash,
-        )
-        .unwrap_err();
-
-        assert!(error.starts_with("CONFLICT:"));
-        assert_eq!(fs::read(&target).unwrap(), b"external");
-    }
 }

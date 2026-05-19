@@ -7,7 +7,7 @@ Status: `todo` / `in-progress` / `blocked` / `done` / `cut`.
 | Slice | Status | Item |
 |---|---|---|
 | 1 | done | Migration scaffolding: package rename, legacy docs, fresh React shell, context docs |
-| 2 | todo | iCloud substrate, SQLite state, inbox list view |
+| 2 | done | iCloud substrate, SQLite state, inbox list view |
 | 3 | todo | Markdown render, edit mode, atomic save with conflict banner |
 | 4 | todo | Sandboxed HTML render and source toggle |
 | 5 | todo | Recursive watcher, debounce, UI invalidation |

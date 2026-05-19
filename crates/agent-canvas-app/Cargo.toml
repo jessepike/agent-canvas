@@ -6,11 +6,13 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+rusqlite.workspace = true
 serde.workspace = true
 tauri = { workspace = true, default-features = false, features = ["wry"] }
 tauri-plugin-dialog.workspace = true
 ts-rs.workspace = true
 vellum-core = { path = "../vellum-core" }
+walkdir.workspace = true
 
 [build-dependencies]
 tauri-build.workspace = true
