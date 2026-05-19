@@ -13,7 +13,9 @@ import {
   getBootstrapInfo,
   getProjectDefaultAgent,
   listAgentSessions,
+  listArchive,
   listInbox,
+  listPinned,
   listProjectFiles,
   listPersonas,
   listProjects,
@@ -73,9 +75,11 @@ export default function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapInfo | null>(null);
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
-  const [mode, setMode] = useState<"inbox" | "project">("inbox");
+  const [mode, setMode] = useState<"inbox" | "project" | "archive" | "pinned">("inbox");
   const [currentProject, setCurrentProject] = useState<string | null>(null);
   const [projectFiles, setProjectFiles] = useState<FileMetadata[]>([]);
+  const [archiveFiles, setArchiveFiles] = useState<FileMetadata[]>([]);
+  const [pinnedFiles, setPinnedFiles] = useState<FileMetadata[]>([]);
   const [personas, setPersonas] = useState<PersonaRegistry | null>(null);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [showSessionForm, setShowSessionForm] = useState(false);
@@ -117,13 +121,14 @@ export default function App() {
     setIsLoading(true);
     setError(null);
     try {
-      const [nextBootstrap, nextFiles, nextProjects, nextPersonas, nextSessions, nextDefaultVerb] = await Promise.all([
+      const [nextBootstrap, nextFiles, nextProjects, nextPersonas, nextSessions, nextDefaultVerb, nextPinned] = await Promise.all([
         getBootstrapInfo(),
         listInbox(),
         listProjects(),
         listPersonas(),
         listAgentSessions(),
-        getDefaultActionVerb()
+        getDefaultActionVerb(),
+        listPinned()
       ]);
       setBootstrap(nextBootstrap);
       setFiles(nextFiles);
@@ -131,6 +136,7 @@ export default function App() {
       setPersonas(nextPersonas);
       setSessions(nextSessions);
       setDefaultActionVerbState(nextDefaultVerb);
+      setPinnedFiles(nextPinned);
       setSelectedPath((current) => current ?? nextFiles[0]?.path ?? null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -158,8 +164,8 @@ export default function App() {
   }, [sessionBackbone, sessionContext, sessionPersona]);
 
   const selectedFile = useMemo(
-    () => [...files, ...projectFiles].find((file) => file.path === selectedPath) ?? null,
-    [files, projectFiles, selectedPath]
+    () => [...files, ...projectFiles, ...archiveFiles, ...pinnedFiles].find((file) => file.path === selectedPath) ?? null,
+    [archiveFiles, files, pinnedFiles, projectFiles, selectedPath]
   );
   const sendButtonLabel = useMemo(
     () => sendLabelForSessions(sessions, defaultAgentId),
@@ -257,6 +263,46 @@ export default function App() {
     },
     [openArtifact]
   );
+
+  const openArchive = useCallback(async () => {
+    try {
+      const nextFiles = await listArchive();
+      setMode("archive");
+      setCurrentProject(null);
+      setArchiveFiles(nextFiles);
+      if (nextFiles[0]) {
+        await openArtifact(nextFiles[0]);
+      } else {
+        setArtifact(null);
+        setSelectedPath(null);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [openArtifact]);
+
+  const openPinned = useCallback(async () => {
+    try {
+      const nextFiles = await listPinned();
+      setMode("pinned");
+      setCurrentProject(null);
+      setPinnedFiles(nextFiles);
+      if (nextFiles[0]) {
+        await openArtifact(nextFiles[0]);
+      } else {
+        setArtifact(null);
+        setSelectedPath(null);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [openArtifact]);
+
+  const openInbox = useCallback(() => {
+    setMode("inbox");
+    setCurrentProject(null);
+    setArchiveFiles([]);
+  }, []);
 
   const reloadOpenArtifact = useCallback(async () => {
     if (!artifact || artifact.dirty) {
@@ -782,10 +828,14 @@ export default function App() {
                 <input ref={searchRef} placeholder="Search artifacts" />
               </label>
             </div>
-            <div className="section-header">
+            <button
+              className={`section-header section-button ${mode === "inbox" ? "selected" : ""}`}
+              type="button"
+              onClick={() => openInbox()}
+            >
               <span className="section-label">Inbox</span>
               <span className="count">{files.length}</span>
-            </div>
+            </button>
             <div
               className={`file-list ${dropTarget === "inbox" ? "drop-target" : ""}`}
               onDragEnter={() => setDropTarget("inbox")}
@@ -801,7 +851,7 @@ export default function App() {
                   <button
                     className={`file-row ${file.path === selectedPath ? "selected" : ""} ${
                       arrivedPaths.has(file.path) ? "just-arrived" : ""
-                    }`}
+                    } ${file.pinned ? "pinned" : ""}`}
                     key={file.path}
                     type="button"
                     draggable
@@ -820,13 +870,24 @@ export default function App() {
                     }}
                   >
                     <span className="arrival-dot" />
-                    <span className="file-name">{file.name}</span>
+                    <span className="file-name">
+                      {file.pinned ? <span className="pin-star" title="Pinned">★ </span> : null}
+                      {file.name}
+                    </span>
                     <span className={`badge persona-badge badge-${file.persona}`}>{labelForPersona(file.persona)}</span>
                     <span className="file-time">{formatTime(file.mtime)}</span>
                   </button>
                 ))
               )}
             </div>
+            <button
+              className={`section-header section-button ${mode === "pinned" ? "selected" : ""}`}
+              type="button"
+              onClick={() => void openPinned()}
+            >
+              <span className="section-label">★ Pinned</span>
+              <span className="count">{pinnedFiles.length}</span>
+            </button>
             <div className="section-header projects-header">
               <span className="section-label">Projects</span>
               <span className="count">{projects.length}</span>
@@ -860,7 +921,7 @@ export default function App() {
               </button>
             ))}
             <button
-              className={`project-row archive-row ${dropTarget === "archive" ? "drop-target" : ""}`}
+              className={`project-row archive-row ${mode === "archive" ? "selected" : ""} ${dropTarget === "archive" ? "drop-target" : ""}`}
               type="button"
               onDragOver={(event) => {
                 if (event.dataTransfer.types.includes("text/agentcanvas-path")) {
@@ -877,22 +938,26 @@ export default function App() {
                   void moveInboxFileToArchive(path);
                 }
               }}
-              onClick={() => void archiveCurrent()}
+              onClick={() => void openArchive()}
             >
               <span>Archive</span>
-              <span className="file-time">↘</span>
+              <span className="file-time">{archiveFiles.length || "↘"}</span>
             </button>
           </aside>
-          {mode === "project" ? (
+          {mode === "project" || mode === "archive" || mode === "pinned" ? (
             <aside className="middle">
               <div className="middle-header">
-                <div className="middle-project-name">{currentProject}</div>
-                <div className="middle-project-meta">{projectFiles.length} artifacts</div>
+                <div className="middle-project-name">
+                  {mode === "archive" ? "Archive" : mode === "pinned" ? "★ Pinned" : currentProject}
+                </div>
+                <div className="middle-project-meta">
+                  {(mode === "archive" ? archiveFiles : mode === "pinned" ? pinnedFiles : projectFiles).length} artifacts
+                </div>
               </div>
               <div className="middle-list">
-                {projectFiles.map((file) => (
+                {(mode === "archive" ? archiveFiles : mode === "pinned" ? pinnedFiles : projectFiles).map((file) => (
                   <button
-                    className={`middle-file ${file.path === selectedPath ? "selected" : ""}`}
+                    className={`middle-file ${file.path === selectedPath ? "selected" : ""} ${file.pinned ? "pinned" : ""}`}
                     key={file.path}
                     type="button"
                     onContextMenu={(event) => {
@@ -901,7 +966,10 @@ export default function App() {
                     }}
                     onClick={() => void openArtifact(file)}
                   >
-                    <span>{file.name}</span>
+                    <span>
+                      {file.pinned ? <span className="pin-star" title="Pinned">★ </span> : null}
+                      {file.name}
+                    </span>
                     <small>{formatTime(file.mtime)}</small>
                   </button>
                 ))}
@@ -911,7 +979,8 @@ export default function App() {
           <section className="content-pane">
             <div className="toolbar">
               <div className="breadcrumb">
-                Inbox <span>/</span> <strong>{selectedFile?.name ?? "Select a file"}</strong>
+                {mode === "archive" ? "Archive" : mode === "pinned" ? "★ Pinned" : mode === "project" ? (currentProject ?? "Project") : "Inbox"}
+                <span>/</span> <strong>{selectedFile?.name ?? "Select a file"}</strong>
               </div>
               <div className="toolbar-actions">
                 <button
@@ -1169,14 +1238,28 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => {
-                  const message = `Copied ${fileMenu.file.relative_path}`;
-                  void copyTextToClipboard(fileMenu.file.relative_path);
+                  const file = fileMenu.file;
+                  const message = `Copied ${file.path}`;
+                  void copyTextToClipboard(file.path);
                   setHandoffToast(message);
                   setFileMenu(null);
                   window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
                 }}
               >
-                Copy Path (relative)
+                Copy Path
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const file = fileMenu.file;
+                  const message = `Copied ${file.relative_path}`;
+                  void copyTextToClipboard(file.relative_path);
+                  setHandoffToast(message);
+                  setFileMenu(null);
+                  window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+                }}
+              >
+                Copy Relative Path
               </button>
               <button className="danger-item" type="button" onClick={() => void deleteArtifact(fileMenu.file)}>
                 Delete...

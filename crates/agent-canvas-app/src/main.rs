@@ -143,6 +143,52 @@ fn list_project_files(
 }
 
 #[tauri::command]
+fn list_archive(state: tauri::State<AppState>) -> Result<Vec<FileMetadata>, String> {
+    list_files_under(&state.paths.archive_dir, &state.paths.canvas_root, &state.db)
+}
+
+#[tauri::command]
+fn list_pinned(state: tauri::State<AppState>) -> Result<Vec<FileMetadata>, String> {
+    // Collect pinned paths from the state DB.
+    let paths: Vec<String> = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        let mut stmt = conn
+            .prepare("SELECT path FROM files WHERE pinned = 1")
+            .map_err(|error| error.to_string())?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?;
+        rows.filter_map(|row| row.ok()).collect()
+    };
+
+    // Build metadata for paths that still exist on disk.
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    let mut files = Vec::new();
+    for path_str in paths {
+        let path = PathBuf::from(&path_str);
+        if !path.exists() || !is_supported_artifact(&path) {
+            continue;
+        }
+        let mut file = metadata_for_file(&path, &state.paths.canvas_root)?;
+        hydrate_file_state(&conn, &mut file)?;
+        files.push(file);
+    }
+    files.sort_by(|left, right| {
+        right
+            .mtime
+            .cmp(&left.mtime)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(files)
+}
+
+#[tauri::command]
 fn list_projects(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
     let mut projects = Vec::new();
     for entry in fs::read_dir(&state.paths.projects_dir).map_err(|error| error.to_string())? {
@@ -1199,6 +1245,8 @@ fn main() {
             list_inbox,
             list_projects,
             list_project_files,
+            list_archive,
+            list_pinned,
             get_project_default_agent,
             set_project_default_agent,
             list_personas,

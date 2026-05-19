@@ -301,6 +301,24 @@ export async function listProjectFiles(project: string): Promise<FileMetadata[]>
   }
 }
 
+export async function listArchive(): Promise<FileMetadata[]> {
+  try {
+    const result = await invoke<unknown>("list_archive");
+    return z.array(FileMetadata).parse(result);
+  } catch (caught) {
+    throw ipcError("list_archive", caught);
+  }
+}
+
+export async function listPinned(): Promise<FileMetadata[]> {
+  try {
+    const result = await invoke<unknown>("list_pinned");
+    return z.array(FileMetadata).parse(result);
+  } catch (caught) {
+    throw ipcError("list_pinned", caught);
+  }
+}
+
 export async function saveDocument(source: string, patches: BlockPatchType[]): Promise<string> {
   try {
     const result = await invoke<unknown>("save_document", { source, patches });

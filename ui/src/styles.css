@@ -237,8 +237,56 @@ button:hover {
   padding: 14px 14px 6px;
 }
 
+.section-button {
+  width: calc(100% - 16px);
+  margin: 0 8px;
+  border: 0.5px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.section-button:hover {
+  background: var(--hover-bg);
+  filter: none;
+}
+
+.section-button.selected {
+  border-color: var(--border);
+  background: var(--selected-bg);
+  box-shadow: 0 0 0 0.5px var(--border), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.section-button.selected .section-label {
+  color: var(--accent-deep);
+}
+
 .projects-header {
   margin-top: 10px;
+}
+
+.pin-star {
+  color: var(--pin);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.file-row.pinned {
+  background: rgba(193, 148, 51, 0.06);
+}
+
+.file-row.pinned.selected {
+  background: var(--selected-bg);
+}
+
+.middle-file.pinned {
+  background: rgba(193, 148, 51, 0.06);
+}
+
+.middle-file.pinned.selected {
+  background: var(--selected-bg);
 }
 
 .count {
