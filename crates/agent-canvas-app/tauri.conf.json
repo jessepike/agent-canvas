@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Vellum",
+  "productName": "AgentCanvas",
   "version": "0.1.0",
-  "identifier": "dev.jessepike.vellum",
+  "identifier": "dev.jessepike.agentcanvas",
   "build": {
     "beforeBuildCommand": "cd ../ui && pnpm --filter . build",
     "beforeDevCommand": "cd ../ui && pnpm --filter . dev",
@@ -12,9 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "Vellum",
-        "width": 1000,
-        "height": 700
+        "title": "AgentCanvas",
+        "width": 1280,
+        "height": 780
       }
     ]
   },

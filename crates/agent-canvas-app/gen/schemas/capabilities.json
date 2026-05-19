@@ -1,0 +1,1 @@
+{"main":{"identifier":"main","description":"Main AgentCanvas artifact workbench permissions.","local":true,"windows":["main"],"permissions":["core:default","dialog:default"]}}

@@ -24,6 +24,12 @@ Confidence tags: `[H/M/L]` confidence × `[R/D/G/F]` basis (Researched / Deliber
 
 ## Decision Log
 
+### D-AC-1 — Vellum v1.0 abandoned; AgentCanvas v0 begins [H-D]
+**Date:** 2026-05-19
+**Decision:** The executable-block Vellum v1.0 plan is abandoned. AgentCanvas v0 becomes the active product: an iCloud-backed artifact workbench for reading, lightly source-editing, and round-tripping Markdown/HTML artifacts produced by LLM agents.
+**Why:** `intent.md` v2.0 supersedes the live-query/MCP/trust framing. The real job is artifact consumption and handoff. Carry forward only the proven safety substrate: parser/corpus, byte-preserving save, stat+hash conflict guard, watcher patterns, and Tauri/Rust IPC.
+**Supersedes:** D-VELLUM-4, D-VELLUM-7, D-VELLUM-8, D-VELLUM-10, D-VELLUM-11, and the old Days 31-90 Vellum roadmap for this repo.
+
 ### D-VELLUM-1 — Tauri 2.x + Rust core [H-R]
 **Date:** 2026-05-09 (locked in spec v0.3)
 **Decision:** Native desktop shell via Tauri 2.x with Rust core owning filesystem, MCP client, primitive runtime, hashing, cache. WebView UI is a thin shell.

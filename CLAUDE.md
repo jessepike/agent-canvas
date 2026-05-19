@@ -1,67 +1,45 @@
-# Vellum — Project Context
+# AgentCanvas — Project Context
 
-## What this is
+## What This Is
 
-A personal desktop Markdown editor where blocks can run, the file stays plain, and history is honest. Tauri + Rust core + ProseMirror UI. Built for one person (the owner) to use daily. Open source from commit 1. Apache 2.0.
+AgentCanvas is a local Mac workbench for reading, lightly editing, and round-tripping artifacts produced by LLM agents. It is the successor to the earlier Vellum executable-block editor plan. The current v0 target is an artifact inbox rooted in iCloud Drive with Markdown and HTML viewing, source-preserving edits, persona-aware agent context, and pasteboard handoff to Claude/Codex.
 
-**Single-user-by-design.** No buyer, no GTM, no design partners. Out-of-scope for any session: positioning, PMF, marketing, buyer adjacency.
+## Read First
 
-## Read first (in this order)
+1. `BUILD-SPEC-v0.md` — canonical implementation plan for AgentCanvas v0.
+2. `intent.md` — v2.0 destination and product stance.
+3. `prototypes/visual-system.md` — mandatory visual tokens.
+4. `prototypes/index.html` plus prototypes A, B, C, D, E, F, I, K — UI target.
+5. `legacy/vellum-spec-v0.3.md` — carry-forward only: parser, atomic save guard, format-preservation corpus, Tauri patterns.
+6. `decisions.md`, `BACKLOG.md`, `status.md`.
 
-1. `intent.md` — destination, why it matters, shape constraints, stance.
-2. `vellum-spec-v0.3.md` — locked design spec (618 lines). The source of truth for everything architectural.
-3. `decisions.md` — 20 commitments with confidence tags.
-4. `BACKLOG.md` — current work queue (P0 + 30A + 30B + 60 + 90 + v1.5).
-5. `status.md` — where things stand.
-6. `lessons.md` — recent learnings.
-7. `review-findings.md` — durable artifact from the 4-cycle / 2-external-round review. Useful for context on WHY the spec landed where it did.
+## Current Stage
 
-## Current stage
+AgentCanvas v0 implementation. The 12 slices in `BUILD-SPEC-v0.md` are the active plan. The previous Vellum v1.0 plan is abandoned except for reusable file-safety substrate.
 
-**Design complete. Develop starting.** The spec is locked through 4 cycles + 2 external multi-model rounds. Critical=0, High=0 at exit. Next move is Phase 0 scaffold then Gate 30A (parser + format-preservation corpus). See BACKLOG.
+## Non-Negotiable Invariants
 
-## The load-bearing wall
+- Files live under `~/iCloud/AgentCanvas/` backed by the real iCloud Drive path at `~/Library/Mobile Documents/com~apple~CloudDocs/AgentCanvas/`.
+- Files stay plain and source-preserved. No pretty-printing or whitespace normalization.
+- Every save carries `base_hash`; mismatches abort with a conflict banner. No last-write-wins.
+- Watcher events are UI hints only. Correctness comes from rescan-on-focus and stat+hash before save.
+- HTML renders in a sandboxed iframe with scripts disabled by default.
+- Persona registry path is configurable; default is `~/code/_shared/pike-agents/plugins/`; missing registry falls back gracefully.
+- Visual system tokens in `prototypes/visual-system.md` are authoritative. Do not introduce new colors without updating that file first.
 
-If you forget everything else, remember this: **the format-preservation corpus is the v1 build gate**. Editor work does not begin until the corpus passes byte-identical at both the steady-state AND cold-state gates. The parser + partition contract ship FIRST. Spec §Block boundary reconstruction is canonical.
+## Out Of Scope For v0
 
-## Architectural anchors (do not violate without re-opening the spec)
+- Live MCP server or socket protocol.
+- Comments, anchors, pending-review workflows.
+- Rendered ProseMirror editing.
+- Three-way merge UI.
+- Annotation toolbar.
+- PNG, JSON, TXT viewer modes.
 
-- ProseMirror is authoritative for live editing. Rust does NOT maintain a parallel editing tree.
-- Block identity is dual: primitives carry YAML `id` on disk; non-primitives carry PM-decorated UUIDs in-memory + sidecar `identity.json`.
-- Source preservation is byte-level. No pretty-print. No normalize-on-save. Edit one paragraph, every other block emits its preserved raw bytes.
-- Trust is one file: `~/.vellum/trust.toml`. `bind` field anti-spoofs MCP server identity. Evaluation: server gate → tool gate → defaults.
-- Save guard: stat+hash before `rename(2)`. If on-disk hash differs from base, abort to three-way conflict.
-- IPC: typed block-grain. `ts-rs` for TS types + handwritten Zod for runtime validation.
+## Working Agreements
 
-## What is NOT in scope for v1
-
-- Tantivy search UI, evidence bundle export, plugin marketplace, multiplayer, encryption at rest, git integration, charts, doctor command.
-- `vellum:agent`, `vellum:transform`, `vellum:include` — v1.5.
-- iOS reader — v1.5.
-- Notarization and code-signing — v1.1 (v1.0 ships ad-hoc/dev-signed; documented in README).
-- OAuth flows / refresh-token rotation in MCP auth — v1.5.
-
-## Working agreements
-
-- **Spec is locked.** If a change to the architecture seems necessary, open a decision ledger entry in `decisions.md` first; do not silently amend the spec.
-- **The corpus is non-negotiable.** Any feature that risks corpus regression must include a corresponding corpus addition.
-- **Atomic commits at completed units.** Conventional commits (`type(scope): description`). Never end a session with a dirty tree.
-- **Layer A timeline.** Solo agentic build. 0.1–0.3× of 2022 baselines for build velocity. Owner manages calendar cadence; agents sequence dependencies and exit conditions.
-
-## Delegation patterns
-
-- Heavy implementation work → delegate to Codex via the `codex-delegate` skill. Pass a self-contained prompt referencing spec sections.
-- Architecture / design questions → CTO agent.
-- PMF or positioning concerns → NOT APPLICABLE (single-user-by-design).
-- Dev system / harness / agent changes → Forge.
-
-## Files NOT to touch
-
-- `vellum-spec-v0.3.md` — sign-off applied. Open a decision in `decisions.md` first.
-- `intent.md` — destination-only; never auto-edit. Surface tensions for owner decision.
-
-## Files safe to edit
-
-- `BACKLOG.md`, `status.md`, `lessons.md`, `decisions.md` (append-only on existing entries).
-- Source code under `crates/` and `ui/` once they exist.
-- `README.md`, `CONTRIBUTING.md`, `LICENSE`, etc.
+- Implement slices in order and commit atomically using conventional commits.
+- Keep package installs, builds, test runners, and dev servers in the OrbStack dev VM.
+- Do not modify `intent.md` unless Jesse explicitly asks.
+- Do not modify `legacy/vellum-spec-v0.3.md`; it is carry-forward reference only.
+- Update `status.md` before ending any file-changing session.

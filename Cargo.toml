@@ -1,7 +1,7 @@
 [workspace]
 members = [
   "crates/vellum-core",
-  "crates/vellum-app",
+  "crates/agent-canvas-app",
   "crates/vellum-corpus",
 ]
 resolver = "2"

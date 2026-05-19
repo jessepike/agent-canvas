@@ -117,7 +117,7 @@ fn main() {
         ])
         .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())
-        .expect("failed to run Vellum app");
+        .expect("failed to run AgentCanvas app");
 }
 
 #[cfg(test)]
