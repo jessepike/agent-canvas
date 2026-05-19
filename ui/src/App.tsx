@@ -8,6 +8,7 @@ import {
   getBootstrapInfo,
   listAgentSessions,
   listInbox,
+  listProjectFiles,
   listPersonas,
   listProjects,
   openDocument,
@@ -41,6 +42,9 @@ export default function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapInfo | null>(null);
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
+  const [mode, setMode] = useState<"inbox" | "project">("inbox");
+  const [currentProject, setCurrentProject] = useState<string | null>(null);
+  const [projectFiles, setProjectFiles] = useState<FileMetadata[]>([]);
   const [personas, setPersonas] = useState<PersonaRegistry | null>(null);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [showSessionForm, setShowSessionForm] = useState(false);
@@ -106,8 +110,8 @@ export default function App() {
   }, [sessionBackbone, sessionContext, sessionPersona]);
 
   const selectedFile = useMemo(
-    () => files.find((file) => file.path === selectedPath) ?? null,
-    [files, selectedPath]
+    () => [...files, ...projectFiles].find((file) => file.path === selectedPath) ?? null,
+    [files, projectFiles, selectedPath]
   );
 
   const openArtifact = useCallback(async (file: FileMetadata) => {
@@ -137,6 +141,26 @@ export default function App() {
       setIsOpening(false);
     }
   }, []);
+
+  const openProject = useCallback(
+    async (project: string) => {
+      try {
+        const nextFiles = await listProjectFiles(project);
+        setMode("project");
+        setCurrentProject(project);
+        setProjectFiles(nextFiles);
+        if (nextFiles[0]) {
+          await openArtifact(nextFiles[0]);
+        } else {
+          setArtifact(null);
+          setSelectedPath(null);
+        }
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [openArtifact]
+  );
 
   const reloadOpenArtifact = useCallback(async () => {
     if (!artifact || artifact.dirty) {
@@ -262,7 +286,7 @@ export default function App() {
       { section: "ACTIONS", label: "Send to Claude", run: sendCurrentArtifact },
       { section: "ACTIONS", label: "Toggle Pin", run: toggleCurrentPin },
       { section: "ACTIONS", label: "Archive", run: archiveCurrent },
-      { section: "COMMANDS", label: "Open Project", run: () => undefined }
+      { section: "COMMANDS", label: "Open Project", run: () => projects[0] && void openProject(projects[0]) }
     ];
     const fileItems = files.map((file) => ({
       section: "FILES",
@@ -272,7 +296,7 @@ export default function App() {
     const allItems = [...actions, ...fileItems];
     const query = paletteQuery.trim().toLowerCase();
     return query ? allItems.filter((item) => item.label.toLowerCase().includes(query)) : allItems;
-  }, [archiveCurrent, files, openArtifact, paletteQuery, sendCurrentArtifact, toggleCurrentPin]);
+  }, [archiveCurrent, files, openArtifact, openProject, paletteQuery, projects, sendCurrentArtifact, toggleCurrentPin]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -336,7 +360,11 @@ export default function App() {
                     }`}
                     key={file.path}
                     type="button"
-                    onClick={() => void openArtifact(file)}
+                    onClick={() => {
+                      setMode("inbox");
+                      setCurrentProject(null);
+                      void openArtifact(file);
+                    }}
                   >
                     <span className="arrival-dot" />
                     <span className="file-name">{file.name}</span>
@@ -351,12 +379,38 @@ export default function App() {
               <span className="count">{projects.length}</span>
             </div>
             {projects.map((project) => (
-              <button className="project-row" key={project} type="button">
+              <button
+                className={`project-row ${project === currentProject ? "selected" : ""}`}
+                key={project}
+                type="button"
+                onClick={() => void openProject(project)}
+              >
                 <span>{project}</span>
                 <span className="file-time">0</span>
               </button>
             ))}
           </aside>
+          {mode === "project" ? (
+            <aside className="middle">
+              <div className="middle-header">
+                <div className="middle-project-name">{currentProject}</div>
+                <div className="middle-project-meta">{projectFiles.length} artifacts</div>
+              </div>
+              <div className="middle-list">
+                {projectFiles.map((file) => (
+                  <button
+                    className={`middle-file ${file.path === selectedPath ? "selected" : ""}`}
+                    key={file.path}
+                    type="button"
+                    onClick={() => void openArtifact(file)}
+                  >
+                    <span>{file.name}</span>
+                    <small>{formatTime(file.mtime)}</small>
+                  </button>
+                ))}
+              </div>
+            </aside>
+          ) : null}
           <section className="content-pane">
             <div className="toolbar">
               <div className="breadcrumb">
