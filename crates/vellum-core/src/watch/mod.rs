@@ -13,7 +13,7 @@ use notify::{
 };
 use thiserror::Error;
 
-const MODIFY_DEBOUNCE: Duration = Duration::from_millis(50);
+const MODIFY_DEBOUNCE: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Error)]
 pub enum WatchError {
@@ -159,7 +159,13 @@ fn filter_paths(vault_root: &Path, paths: Vec<PathBuf>) -> impl Iterator<Item = 
 }
 
 fn should_watch_path(vault_root: &Path, path: &Path) -> bool {
-    if path.extension().and_then(|extension| extension.to_str()) != Some("md") {
+    if !matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("md" | "markdown" | "html" | "htm")
+    ) {
         return false;
     }
 

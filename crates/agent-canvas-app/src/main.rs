@@ -9,16 +9,19 @@ use std::{
 
 use rusqlite::{Connection, params};
 use serde::Serialize;
+use tauri::{Emitter, Manager};
 use vellum_core::{
     block::patch::BlockPatch,
     fs::{AtomicWriteError, OpenDocument, WriteResult, atomic_write, has_conflict_markers},
     sidecar::{self, IdentityMap},
+    watch::{self, WatchEvent, WatchHandle},
 };
 use walkdir::WalkDir;
 
 struct AppState {
     paths: AgentCanvasPaths,
     db: Mutex<Connection>,
+    watcher: Mutex<Option<WatchHandle>>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +57,12 @@ struct FileMetadata {
     pinned: bool,
     archived: bool,
     last_read_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FsEventPayload {
+    kind: &'static str,
+    path: Option<String>,
 }
 
 #[tauri::command]
@@ -163,6 +172,7 @@ fn bootstrap() -> Result<AppState, String> {
     Ok(AppState {
         paths,
         db: Mutex::new(db),
+        watcher: Mutex::new(None),
     })
 }
 
@@ -416,6 +426,20 @@ fn main() {
 
     tauri::Builder::<tauri::Wry>::default()
         .manage(app_state)
+        .setup(|app| {
+            let state = app.state::<AppState>();
+            let canvas_root = state.paths.canvas_root.clone();
+            let app_handle = app.handle().clone();
+            let watcher = watch::watch_vault(&canvas_root, move |event| {
+                let payload = fs_event_payload(event);
+                let _ = app_handle.emit("agentcanvas://fs-event", payload);
+            })?;
+            *state
+                .watcher
+                .lock()
+                .map_err(|_| "watcher lock poisoned")? = Some(watcher);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             bootstrap_info,
             list_inbox,
@@ -431,4 +455,25 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())
         .expect("failed to run AgentCanvas app");
+}
+
+fn fs_event_payload(event: WatchEvent) -> FsEventPayload {
+    match event {
+        WatchEvent::Changed { path, .. } => FsEventPayload {
+            kind: "changed",
+            path: Some(path.to_string_lossy().into_owned()),
+        },
+        WatchEvent::Created { path } => FsEventPayload {
+            kind: "created",
+            path: Some(path.to_string_lossy().into_owned()),
+        },
+        WatchEvent::Removed { path } => FsEventPayload {
+            kind: "removed",
+            path: Some(path.to_string_lossy().into_owned()),
+        },
+        WatchEvent::Renamed { to, .. } => FsEventPayload {
+            kind: "renamed",
+            path: Some(to.to_string_lossy().into_owned()),
+        },
+    }
 }

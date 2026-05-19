@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { RenderedView } from "./components/RenderedView";
 import { SourceView } from "./components/SourceView";
 import {
@@ -23,6 +24,11 @@ type OpenArtifact = {
   kind: "md" | "html" | "unsupported";
 };
 
+type FsEventPayload = {
+  kind: string;
+  path: string | null;
+};
+
 export default function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapInfo | null>(null);
   const [files, setFiles] = useState<FileMetadata[]>([]);
@@ -37,6 +43,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [arrivedPaths, setArrivedPaths] = useState<Set<string>>(new Set());
 
   const refresh = useCallback(async () => {
     setIsLoading(true);
@@ -94,6 +101,53 @@ export default function App() {
       setIsOpening(false);
     }
   }, []);
+
+  const reloadOpenArtifact = useCallback(async () => {
+    if (!artifact || artifact.dirty) {
+      return;
+    }
+
+    try {
+      const opened = await openDocument(artifact.path);
+      const blocks = artifact.kind === "md" ? await parseDocument(opened.source) : [];
+      setArtifact({
+        ...artifact,
+        source: opened.source,
+        baseHash: opened.base_hash,
+        blocks,
+        dirty: false
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [artifact]);
+
+  useEffect(() => {
+    let disposed = false;
+    const unlisten = listen<FsEventPayload>("agentcanvas://fs-event", (event) => {
+      if (disposed) {
+        return;
+      }
+      const path = event.payload.path;
+      if (path && event.payload.kind === "created") {
+        setArrivedPaths((current) => new Set([...current, path]));
+        window.setTimeout(() => {
+          setArrivedPaths((current) => {
+            const next = new Set(current);
+            next.delete(path);
+            return next;
+          });
+        }, 2500);
+      }
+      void refresh();
+      void reloadOpenArtifact();
+    });
+
+    return () => {
+      disposed = true;
+      void unlisten.then((dispose) => dispose());
+    };
+  }, [refresh, reloadOpenArtifact]);
 
   const saveArtifact = useCallback(async () => {
     if (!artifact) {
@@ -163,7 +217,9 @@ export default function App() {
               ) : (
                 files.map((file) => (
                   <button
-                    className={`file-row ${file.path === selectedPath ? "selected" : ""}`}
+                    className={`file-row ${file.path === selectedPath ? "selected" : ""} ${
+                      arrivedPaths.has(file.path) ? "just-arrived" : ""
+                    }`}
                     key={file.path}
                     type="button"
                     onClick={() => void openArtifact(file)}
