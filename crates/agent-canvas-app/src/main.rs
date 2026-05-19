@@ -795,8 +795,9 @@ fn list_files_under(
 
     files.sort_by(|left, right| {
         right
-            .mtime
-            .cmp(&left.mtime)
+            .pinned
+            .cmp(&left.pinned)
+            .then_with(|| right.mtime.cmp(&left.mtime))
             .then_with(|| left.name.cmp(&right.name))
     });
     Ok(files)

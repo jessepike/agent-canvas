@@ -121,14 +121,15 @@ export default function App() {
     setIsLoading(true);
     setError(null);
     try {
-      const [nextBootstrap, nextFiles, nextProjects, nextPersonas, nextSessions, nextDefaultVerb, nextPinned] = await Promise.all([
+      const [nextBootstrap, nextFiles, nextProjects, nextPersonas, nextSessions, nextDefaultVerb, nextPinned, nextArchive] = await Promise.all([
         getBootstrapInfo(),
         listInbox(),
         listProjects(),
         listPersonas(),
         listAgentSessions(),
         getDefaultActionVerb(),
-        listPinned()
+        listPinned(),
+        listArchive()
       ]);
       setBootstrap(nextBootstrap);
       setFiles(nextFiles);
@@ -137,6 +138,7 @@ export default function App() {
       setSessions(nextSessions);
       setDefaultActionVerbState(nextDefaultVerb);
       setPinnedFiles(nextPinned);
+      setArchiveFiles(nextArchive);
       setSelectedPath((current) => current ?? nextFiles[0]?.path ?? null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -301,7 +303,6 @@ export default function App() {
   const openInbox = useCallback(() => {
     setMode("inbox");
     setCurrentProject(null);
-    setArchiveFiles([]);
   }, []);
 
   const reloadOpenArtifact = useCallback(async () => {
@@ -628,10 +629,8 @@ export default function App() {
         const message = `Moved ${moved.name} → Archive`;
         setHandoffToast(message);
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
-        if (artifact?.path === file.path) {
-          setArtifact(null);
-          setSelectedPath(null);
-        }
+        setArtifact(null);
+        setSelectedPath(null);
         setFileMenu(null);
         await refresh();
       } catch (caught) {
@@ -941,7 +940,7 @@ export default function App() {
               onClick={() => void openArchive()}
             >
               <span>Archive</span>
-              <span className="file-time">{archiveFiles.length || "↘"}</span>
+              <span className="count">{archiveFiles.length}</span>
             </button>
           </aside>
           {mode === "project" || mode === "archive" || mode === "pinned" ? (
