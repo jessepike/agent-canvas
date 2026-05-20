@@ -345,18 +345,20 @@ These must all pass:
 
 ## Out of Scope for v0 (Deferred to v0.2)
 
-- **Live MCP server with 10 tools** — pasteboard handoff is the v0 substitute
-- **Comments / anchors** — anchor scheme needs proper spec work
-- **Rendered ProseMirror editing** — v0 = view-render + source-edit only
-- **Three-way merge UI** — conflict-state-with-abort is the v0 minimum
-- Annotation toolbar (circle/arrow/callout on PNG/HTML/MD)
-- PNG / JSON / TXT viewer modes (v0 = MD + HTML only)
-- Pending Reviews aggregate view (no comments yet, no propose_edit yet)
-- Cross-machine sync of state.db
-- iOS reader
-- Notarization / code-signing (v0 ships ad-hoc/dev-signed; README documents)
-- Search across files (Tantivy or otherwise)
-- Trust boundaries / per-artifact agent visibility
+The list below is the v0.1.0 deferral set. **v0.2.0 (2026-05-20) landed everything in `docs/BUILD-SPEC-v0.2-finish.md` except live MCP.** Items now in scope are struck through; the remaining v0.2-proper deferral is **Live MCP server only**.
+
+- **Live MCP server with 10 tools** — pasteboard handoff is the v0 substitute (still deferred — v0.2-proper target)
+- ~~Comments / anchors~~ — shipped in v0.2.0 Slice 6 (raw-source-offset anchors persisted in sidecar)
+- ~~Rendered ProseMirror editing~~ — shipped in v0.2.0 Slice 5e (rendered edit with source-preserving save + source fallback)
+- ~~Three-way merge UI~~ — shipped in v0.2.0 Slice 5g (base_snapshot in sidecar + per-block resolve dialog)
+- ~~Annotation toolbar~~ — shipped in v0.2.0 Slice 5f (Bold / Italic / Strike / Code / Mark-for-Revision)
+- ~~PNG / JSON / TXT viewer modes~~ — shipped in v0.2.0 Slice 5a–c (+ PDF in 5d)
+- ~~Search across files~~ — shipped in v0.2.0 Slice 2b (filename substring + ⌘F focus, per-mode)
+- Pending Reviews aggregate view — still deferred (per-artifact review state shipped, no aggregate panel yet)
+- Cross-machine sync of state.db — still deferred
+- iOS reader — still deferred
+- Notarization / code-signing — still deferred (v0.2.0 ships ad-hoc/dev-signed)
+- Trust boundaries / per-artifact agent visibility — still deferred
 
 ---
 

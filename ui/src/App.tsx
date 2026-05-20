@@ -181,6 +181,13 @@ export default function App() {
     target: string;
     resolve: (strategy: ConflictStrategy) => void;
   } | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    body: string;
+    confirmLabel: string;
+    destructive: boolean;
+    resolve: (ok: boolean) => void;
+  } | null>(null);
   const [pendingSendPath, setPendingSendPath] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const currentProjectKey = currentProject ?? "Inbox";
@@ -891,6 +898,21 @@ export default function App() {
     []
   );
 
+  const openConfirmDialog = useCallback(
+    (opts: { title: string; body: string; confirmLabel?: string; destructive?: boolean }): Promise<boolean> => {
+      return new Promise((resolve) => {
+        setConfirmDialog({
+          title: opts.title,
+          body: opts.body,
+          confirmLabel: opts.confirmLabel ?? "Confirm",
+          destructive: opts.destructive ?? false,
+          resolve
+        });
+      });
+    },
+    []
+  );
+
   const renameSelectedFile = useCallback(
     async (newName: string) => {
       if (!renamingFile) return;
@@ -1117,9 +1139,13 @@ export default function App() {
 
   const deleteArtifact = useCallback(
     async (file: FileMetadata) => {
-      if (!window.confirm(`Delete ${file.name}? This permanently removes the file from disk.`)) {
-        return;
-      }
+      const ok = await openConfirmDialog({
+        title: `Delete ${file.name}?`,
+        body: "This permanently removes the file from disk. This cannot be undone.",
+        confirmLabel: "Delete",
+        destructive: true
+      });
+      if (!ok) return;
       try {
         await deleteFile(file.path);
         if (artifact?.path === file.path) {
@@ -1133,7 +1159,7 @@ export default function App() {
         setError(caught instanceof Error ? caught.message : String(caught));
       }
     },
-    [artifact?.path, refresh]
+    [artifact?.path, refresh, openConfirmDialog]
   );
 
   const markFileReviewState = useCallback(async (file: FileMetadata, reviewState: FileMetadata["review_state"]) => {
@@ -2056,6 +2082,18 @@ export default function App() {
             }}
           />
         ) : null}
+        {confirmDialog ? (
+          <ConfirmDialog
+            title={confirmDialog.title}
+            body={confirmDialog.body}
+            confirmLabel={confirmDialog.confirmLabel}
+            destructive={confirmDialog.destructive}
+            onResolve={(ok) => {
+              confirmDialog.resolve(ok);
+              setConfirmDialog(null);
+            }}
+          />
+        ) : null}
         {agentPickerOpen ? (
           <AgentPickerDialog
             project={currentProjectKey}
@@ -2532,6 +2570,59 @@ function ConflictDialog({ filename, target, onResolve }: ConflictDialogProps) {
           </button>
           <button type="button" className="primary" onClick={() => onResolve("keep_both")}>
             Keep Both
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+type ConfirmDialogProps = {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  destructive: boolean;
+  onResolve: (ok: boolean) => void;
+};
+
+function ConfirmDialog({ title, body, confirmLabel, destructive, onResolve }: ConfirmDialogProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useFocusTrap(dialogRef, () => onResolve(false));
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onResolve(false);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        onResolve(true);
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onResolve]);
+
+  return (
+    <div className="palette-backdrop" onMouseDown={() => onResolve(false)}>
+      <div
+        ref={dialogRef}
+        className="rename-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>{title}</header>
+        <p style={{ margin: "0 0 4px", color: "var(--text-secondary)", fontSize: 13 }}>{body}</p>
+        <footer style={{ flexWrap: "wrap", gap: 8 }}>
+          <button type="button" onClick={() => onResolve(false)}>Cancel</button>
+          <button
+            type="button"
+            className={destructive ? undefined : "primary"}
+            onClick={() => onResolve(true)}
+            style={destructive ? { borderColor: "var(--diff-rem-strong)", color: "var(--diff-rem-strong)" } : undefined}
+          >
+            {confirmLabel}
           </button>
         </footer>
       </div>

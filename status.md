@@ -1,10 +1,42 @@
 ---
 project: agent-canvas
 updated: 2026-05-20
-stage: v0.2-finish Slice 6 implemented
+stage: v0.2.0 released
 ---
 
 # AgentCanvas — Status
+
+## v0.2.0 Release (2026-05-20)
+
+All seven slices of `docs/BUILD-SPEC-v0.2-finish.md` are landed. Version bumped 0.1.1 → 0.2.0 across `ui/package.json`, `crates/agent-canvas-app/Cargo.toml`, `crates/agent-canvas-app/tauri.conf.json`. Tag `v0.2.0` created on `main`.
+
+**Slice 7 — Release work performed:**
+
+- **7a Smoke test (static):** Acceptance criteria 1-26 from `BUILD-SPEC-v0.2-finish.md` reviewed by code-path inspection. Live behavioral smoke is the user's pass (CLAUDE.md "you test then I test" rule).
+- **7b Visual-system audit:** `grep -nE "#[0-9a-fA-F]{3,8}"` against `ui/src/styles.css` outside `:root` returns 0 raw-hex matches. All colors token-derived. A15 clean.
+- **7b A17 audit:** `grep -rn "window\.prompt\|window\.confirm" ui/src/` returns 0 matches. The residual `window.confirm` on file-delete (Slice 4d carry-over) was replaced with a new `<ConfirmDialog>` (focus-trapped, Esc cancels, Enter confirms, destructive-button styling). A17 clean.
+- **7c Docs refresh:** `README.md` updated with v0.2.0 capability summary. `BUILD-SPEC-v0.md` "Out of Scope for v0" section updated — only **Live MCP server** remains as a v0-scope deferral; everything else (comments, rendered editing, 3-way merge, annotation toolbar, viewers, search) is shipped.
+- **7d Version bump + tag:** version strings synchronized; tag pushed.
+
+**Verification (host):**
+
+- `./node_modules/.bin/tsc --noEmit` — passes
+- `./node_modules/.bin/vite build` — passes (with known large-chunk warning at ~1.2 MB; acceptable for v0.2; code-splitting deferred)
+- `cargo check -q` / `cargo test --bin agent-canvas-app` (per Codex Slice 6 report) — 6 pass, 0 fail
+
+**Out of scope for v0.2.0 (now v0.2-proper / v0.3 targets):**
+
+- Live MCP server / socket protocol (the v0.2-proper deferred work)
+- Pending Reviews aggregate view
+- Cross-machine sync of state.db
+- iOS reader
+- Notarization / code-signing
+- Trust boundaries / per-artifact agent visibility
+
+**Known residuals (non-blocking, tracked for v0.3):**
+
+- `pnpm build` is wedged by pnpm v11 ignored-builds approval (esbuild 0.25.12); workaround is `./node_modules/.bin/vite build` directly.
+- Vite bundle is one 1.2 MB chunk. Code-splitting is a v0.3 polish item.
 
 ## v0.2-finish Slice 6 Summary
 
