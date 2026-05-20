@@ -25,9 +25,19 @@ use vellum_core::{
 use walkdir::WalkDir;
 
 struct AppState {
-    paths: AgentCanvasPaths,
+    paths: Result<AgentCanvasPaths, String>,
     db: Mutex<Connection>,
     watcher: Mutex<Option<WatchHandle>>,
+}
+
+impl AppState {
+    fn paths(&self) -> Result<&AgentCanvasPaths, String> {
+        self.paths.as_ref().map_err(|error| error.clone())
+    }
+
+    fn bootstrap_error(&self) -> Option<String> {
+        self.paths.as_ref().err().cloned()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -120,14 +130,21 @@ struct FsEventPayload {
     path: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct BootstrapErrorPayload {
+    message: String,
+    hint: String,
+}
+
 #[tauri::command]
-fn bootstrap_info(state: tauri::State<AppState>) -> BootstrapInfo {
-    state.paths.bootstrap_info()
+fn bootstrap_info(state: tauri::State<AppState>) -> Result<BootstrapInfo, String> {
+    Ok(state.paths()?.bootstrap_info())
 }
 
 #[tauri::command]
 fn list_inbox(state: tauri::State<AppState>) -> Result<Vec<FileMetadata>, String> {
-    list_files_under(&state.paths.inbox_dir, &state.paths.canvas_root, &state.db)
+    let paths = state.paths()?;
+    list_files_under(&paths.inbox_dir, &paths.canvas_root, &state.db)
 }
 
 #[tauri::command]
@@ -135,20 +152,20 @@ fn list_project_files(
     state: tauri::State<AppState>,
     project: String,
 ) -> Result<Vec<FileMetadata>, String> {
-    let project_dir = state
-        .paths
-        .projects_dir
-        .join(safe_project_segment(&project)?);
-    list_files_under(&project_dir, &state.paths.canvas_root, &state.db)
+    let paths = state.paths()?;
+    let project_dir = paths.projects_dir.join(safe_project_segment(&project)?);
+    list_files_under(&project_dir, &paths.canvas_root, &state.db)
 }
 
 #[tauri::command]
 fn list_archive(state: tauri::State<AppState>) -> Result<Vec<FileMetadata>, String> {
-    list_files_under(&state.paths.archive_dir, &state.paths.canvas_root, &state.db)
+    let paths = state.paths()?;
+    list_files_under(&paths.archive_dir, &paths.canvas_root, &state.db)
 }
 
 #[tauri::command]
 fn list_pinned(state: tauri::State<AppState>) -> Result<Vec<FileMetadata>, String> {
+    let state_paths = state.paths()?;
     // Collect pinned paths from the state DB.
     let paths: Vec<String> = {
         let conn = state
@@ -175,7 +192,7 @@ fn list_pinned(state: tauri::State<AppState>) -> Result<Vec<FileMetadata>, Strin
         if !path.exists() || !is_supported_artifact(&path) {
             continue;
         }
-        let mut file = metadata_for_file(&path, &state.paths.canvas_root)?;
+        let mut file = metadata_for_file(&path, &state_paths.canvas_root)?;
         hydrate_file_state(&conn, &mut file)?;
         files.push(file);
     }
@@ -190,8 +207,9 @@ fn list_pinned(state: tauri::State<AppState>) -> Result<Vec<FileMetadata>, Strin
 
 #[tauri::command]
 fn list_projects(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
+    let paths = state.paths()?;
     let mut projects = Vec::new();
-    for entry in fs::read_dir(&state.paths.projects_dir).map_err(|error| error.to_string())? {
+    for entry in fs::read_dir(&paths.projects_dir).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
         if entry
             .file_type()
@@ -262,7 +280,8 @@ fn set_project_default_agent(
 
 #[tauri::command]
 fn list_personas(state: tauri::State<AppState>) -> Result<PersonaRegistry, String> {
-    resolve_personas(&state.paths.persona_registry, &state.db)
+    let paths = state.paths()?;
+    resolve_personas(&paths.persona_registry, &state.db)
 }
 
 #[tauri::command]
@@ -282,6 +301,9 @@ fn set_default_action_verb(state: tauri::State<AppState>, verb: String) -> Resul
 
 #[tauri::command]
 fn toggle_pin(state: tauri::State<AppState>, path: String) -> Result<bool, String> {
+    let paths = state.paths()?;
+    let path = path_within_canvas(&paths.canvas_root, Path::new(&path))?;
+    let path = path.to_string_lossy().into_owned();
     let conn = state
         .db
         .lock()
@@ -304,20 +326,22 @@ fn toggle_pin(state: tauri::State<AppState>, path: String) -> Result<bool, Strin
 
 #[tauri::command]
 fn archive_file(state: tauri::State<AppState>, path: String) -> Result<String, String> {
-    let source = absolute_doc_path(&path)?;
-    ensure_regular_file(source)?;
+    let paths = state.paths()?;
+    let source = path_within_canvas(&paths.canvas_root, Path::new(&path))?;
+    ensure_regular_file(&source)?;
     let file_name = source
         .file_name()
         .ok_or_else(|| "archive source has no filename".to_owned())?;
-    let target = unique_archive_path(&state.paths.archive_dir.join(file_name));
-    fs::rename(source, &target).map_err(|error| error.to_string())?;
+    let target = unique_archive_path(&paths.archive_dir.join(file_name));
+    let target = path_within_canvas(&paths.canvas_root, &target)?;
+    fs::rename(&source, &target).map_err(|error| error.to_string())?;
     let conn = state
         .db
         .lock()
         .map_err(|_| "state db lock poisoned".to_owned())?;
     conn.execute(
         "UPDATE files SET path = ?1, archived = 1 WHERE path = ?2",
-        params![target.to_string_lossy(), path],
+        params![target.to_string_lossy(), source.to_string_lossy()],
     )
     .map_err(|error| error.to_string())?;
     Ok(target.to_string_lossy().into_owned())
@@ -328,6 +352,7 @@ fn copy_paths_to_inbox(
     state: tauri::State<AppState>,
     paths: Vec<String>,
 ) -> Result<Vec<FileMetadata>, String> {
+    let state_paths = state.paths()?;
     let mut copied = Vec::new();
     for path in paths {
         let source = PathBuf::from(path);
@@ -335,9 +360,10 @@ fn copy_paths_to_inbox(
         let file_name = source
             .file_name()
             .ok_or_else(|| "dropped file has no filename".to_owned())?;
-        let target = unique_path(&state.paths.inbox_dir.join(file_name));
+        let target = unique_path(&state_paths.inbox_dir.join(file_name));
+        let target = path_within_canvas(&state_paths.canvas_root, &target)?;
         fs::copy(&source, &target).map_err(|error| error.to_string())?;
-        let file = metadata_for_file(&target, &state.paths.canvas_root)?;
+        let file = metadata_for_file(&target, &state_paths.canvas_root)?;
         let conn = state
             .db
             .lock()
@@ -355,14 +381,10 @@ fn move_file_to_project(
     project: String,
     strategy: ConflictStrategy,
 ) -> Result<FileMetadata, String> {
+    let paths = state.paths()?;
     let project = safe_project_segment(&project)?;
-    move_file_to_target(
-        &state,
-        &path,
-        &state.paths.projects_dir.join(project),
-        false,
-        strategy,
-    )
+    let target_dir = path_within_canvas(&paths.canvas_root, &paths.projects_dir.join(project))?;
+    move_file_to_target(&state, &path, &target_dir, false, strategy)
 }
 
 #[tauri::command]
@@ -371,7 +393,9 @@ fn move_file_to_archive(
     path: String,
     strategy: ConflictStrategy,
 ) -> Result<FileMetadata, String> {
-    move_file_to_target(&state, &path, &state.paths.archive_dir, true, strategy)
+    let paths = state.paths()?;
+    let target_dir = path_within_canvas(&paths.canvas_root, &paths.archive_dir)?;
+    move_file_to_target(&state, &path, &target_dir, true, strategy)
 }
 
 #[tauri::command]
@@ -381,21 +405,20 @@ fn target_file_exists(
     project: Option<String>,
     filename: String,
 ) -> Result<bool, String> {
+    let paths = state.paths()?;
     if filename.contains('/') || filename.contains('\\') || filename.is_empty() {
         return Err("invalid filename".to_owned());
     }
     let dir = match target.as_str() {
-        "archive" => state.paths.archive_dir.clone(),
+        "archive" => paths.archive_dir.clone(),
         "project" => {
             let project = project.ok_or_else(|| "project is required".to_owned())?;
-            state
-                .paths
-                .projects_dir
-                .join(safe_project_segment(&project)?)
+            paths.projects_dir.join(safe_project_segment(&project)?)
         }
         _ => return Err("invalid target".to_owned()),
     };
-    Ok(dir.join(filename).exists())
+    let target = path_within_canvas(&paths.canvas_root, &dir.join(filename))?;
+    Ok(target.exists())
 }
 
 #[tauri::command]
@@ -405,9 +428,10 @@ fn copy_text_to_clipboard(text: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn reveal_in_finder(path: String) -> Result<(), String> {
-    let path = absolute_doc_path(&path)?;
-    ensure_regular_file(path)?;
+fn reveal_in_finder(state: tauri::State<AppState>, path: String) -> Result<(), String> {
+    let paths = state.paths()?;
+    let path = path_within_canvas(&paths.canvas_root, Path::new(&path))?;
+    ensure_regular_file(&path)?;
     #[cfg(target_os = "macos")]
     {
         let status = Command::new("open")
@@ -429,16 +453,19 @@ fn reveal_in_finder(path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn delete_file(state: tauri::State<AppState>, path: String) -> Result<(), String> {
-    let source = absolute_doc_path(&path)?;
-    ensure_regular_file(source)?;
-    ensure_under_root(source, &state.paths.canvas_root)?;
-    fs::remove_file(source).map_err(|error| error.to_string())?;
+    let paths = state.paths()?;
+    let source = path_within_canvas(&paths.canvas_root, Path::new(&path))?;
+    ensure_regular_file(&source)?;
+    fs::remove_file(&source).map_err(|error| error.to_string())?;
     let conn = state
         .db
         .lock()
         .map_err(|_| "state db lock poisoned".to_owned())?;
-    conn.execute("DELETE FROM files WHERE path = ?1", params![path])
-        .map_err(|error| error.to_string())?;
+    conn.execute(
+        "DELETE FROM files WHERE path = ?1",
+        params![source.to_string_lossy()],
+    )
+    .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -447,7 +474,15 @@ fn send_to_clipboard(
     state: tauri::State<AppState>,
     payload: SendPayload,
 ) -> Result<String, String> {
-    let formatted = format_send_payload(&payload, &state.paths.canvas_root)?;
+    let paths = state.paths()?;
+    let payload_path = path_within_canvas(&paths.canvas_root, Path::new(&payload.path))?;
+    let payload = SendPayload {
+        path: payload_path.to_string_lossy().into_owned(),
+        contents: payload.contents,
+        note: payload.note,
+        action_verb: payload.action_verb,
+    };
+    let formatted = format_send_payload(&payload, &paths.canvas_root)?;
     write_clipboard(&formatted)?;
     Ok(formatted)
 }
@@ -526,16 +561,27 @@ fn save_document(source: String, patches: Vec<BlockPatch>) -> Result<String, Str
 }
 
 #[tauri::command]
-fn open_document(doc_path: String) -> Result<OpenDocument, String> {
-    let doc_path = absolute_doc_path(&doc_path)?;
-    ensure_regular_file(doc_path)?;
+fn open_document(state: tauri::State<AppState>, doc_path: String) -> Result<OpenDocument, String> {
+    let paths = state.paths()?;
+    let doc_path = path_within_canvas(&paths.canvas_root, Path::new(&doc_path))?;
+    ensure_regular_file(&doc_path)?;
 
-    let bytes = fs::read(doc_path).map_err(|error| error.to_string())?;
+    let bytes = fs::read(&doc_path).map_err(|error| error.to_string())?;
     let base_hash = *vellum_core::hash::content_hash(&bytes).as_bytes();
     let source = String::from_utf8(bytes).map_err(|error| error.to_string())?;
+    let path_string = doc_path.to_string_lossy().into_owned();
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute(
+        "UPDATE files SET last_read_at = strftime('%s','now') WHERE path = ?1",
+        params![path_string],
+    )
+    .map_err(|error| error.to_string())?;
 
     Ok(OpenDocument {
-        path: doc_path.to_string_lossy().into_owned(),
+        path: path_string,
         has_conflict_markers: has_conflict_markers(&source),
         source,
         base_hash,
@@ -544,13 +590,15 @@ fn open_document(doc_path: String) -> Result<OpenDocument, String> {
 
 #[tauri::command]
 fn write_document(
+    state: tauri::State<AppState>,
     doc_path: String,
     source: String,
     base_hash: [u8; 32],
 ) -> Result<WriteResult, String> {
-    let doc_path = absolute_doc_path(&doc_path)?;
+    let paths = state.paths()?;
+    let doc_path = path_within_canvas(&paths.canvas_root, Path::new(&doc_path))?;
 
-    match atomic_write(doc_path, source.as_bytes(), Some(&base_hash)) {
+    match atomic_write(&doc_path, source.as_bytes(), Some(&base_hash)) {
         Ok(new_hash) => Ok(WriteResult { new_hash }),
         Err(AtomicWriteError::ConflictDetected { .. }) => {
             Err("CONFLICT: file changed on disk before save".to_owned())
@@ -560,12 +608,13 @@ fn write_document(
 }
 
 #[tauri::command]
-fn load_sidecar(doc_path: String) -> Result<IdentityMap, String> {
-    let doc_path = absolute_doc_path(&doc_path)?;
-    let vault_root = vault_root_for_absolute_doc(doc_path)?;
-    let doc_source = fs::read_to_string(doc_path).map_err(|error| error.to_string())?;
+fn load_sidecar(state: tauri::State<AppState>, doc_path: String) -> Result<IdentityMap, String> {
+    let paths = state.paths()?;
+    let doc_path = path_within_canvas(&paths.canvas_root, Path::new(&doc_path))?;
+    let vault_root = vault_root_for_absolute_doc(&doc_path)?;
+    let doc_source = fs::read_to_string(&doc_path).map_err(|error| error.to_string())?;
 
-    let migrated = sidecar::load_or_migrate(vault_root, doc_path, &doc_source)
+    let migrated = sidecar::load_or_migrate(vault_root, &doc_path, &doc_source)
         .map_err(|error| error.to_string())?;
     Ok(migrated.unwrap_or_else(|| IdentityMap {
         source_hash: *vellum_core::hash::content_hash(doc_source.as_bytes()).as_bytes(),
@@ -574,11 +623,16 @@ fn load_sidecar(doc_path: String) -> Result<IdentityMap, String> {
 }
 
 #[tauri::command]
-fn save_sidecar(doc_path: String, map: IdentityMap) -> Result<(), String> {
-    let doc_path = absolute_doc_path(&doc_path)?;
-    let vault_root = vault_root_for_absolute_doc(doc_path)?;
+fn save_sidecar(
+    state: tauri::State<AppState>,
+    doc_path: String,
+    map: IdentityMap,
+) -> Result<(), String> {
+    let paths = state.paths()?;
+    let doc_path = path_within_canvas(&paths.canvas_root, Path::new(&doc_path))?;
+    let vault_root = vault_root_for_absolute_doc(&doc_path)?;
 
-    sidecar::save(vault_root, doc_path, &map).map_err(|error| error.to_string())
+    sidecar::save(vault_root, &doc_path, &map).map_err(|error| error.to_string())
 }
 
 fn bootstrap() -> Result<AppState, String> {
@@ -586,10 +640,30 @@ fn bootstrap() -> Result<AppState, String> {
     paths.ensure()?;
     let db = open_state_db(&paths.state_db)?;
     Ok(AppState {
-        paths,
+        paths: Ok(paths),
         db: Mutex::new(db),
         watcher: Mutex::new(None),
     })
+}
+
+fn bootstrap_or_error_state() -> AppState {
+    match bootstrap() {
+        Ok(state) => state,
+        Err(error) => {
+            eprintln!(
+                "AgentCanvas could not start cleanly: {error}. Open System Settings -> iCloud Drive and confirm AgentCanvas storage is available."
+            );
+            let db = open_in_memory_state_db().unwrap_or_else(|db_error| {
+                eprintln!("AgentCanvas could not initialize fallback state DB: {db_error}");
+                Connection::open_in_memory().expect("failed to initialize in-memory fallback DB")
+            });
+            AppState {
+                paths: Err(error),
+                db: Mutex::new(db),
+                watcher: Mutex::new(None),
+            }
+        }
+    }
 }
 
 impl AgentCanvasPaths {
@@ -661,6 +735,17 @@ impl AgentCanvasPaths {
 
 fn open_state_db(path: &Path) -> Result<Connection, String> {
     let db = Connection::open(path).map_err(|error| error.to_string())?;
+    initialize_state_db(&db)?;
+    Ok(db)
+}
+
+fn open_in_memory_state_db() -> Result<Connection, String> {
+    let db = Connection::open_in_memory().map_err(|error| error.to_string())?;
+    initialize_state_db(&db)?;
+    Ok(db)
+}
+
+fn initialize_state_db(db: &Connection) -> Result<(), String> {
     db.execute_batch(
         r#"
         PRAGMA journal_mode = WAL;
@@ -721,7 +806,7 @@ fn open_state_db(path: &Path) -> Result<Connection, String> {
         "#,
     )
     .map_err(|error| error.to_string())?;
-    Ok(db)
+    Ok(())
 }
 
 fn get_setting(db: &Mutex<Connection>, key: &str) -> Result<Option<String>, String> {
@@ -862,7 +947,9 @@ fn upsert_file_state(conn: &Connection, file: &FileMetadata) -> Result<(), Strin
         )
         .ok();
 
-    if let Some(existing_path) = existing_path {
+    if let Some(existing_path) = existing_path
+        && !Path::new(&existing_path).exists()
+    {
         conn.execute(
             "UPDATE files SET path = ?1, size = ?2, mtime = ?3 WHERE path = ?4",
             params![file.path, file.size as i64, file.mtime, existing_path],
@@ -1056,13 +1143,14 @@ fn move_file_to_target(
     archived: bool,
     strategy: ConflictStrategy,
 ) -> Result<FileMetadata, String> {
+    let paths = state.paths()?;
     if matches!(strategy, ConflictStrategy::Cancel) {
         return Err("move cancelled".to_owned());
     }
-    let source = absolute_doc_path(source)?;
-    ensure_regular_file(source)?;
-    ensure_under_root(source, &state.paths.canvas_root)?;
-    fs::create_dir_all(target_dir).map_err(|error| error.to_string())?;
+    let source = path_within_canvas(&paths.canvas_root, Path::new(source))?;
+    ensure_regular_file(&source)?;
+    let target_dir = path_within_canvas(&paths.canvas_root, target_dir)?;
+    fs::create_dir_all(&target_dir).map_err(|error| error.to_string())?;
     let file_name = source
         .file_name()
         .ok_or_else(|| "move source has no filename".to_owned())?;
@@ -1070,6 +1158,7 @@ fn move_file_to_target(
     let target = if target.exists() {
         match strategy {
             ConflictStrategy::Replace => {
+                let target = path_within_canvas(&paths.canvas_root, &target)?;
                 fs::remove_file(&target).map_err(|error| error.to_string())?;
                 target
             }
@@ -1079,9 +1168,10 @@ fn move_file_to_target(
     } else {
         target
     };
+    let target = path_within_canvas(&paths.canvas_root, &target)?;
 
-    fs::rename(source, &target).map_err(|error| error.to_string())?;
-    let mut file = metadata_for_file(&target, &state.paths.canvas_root)?;
+    fs::rename(&source, &target).map_err(|error| error.to_string())?;
+    let mut file = metadata_for_file(&target, &paths.canvas_root)?;
     file.archived = archived;
     let conn = state
         .db
@@ -1100,10 +1190,32 @@ fn move_file_to_target(
     Ok(file)
 }
 
-fn ensure_under_root(path: &Path, root: &Path) -> Result<(), String> {
-    path.strip_prefix(root)
-        .map(|_| ())
-        .map_err(|_| "path must live under AgentCanvas root".to_owned())
+fn path_within_canvas(canvas_root: &Path, candidate: &Path) -> Result<PathBuf, String> {
+    let canonical_root = canvas_root
+        .canonicalize()
+        .map_err(|error| format!("could not resolve AgentCanvas root: {error}"))?;
+    let canonical_candidate = if candidate.exists() {
+        candidate
+            .canonicalize()
+            .map_err(|error| error.to_string())?
+    } else {
+        let parent = candidate
+            .parent()
+            .ok_or_else(|| format!("path outside AgentCanvas: {}", candidate.display()))?;
+        let file_name = candidate
+            .file_name()
+            .ok_or_else(|| format!("path outside AgentCanvas: {}", candidate.display()))?;
+        parent
+            .canonicalize()
+            .map_err(|error| error.to_string())?
+            .join(file_name)
+    };
+
+    if canonical_candidate.starts_with(&canonical_root) {
+        Ok(canonical_candidate)
+    } else {
+        Err(format!("path outside AgentCanvas: {}", candidate.display()))
+    }
 }
 
 fn format_send_payload(payload: &SendPayload, canvas_root: &Path) -> Result<String, String> {
@@ -1195,15 +1307,6 @@ fn safe_project_segment(project: &str) -> Result<&str, String> {
     }
 }
 
-fn absolute_doc_path(doc_path: &str) -> Result<&Path, String> {
-    let path = Path::new(doc_path);
-    if path.is_absolute() {
-        Ok(path)
-    } else {
-        Err("doc_path must be absolute".to_owned())
-    }
-}
-
 fn ensure_regular_file(doc_path: &Path) -> Result<(), String> {
     let metadata = fs::metadata(doc_path).map_err(|error| error.to_string())?;
     if metadata.is_file() {
@@ -1226,19 +1329,29 @@ fn home_dir() -> Result<PathBuf, String> {
 }
 
 fn main() {
-    let app_state = bootstrap().expect("failed to bootstrap AgentCanvas");
+    let app_state = bootstrap_or_error_state();
 
-    tauri::Builder::<tauri::Wry>::default()
+    let result = tauri::Builder::<tauri::Wry>::default()
         .manage(app_state)
         .setup(|app| {
             let state = app.state::<AppState>();
-            let canvas_root = state.paths.canvas_root.clone();
-            let app_handle = app.handle().clone();
-            let watcher = watch::watch_vault(&canvas_root, move |event| {
-                let payload = fs_event_payload(event);
-                let _ = app_handle.emit("agentcanvas://fs-event", payload);
-            })?;
-            *state.watcher.lock().map_err(|_| "watcher lock poisoned")? = Some(watcher);
+            if let Some(message) = state.bootstrap_error() {
+                let hint = "Open System Settings -> iCloud Drive and confirm AgentCanvas storage is available.".to_owned();
+                eprintln!("AgentCanvas bootstrap error: {message}. {hint}");
+                let _ = app.emit("bootstrap-error", BootstrapErrorPayload { message, hint });
+            } else {
+                let canvas_root = state
+                    .paths()
+                    .map_err(std::io::Error::other)?
+                    .canvas_root
+                    .clone();
+                let app_handle = app.handle().clone();
+                let watcher = watch::watch_vault(&canvas_root, move |event| {
+                    let payload = fs_event_payload(event);
+                    let _ = app_handle.emit("agentcanvas://fs-event", payload);
+                })?;
+                *state.watcher.lock().map_err(|_| "watcher lock poisoned")? = Some(watcher);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1273,8 +1386,11 @@ fn main() {
             save_sidecar
         ])
         .plugin(tauri_plugin_dialog::init())
-        .run(tauri::generate_context!())
-        .expect("failed to run AgentCanvas app");
+        .run(tauri::generate_context!());
+
+    if let Err(error) = result {
+        eprintln!("AgentCanvas could not start: {error}");
+    }
 }
 
 fn fs_event_payload(event: WatchEvent) -> FsEventPayload {
@@ -1301,6 +1417,83 @@ fn fs_event_payload(event: WatchEvent) -> FsEventPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_path_within_canvas_rejects_outside() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let canvas_root = temp.path().join("AgentCanvas");
+        fs::create_dir_all(&canvas_root).expect("canvas root");
+
+        assert!(path_within_canvas(&canvas_root, Path::new("/etc/passwd")).is_err());
+        assert!(path_within_canvas(&canvas_root, Path::new("/tmp/foo")).is_err());
+    }
+
+    #[test]
+    fn test_path_within_canvas_accepts_descendant() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let canvas_root = temp.path().join("AgentCanvas");
+        let inbox = canvas_root.join("Inbox");
+        fs::create_dir_all(&inbox).expect("inbox");
+
+        let candidate = inbox.join("x.md");
+        let bounded = path_within_canvas(&canvas_root, &candidate).expect("descendant accepted");
+
+        // On macOS, tempdirs canonicalize through /private. Compare canonicalized expectation.
+        let expected = inbox.canonicalize().expect("canonicalize inbox").join("x.md");
+        assert_eq!(bounded, expected);
+    }
+
+    #[test]
+    fn test_path_within_canvas_resolves_symlinks() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let canvas_root = temp.path().join("AgentCanvas");
+        fs::create_dir_all(&canvas_root).expect("canvas root");
+        let inside = canvas_root.join("x.md");
+        fs::write(&inside, "inside").expect("inside file");
+        let symlink = temp.path().join("link.md");
+        std::os::unix::fs::symlink(&inside, &symlink).expect("symlink");
+
+        let bounded = path_within_canvas(&canvas_root, &symlink).expect("symlink accepted");
+
+        // Symlink target canonicalizes through /private on macOS.
+        let expected = inside.canonicalize().expect("canonicalize target");
+        assert_eq!(bounded, expected);
+    }
+
+    #[test]
+    fn test_identity_relink_skips_when_old_path_exists() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let canvas_root = temp.path().join("AgentCanvas");
+        let inbox = canvas_root.join("Inbox");
+        fs::create_dir_all(&inbox).expect("inbox");
+        let first_path = inbox.join("first.md");
+        let second_path = inbox.join("second.md");
+        fs::write(&first_path, "").expect("first file");
+        fs::write(&second_path, "").expect("second file");
+        let conn = open_in_memory_state_db().expect("db");
+
+        let first = metadata_for_file(&first_path, &canvas_root).expect("first metadata");
+        upsert_file_state(&conn, &first).expect("first upsert");
+        conn.execute(
+            "UPDATE files SET pinned = 1 WHERE path = ?1",
+            params![first.path],
+        )
+        .expect("pin first");
+        let mut second = metadata_for_file(&second_path, &canvas_root).expect("second metadata");
+        upsert_file_state(&conn, &second).expect("second upsert");
+        hydrate_file_state(&conn, &mut second).expect("hydrate second");
+        let first_pinned: i64 = conn
+            .query_row(
+                "SELECT pinned FROM files WHERE path = ?1",
+                params![first_path.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .expect("first row");
+
+        assert_eq!(first_pinned, 1);
+        assert!(!second.pinned);
+        assert_ne!(first.path, second.path);
+    }
 
     #[test]
     fn send_payload_uses_relative_path_fence_note_and_action() {
