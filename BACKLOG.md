@@ -10,6 +10,11 @@ Status: `todo` / `in-progress` / `blocked` / `done` / `cut`.
 | 2 | done | Interactive HTML viewer, postMessage bridge, comments-on-HTML |
 | 3 | done | File-level comments and grouped comments panel |
 
+## v0.4 candidates
+
+- todo — Positional comments on PNG and PDF (Word/GDocs-style region anchors). PNG: click-to-pin and drag-to-rectangle, new anchor `png_region { x_pct, y_pct, w_pct?, h_pct? }`, pins rendered as numbered overlay. PDF: swap `<object>` to `pdf.js` so we control the canvas, new anchor `pdf_region { page, x_pct, y_pct, w_pct?, h_pct? }`. Slice 3 added `file_level` as the floor; this slice adds the real model. Lighter version: PNG-region-only + `pdf_page` anchor (page number, no region), defer pdf.js to a later slice.
+- todo — Flaky vellum-core `watch_emits_event_on_modify` test on macOS host. File watcher timing under macOS notify; passes in Linux VM. Either add longer wait or skip the test on macos cfg.
+
 ## v0.3 Spinoffs
 
 - todo — [v0.3-slice2-spinoff] Replace the `ts-rs` warning-prone `CommentAnchor` export with an explicit generated-type strategy or custom TS binding so `serde(skip_serializing_if)` stays warning-free while preserving legacy sidecar output.
