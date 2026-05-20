@@ -21,7 +21,7 @@ use tauri::{Emitter, Manager};
 use vellum_core::{
     block::patch::BlockPatch,
     fs::{AtomicWriteError, OpenDocument, WriteResult, atomic_write, has_conflict_markers},
-    sidecar::{self, IdentityMap},
+    sidecar::{self, BaseSnapshot, IdentityMap},
     watch::{self, WatchEvent, WatchHandle},
 };
 use walkdir::WalkDir;
@@ -851,7 +851,10 @@ fn write_document(
     let doc_path = path_within_canvas(&paths.canvas_root, Path::new(&doc_path))?;
 
     match atomic_write(&doc_path, source.as_bytes(), Some(&base_hash)) {
-        Ok(new_hash) => Ok(WriteResult { new_hash }),
+        Ok(new_hash) => {
+            update_base_snapshot(&doc_path, &source, new_hash)?;
+            Ok(WriteResult { new_hash })
+        }
         Err(AtomicWriteError::ConflictDetected { .. }) => {
             Err("CONFLICT: file changed on disk before save".to_owned())
         }
@@ -871,6 +874,7 @@ fn load_sidecar(state: tauri::State<AppState>, doc_path: String) -> Result<Ident
     Ok(migrated.unwrap_or_else(|| IdentityMap {
         source_hash: *vellum_core::hash::content_hash(doc_source.as_bytes()).as_bytes(),
         block_ids: Vec::new(),
+        base_snapshot: None,
     }))
 }
 
@@ -885,6 +889,23 @@ fn save_sidecar(
     let vault_root = vault_root_for_absolute_doc(&doc_path)?;
 
     sidecar::save(vault_root, &doc_path, &map).map_err(|error| error.to_string())
+}
+
+fn update_base_snapshot(doc_path: &Path, source: &str, hash: [u8; 32]) -> Result<(), String> {
+    let vault_root = vault_root_for_absolute_doc(doc_path)?;
+    let mut identity = sidecar::load_or_migrate(vault_root, doc_path, source)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(|| IdentityMap {
+            source_hash: hash,
+            block_ids: Vec::new(),
+            base_snapshot: None,
+        });
+    identity.source_hash = hash;
+    identity.base_snapshot = Some(BaseSnapshot {
+        hash,
+        source: source.to_owned(),
+    });
+    sidecar::save(vault_root, doc_path, &identity).map_err(|error| error.to_string())
 }
 
 fn bootstrap() -> Result<AppState, String> {

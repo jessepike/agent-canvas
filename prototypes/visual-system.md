@@ -98,6 +98,15 @@ Round 2 and beyond should preserve this system unless a deliberate decision move
 --drop-target-border: var(--accent)
 ```
 
+### Revision & Merge
+
+```css
+--revision-mark-bg:      #FFF1A8
+--revision-mark-border:  #DCC75A
+--merge-column-bg:       #F7F5EE
+--merge-column-muted-bg: #EFEDE6
+```
+
 ## Shadows
 
 ```css
@@ -154,6 +163,10 @@ Every color used in `ui/src/styles.css` must be referenced through one of these 
 - `--diff-rem-strong` — strong removal accent.
 - `--drop-target-bg` — drag-and-drop target fill.
 - `--drop-target-border` — drag-and-drop target border.
+- `--revision-mark-bg` — highlight fill for mark-for-revision spans.
+- `--revision-mark-border` — inset edge for mark-for-revision spans.
+- `--merge-column-bg` — source column surface in merge dialogs.
+- `--merge-column-muted-bg` — unavailable ancestor column surface in merge dialogs.
 - `--persona-claude` — fallback Claude badge color when registry data is absent.
 - `--persona-codex` — fallback Codex badge color when registry data is absent.
 - `--btn-bg-top` — default button gradient top stop.

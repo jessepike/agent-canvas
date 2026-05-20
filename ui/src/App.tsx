@@ -3,7 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent
 import { listen, TauriEvent } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { RenderedView } from "./components/RenderedView";
-import { SourceView } from "./components/SourceView";
+import { SourceView, type SourceFormat, type SourceViewHandle } from "./components/SourceView";
 import {
   addAgentSession,
   archiveFile,
@@ -23,6 +23,7 @@ import {
   listPersonas,
   listProjectCounts,
   listProjects,
+  loadSidecar,
   moveFileToArchive,
   moveFileToProject,
   openDocument,
@@ -46,6 +47,7 @@ import {
   type PersonaRegistry
 } from "./ipc";
 import type { Block } from "./types/blocks";
+import type { BaseSnapshot } from "./types/blocks";
 import "./styles.css";
 
 type OpenArtifact = {
@@ -90,6 +92,19 @@ type ProjectMenu = {
   project: string;
 } | null;
 
+type AnnotationSelection = {
+  rect: DOMRect;
+} | null;
+
+type MergeConflict = {
+  path: string;
+  filename: string;
+  draftSource: string;
+  baseSnapshot: BaseSnapshot | null;
+  diskSource: string;
+  diskHash: number[];
+} | null;
+
 const ACTION_VERBS = ["Review", "Revise", "Expand", "Critique", "Summarize", "Respond to"] as const;
 
 export default function App() {
@@ -114,6 +129,7 @@ export default function App() {
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const sourceViewRef = useRef<SourceViewHandle | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [artifact, setArtifact] = useState<OpenArtifact | null>(null);
@@ -121,6 +137,8 @@ export default function App() {
   const [sourceMode, setSourceMode] = useState(false);
   const [jsonViewMode, setJsonViewMode] = useState<"source" | "tree">("source");
   const [conflict, setConflict] = useState(false);
+  const [mergeConflict, setMergeConflict] = useState<MergeConflict>(null);
+  const [annotationSelection, setAnnotationSelection] = useState<AnnotationSelection>(null);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [handoffToast, setHandoffToast] = useState<string | null>(null);
@@ -577,6 +595,7 @@ export default function App() {
       const result = await writeDocument(artifact.path, artifact.source, artifact.baseHash);
       const blocks = artifact.kind === "md" ? await parseDocument(artifact.source) : [];
       setArtifact({ ...artifact, baseHash: result.new_hash, blocks, dirty: false });
+      setMergeConflict(null);
       const stamp = currentTime();
       setSavedAt(stamp);
       window.setTimeout(() => setSavedAt((current) => (current === stamp ? null : current)), 3000);
@@ -585,6 +604,22 @@ export default function App() {
       const message = caught instanceof Error ? caught.message : String(caught);
       if (message.startsWith("CONFLICT:")) {
         setConflict(true);
+        try {
+          const [sidecar, disk] = await Promise.all([
+            loadSidecar(artifact.path).catch(() => null),
+            openDocument(artifact.path)
+          ]);
+          setMergeConflict({
+            path: artifact.path,
+            filename: fileName(artifact.path),
+            draftSource: artifact.source,
+            baseSnapshot: sidecar?.base_snapshot ?? null,
+            diskSource: disk.source,
+            diskHash: disk.base_hash
+          });
+        } catch (conflictCaught) {
+          setError(conflictCaught instanceof Error ? conflictCaught.message : String(conflictCaught));
+        }
       } else {
         setError(message);
       }
@@ -598,6 +633,69 @@ export default function App() {
     setConflict(false);
     setSavedAt(null);
   }
+
+  const applyAnnotationFormat = useCallback((format: SourceFormat) => {
+    sourceViewRef.current?.applyFormat(format);
+  }, []);
+
+  const keepMineFromMerge = useCallback(async () => {
+    if (!mergeConflict || !artifact) {
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    try {
+      const result = await writeDocument(mergeConflict.path, mergeConflict.draftSource, mergeConflict.diskHash);
+      const blocks = artifact.kind === "md" ? await parseDocument(mergeConflict.draftSource) : [];
+      setArtifact({
+        ...artifact,
+        source: mergeConflict.draftSource,
+        baseHash: result.new_hash,
+        blocks,
+        dirty: false
+      });
+      setConflict(false);
+      setMergeConflict(null);
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setIsSaving(false);
+    }
+  }, [artifact, mergeConflict, refresh]);
+
+  const keepTheirsFromMerge = useCallback(async () => {
+    if (!mergeConflict || !artifact) {
+      return;
+    }
+    const blocks = artifact.kind === "md" ? await parseDocument(mergeConflict.diskSource) : [];
+    setArtifact({
+      ...artifact,
+      source: mergeConflict.diskSource,
+      baseHash: mergeConflict.diskHash,
+      blocks,
+      dirty: false
+    });
+    setConflict(false);
+    setMergeConflict(null);
+  }, [artifact, mergeConflict]);
+
+  const cancelMergeAndReload = useCallback(async () => {
+    if (!mergeConflict || !artifact) {
+      return;
+    }
+    const disk = await openDocument(mergeConflict.path);
+    const blocks = artifact.kind === "md" ? await parseDocument(disk.source) : [];
+    setArtifact({
+      ...artifact,
+      source: disk.source,
+      baseHash: disk.base_hash,
+      blocks,
+      dirty: false
+    });
+    setConflict(false);
+    setMergeConflict(null);
+  }, [artifact, mergeConflict]);
 
   const openSendPopover = useCallback((forceAgentPicker = false) => {
     if (!artifact && selectedPaths.size <= 1) {
@@ -1403,8 +1501,12 @@ export default function App() {
             </div>
             {conflict ? (
               <div className="conflict-banner" role="alert">
-                {fileName(artifact?.path ?? "File")} changed on disk since open. Save aborted — reload or copy your edit
-                elsewhere.
+                {fileName(artifact?.path ?? "File")} changed on disk since open. Resolve the merge dialog to continue.
+              </div>
+            ) : null}
+            {editMode && artifact?.kind === "md" ? (
+              <div className="edit-fallback-banner" role="status">
+                Rendered-view editing lands in v0.3 — using source editor
               </div>
             ) : null}
             {personas?.warning ? <div className="registry-warning">{personas.warning}</div> : null}
@@ -1422,11 +1524,13 @@ export default function App() {
               editMode || sourceMode || (artifact.kind === "json" && (jsonViewMode === "source" || !parsedJson)) ? (
                 <section className="source-panel" aria-label="Source editor">
                   <SourceView
+                    ref={sourceViewRef}
                     key={artifact.kind}
                     language={sourceLanguageForArtifact(artifact.kind)}
                     value={artifact.source}
                     onChange={updateSource}
                     onSave={saveArtifact}
+                    onSelectionBoundsChange={(bounds) => setAnnotationSelection(bounds ? { rect: bounds } : null)}
                   />
                 </section>
               ) : artifact.kind === "md" ? (
@@ -1444,11 +1548,13 @@ export default function App() {
               ) : artifact.kind === "txt" ? (
                 <section className="source-panel" aria-label="Text source">
                   <SourceView
+                    ref={sourceViewRef}
                     key={artifact.kind}
                     language="plaintext"
                     value={artifact.source}
                     onChange={updateSource}
                     onSave={saveArtifact}
+                    onSelectionBoundsChange={(bounds) => setAnnotationSelection(bounds ? { rect: bounds } : null)}
                   />
                 </section>
               ) : artifact.kind === "png" ? (
@@ -1477,6 +1583,9 @@ export default function App() {
               </article>
             )}
             {error ? <p className="error-banner">{error}</p> : null}
+            {annotationSelection && artifact?.kind === "md" && editMode ? (
+              <AnnotationToolbar selection={annotationSelection} onFormat={applyAnnotationFormat} />
+            ) : null}
             {sendPopoverOpen ? (
               <SendPopover
                 label={sendButtonLabel}
@@ -1777,6 +1886,15 @@ export default function App() {
             }}
           />
         ) : null}
+        {mergeConflict ? (
+          <ConflictMergeDialog
+            conflict={mergeConflict}
+            isSaving={isSaving}
+            onKeepMine={() => void keepMineFromMerge()}
+            onKeepTheirs={() => void keepTheirsFromMerge()}
+            onCancel={() => void cancelMergeAndReload()}
+          />
+        ) : null}
     </main>
   );
 }
@@ -1811,6 +1929,103 @@ function MultiSelectPlaceholder({ files, count, onSend, onArchive, onClear }: Mu
         </button>
       </div>
     </article>
+  );
+}
+
+type AnnotationToolbarProps = {
+  selection: { rect: DOMRect };
+  onFormat: (format: SourceFormat) => void;
+};
+
+function AnnotationToolbar({ selection, onFormat }: AnnotationToolbarProps) {
+  const left = selection.rect.left + selection.rect.width / 2;
+  const top = Math.max(8, selection.rect.top - 44);
+  return (
+    <div className="annotation-toolbar" style={{ left, top }} role="toolbar" aria-label="Annotation toolbar">
+      <button type="button" title="Bold (⌘B)" onMouseDown={(event) => event.preventDefault()} onClick={() => onFormat("bold")}>
+        <strong>B</strong>
+      </button>
+      <button type="button" title="Italic (⌘I)" onMouseDown={(event) => event.preventDefault()} onClick={() => onFormat("italic")}>
+        <em>I</em>
+      </button>
+      <button type="button" title="Strikethrough (⌘⇧X)" onMouseDown={(event) => event.preventDefault()} onClick={() => onFormat("strike")}>
+        <span className="strike-icon">S</span>
+      </button>
+      <button type="button" title="Code (`)" onMouseDown={(event) => event.preventDefault()} onClick={() => onFormat("code")}>
+        <code>`</code>
+      </button>
+      <button type="button" title="Mark for Revision" onMouseDown={(event) => event.preventDefault()} onClick={() => onFormat("revision")}>
+        Mark
+      </button>
+    </div>
+  );
+}
+
+type ConflictMergeDialogProps = {
+  conflict: NonNullable<MergeConflict>;
+  isSaving: boolean;
+  onKeepMine: () => void;
+  onKeepTheirs: () => void;
+  onCancel: () => void;
+};
+
+function ConflictMergeDialog({ conflict, isSaving, onKeepMine, onKeepTheirs, onCancel }: ConflictMergeDialogProps) {
+  return (
+    <div className="palette-backdrop" onMouseDown={onCancel}>
+      <section
+        className="merge-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="merge-dialog-title"
+        onMouseDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+          }
+          trapFocusWithin(event);
+        }}
+      >
+        <header>
+          <div>
+            <p className="eyebrow">Save conflict</p>
+            <h2 id="merge-dialog-title">{conflict.filename} changed on disk</h2>
+          </div>
+          <button type="button" onClick={onCancel}>Cancel</button>
+        </header>
+        <div className="merge-columns">
+          <MergeColumn title="Your draft" source={conflict.draftSource} />
+          <MergeColumn
+            title="Common ancestor"
+            source={conflict.baseSnapshot?.source ?? "No common ancestor available"}
+            muted={!conflict.baseSnapshot}
+          />
+          <MergeColumn title="On disk now" source={conflict.diskSource} />
+        </div>
+        <footer>
+          <button type="button" className="primary" onClick={onKeepMine} disabled={isSaving}>
+            {isSaving ? "Writing" : "Keep mine"}
+          </button>
+          <button type="button" onClick={onKeepTheirs} disabled={isSaving}>
+            Keep theirs
+          </button>
+          <button type="button" onClick={onCancel} disabled={isSaving}>
+            Cancel
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function MergeColumn({ title, source, muted = false }: { title: string; source: string; muted?: boolean }) {
+  return (
+    <section className={`merge-column ${muted ? "muted" : ""}`}>
+      <h3>{title}</h3>
+      <pre>
+        <code>{source}</code>
+      </pre>
+    </section>
   );
 }
 

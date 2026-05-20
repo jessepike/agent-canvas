@@ -180,3 +180,23 @@ Total new slice commits: 11 before this release-status commit; 12 including this
 - `8d5ebf3` — `feat(ui): cmd-k command palette with real keyboard wiring`
 - `286e1f9` — `feat(ui): two-column inbox + three-column project mode toggle`
 - `5cc18be` — `feat(polish): keyboard bindings + rescan-on-focus + smoke test`
+## 2026-05-20 — Slice 5e-g implemented by Codex
+
+Implemented AgentCanvas v0.2-finish Slice 5e-g.
+
+- Chose the permitted 5e fallback: Markdown edit mode swaps to CodeMirror source editing and shows "Rendered-view editing lands in v0.3 — using source editor".
+- Added source-backed annotation toolbar for Markdown edit mode: bold, italic, strikethrough, code, and mark-for-revision wrappers.
+- Added a ProseMirror `revision` mark so mark-for-revision spans render highlighted in Markdown preview.
+- Extended the sidecar identity map with optional `base_snapshot` and updated it after successful `write_document` saves.
+- Replaced save-conflict banner-only behavior with a 3-column merge dialog showing draft, common ancestor, and current disk source.
+- Added merge/revision tokens to `prototypes/visual-system.md` and `ui/src/styles.css`.
+- Wrote details to `docs/active/codex-slice5b-report-2026-05-20.md`.
+
+Verification:
+
+- `pnpm install --no-frozen-lockfile` in `ui/` failed because `ui/pnpm-workspace.yaml` has no `packages` field.
+- `CI=true pnpm --ignore-workspace install --no-frozen-lockfile` in `ui/` passed.
+- Direct `tsc --noEmit` passed.
+- `pnpm --ignore-workspace build` in `ui/` passed with the known Vite large-chunk warning.
+- `cargo check` in `crates/agent-canvas-app` passed.
+- `cargo test --bin agent-canvas-app 2>&1 | tail -5` passed: 6 tests.

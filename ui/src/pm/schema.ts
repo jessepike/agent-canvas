@@ -137,6 +137,10 @@ const marks: Record<string, MarkSpec> = {
     parseDOM: [{ tag: "code" }],
     toDOM: () => ["code", 0]
   },
+  revision: {
+    parseDOM: [{ tag: 'mark[data-revision="true"]' }],
+    toDOM: () => ["mark", { "data-revision": "true" }, 0]
+  },
   link: {
     attrs: {
       href: {},

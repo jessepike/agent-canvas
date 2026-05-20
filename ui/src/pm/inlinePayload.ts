@@ -23,36 +23,48 @@ export function inlinesToPmInlines(
   marks: readonly Mark[] = []
 ): ProseMirrorNode[] {
   const nodes: ProseMirrorNode[] = [];
+  let activeMarks = [...marks];
 
   for (const inline of inlines) {
     if (typeof inline === "string") {
       if (inline === "HardBreak") {
         nodes.push(schema.nodes.hard_break.create());
       } else if (inline === "SoftBreak") {
-        appendText(schema, nodes, "\n", marks);
+        appendText(schema, nodes, "\n", activeMarks);
       }
     } else if ("Text" in inline) {
-      appendText(schema, nodes, inline.Text, marks);
+      appendText(schema, nodes, inline.Text, activeMarks);
     } else if ("Strong" in inline) {
-      nodes.push(...inlinesToPmInlines(schema, inline.Strong, [...marks, schema.marks.strong.create()]));
+      nodes.push(...inlinesToPmInlines(schema, inline.Strong, [...activeMarks, schema.marks.strong.create()]));
     } else if ("Emphasis" in inline) {
-      nodes.push(...inlinesToPmInlines(schema, inline.Emphasis, [...marks, schema.marks.em.create()]));
+      nodes.push(...inlinesToPmInlines(schema, inline.Emphasis, [...activeMarks, schema.marks.em.create()]));
     } else if ("Code" in inline) {
-      appendText(schema, nodes, inline.Code, [...marks, schema.marks.code.create()]);
+      appendText(schema, nodes, inline.Code, [...activeMarks, schema.marks.code.create()]);
     } else if ("Link" in inline) {
       const linkMark = schema.marks.link.create({
         href: inline.Link.href,
         title: inline.Link.title
       });
-      nodes.push(...inlinesToPmInlines(schema, inline.Link.body, [...marks, linkMark]));
+      nodes.push(...inlinesToPmInlines(schema, inline.Link.body, [...activeMarks, linkMark]));
     } else if ("Image" in inline) {
-      appendText(schema, nodes, inline.Image.alt || inline.Image.src, marks);
+      appendText(schema, nodes, inline.Image.alt || inline.Image.src, activeMarks);
     } else if ("Html" in inline) {
-      appendText(schema, nodes, inline.Html, marks);
+      if (isRevisionMarkOpen(inline.Html)) {
+        activeMarks = [...activeMarks, schema.marks.revision.create()];
+      } else if (inline.Html.toLowerCase() === "</mark>") {
+        activeMarks = activeMarks.filter((mark) => mark.type !== schema.marks.revision);
+      } else {
+        appendText(schema, nodes, inline.Html, activeMarks);
+      }
     }
   }
 
   return nodes;
+}
+
+function isRevisionMarkOpen(html: string): boolean {
+  const normalized = html.toLowerCase();
+  return normalized.startsWith("<mark") && normalized.includes("data-revision");
 }
 
 export function pmTextNode(schema: Schema, text: string): ProseMirrorNode | null {

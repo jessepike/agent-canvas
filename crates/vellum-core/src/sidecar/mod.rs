@@ -15,6 +15,15 @@ use crate::parse::BlockKind;
 pub struct IdentityMap {
     pub source_hash: [u8; 32],
     pub block_ids: Vec<BlockIdentity>,
+    #[serde(default)]
+    pub base_snapshot: Option<BaseSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct BaseSnapshot {
+    pub hash: [u8; 32],
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
@@ -172,6 +181,7 @@ mod tests {
                 byte_range_start: 0,
                 kind: BlockKind::Heading,
             }],
+            base_snapshot: None,
         }
     }
 }

@@ -44,6 +44,10 @@
   --diff-rem-strong: #b8453a;
   --drop-target-bg: #dce7fb;
   --drop-target-border: var(--accent);
+  --revision-mark-bg: #fff1a8;
+  --revision-mark-border: #dcc75a;
+  --merge-column-bg: #f7f5ee;
+  --merge-column-muted-bg: #efede6;
   --persona-claude: #6e6a5e;
   --persona-codex: #1b1a14;
   --btn-bg-top: #ffffff;
@@ -451,7 +455,8 @@ button:hover {
   background: var(--bg-doc);
 }
 
-.conflict-banner {
+.conflict-banner,
+.edit-fallback-banner {
   margin: 12px 18px 0;
   border: 0.5px solid var(--pending-border);
   border-radius: 6px;
@@ -459,6 +464,12 @@ button:hover {
   color: var(--pending-deep);
   background: var(--pending-bg);
   font-size: 13px;
+}
+
+.edit-fallback-banner {
+  border-color: var(--border);
+  color: var(--text-secondary);
+  background: var(--bg-window);
 }
 
 .saved-toast,
@@ -935,6 +946,145 @@ button:hover {
   font-family: var(--font-serif);
   font-size: 16px;
   line-height: 1.68;
+}
+
+.ProseMirror mark[data-revision="true"] {
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px var(--revision-mark-border) inset;
+  background: var(--revision-mark-bg);
+}
+
+.annotation-toolbar {
+  position: fixed;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transform: translateX(-50%);
+  border: 0.5px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 4px;
+  background: var(--bg-window);
+  box-shadow: var(--shadow-modal);
+}
+
+.annotation-toolbar button {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 7px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+}
+
+.annotation-toolbar button:hover {
+  background: var(--hover-bg);
+  filter: none;
+}
+
+.strike-icon {
+  text-decoration: line-through;
+}
+
+.merge-dialog {
+  display: flex;
+  width: min(1120px, calc(100vw - 40px));
+  max-height: 82vh;
+  flex-direction: column;
+  overflow: hidden;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg-window);
+  box-shadow: var(--shadow-modal);
+}
+
+.merge-dialog > header,
+.merge-dialog > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 0.5px solid var(--border-soft);
+  padding: 14px 16px;
+}
+
+.merge-dialog > footer {
+  justify-content: flex-end;
+  border-top: 0.5px solid var(--border-soft);
+  border-bottom: 0;
+}
+
+.merge-dialog h2,
+.merge-dialog h3,
+.merge-dialog p {
+  margin: 0;
+}
+
+.merge-dialog h2 {
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.merge-columns {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  overflow: hidden;
+  padding: 12px;
+}
+
+.merge-column {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 0.5px solid var(--border);
+  border-radius: 7px;
+  background: var(--merge-column-bg);
+}
+
+.merge-column.muted {
+  background: var(--merge-column-muted-bg);
+}
+
+.merge-column h3 {
+  border-bottom: 0.5px solid var(--border-soft);
+  padding: 9px 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.merge-column pre {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 860px) {
+  .merge-dialog {
+    max-height: 90vh;
+  }
+
+  .merge-columns {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .merge-column {
+    min-height: 220px;
+  }
 }
 
 .ProseMirror h1,

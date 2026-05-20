@@ -4,6 +4,7 @@ import type { BlockEdit as RsBlockEdit } from "./generated/BlockEdit";
 import type { BlockError as RsBlockError } from "./generated/BlockError";
 import type { BlockId as RsBlockId } from "./generated/BlockId";
 import type { BlockIdentity as RsBlockIdentity } from "./generated/BlockIdentity";
+import type { BaseSnapshot as RsBaseSnapshot } from "./generated/BaseSnapshot";
 import type { BlockKind as RsBlockKind } from "./generated/BlockKind";
 import type { BlockPatch as RsBlockPatch } from "./generated/BlockPatch";
 import type { BlockPayload as RsBlockPayload } from "./generated/BlockPayload";
@@ -238,10 +239,20 @@ export const Hash32 = z.custom<RsIdentityMap["source_hash"]>(
   "expected 32-byte source hash"
 );
 
+export const BaseSnapshot = z
+  .object({
+    hash: Hash32,
+    source: z.string()
+  })
+  .strict();
+export type BaseSnapshot = z.infer<typeof BaseSnapshot>;
+const _checkBaseSnapshot: TypeEquals<BaseSnapshot, RsBaseSnapshot> = true;
+
 export const IdentityMap = z
   .object({
     source_hash: Hash32,
-    block_ids: z.array(BlockIdentity)
+    block_ids: z.array(BlockIdentity),
+    base_snapshot: BaseSnapshot.nullable().optional()
   })
   .strict();
 export type IdentityMap = z.infer<typeof IdentityMap>;
@@ -279,6 +290,7 @@ export const BlockErrorSchema = BlockError;
 export const BlockPatchSchema = BlockPatch;
 export const BlockIdentitySchema = BlockIdentity;
 export const IdentityMapSchema = IdentityMap;
+export const BaseSnapshotSchema = BaseSnapshot;
 export const OpenDocumentSchema = OpenDocument;
 export const WriteResultSchema = WriteResult;
 export const ParseErrorSchema = z.string();
