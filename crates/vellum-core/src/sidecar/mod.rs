@@ -49,10 +49,44 @@ pub struct Comment {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../ui/src/types/generated/")]
-pub struct CommentAnchor {
+#[serde(untagged)]
+pub enum CommentAnchor {
+    HtmlSelection(HtmlCommentAnchor),
+    TextSelection(TextCommentAnchor),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct TextCommentAnchor {
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<TextCommentAnchorKind>,
     pub block_id: Option<String>,
     pub start_offset: usize,
     pub end_offset: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct HtmlCommentAnchor {
+    pub kind: HtmlCommentAnchorKind,
+    pub start_offset: usize,
+    pub end_offset: usize,
+    pub snapshot_text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub enum TextCommentAnchorKind {
+    TextSelection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub enum HtmlCommentAnchorKind {
+    HtmlSelection,
 }
 
 #[derive(Debug, Error)]

@@ -276,3 +276,23 @@ Verification:
 - `pnpm --ignore-workspace build` in `ui/` passed with the known Vite large-chunk warning.
 - `cargo check` in `crates/agent-canvas-app` passed.
 - `cargo test --bin agent-canvas-app 2>&1 | tail -5` passed: 6 tests.
+
+## 2026-05-20 — v0.3 Slice 2 implemented by Codex
+
+Implemented interactive HTML, iframe postMessage bridge, and HTML comment anchors.
+
+- Replaced the HTML iframe sandbox with the fixed A22 flags: `allow-scripts allow-forms allow-popups allow-downloads`.
+- Added `ui/src/htmlBootstrap.ts` for srcdoc prefix injection. The bootstrap bridges selection changes, iframe console output, iframe-local `Cmd+Shift+M`, `agentcanvas.sendBack`, and scroll-to-snapshot highlighting.
+- Extended comments to support legacy text anchors plus `{ kind: "html_selection", start_offset, end_offset, snapshot_text }`.
+- Registered `tauri-plugin-persisted-scope` and enabled Tauri `protocol-asset` with `$HOME/**/*` allow plus system-path deny rules.
+- Added Rust migration/round-trip tests for legacy and HTML comment anchors.
+- Wrote the full implementation report to `docs/active/codex-slice2-v0.3-report-2026-05-20.md`.
+
+Verification:
+
+- `cargo check -q` passes with a non-fatal `ts-rs` serde-attribute warning.
+- `cargo test --bin agent-canvas-app 2>&1 | tail -20` passes: 10 tests.
+- `./node_modules/.bin/tsc --noEmit` passes.
+- `./node_modules/.bin/vite build 2>&1 | tail -5` passes with the known large-chunk warning.
+- A22 grep audit: forbidden flags `0`, exact sandbox string `1`.
+- Commit attempt failed because this sandbox cannot create `.git/index.lock` (`Operation not permitted`). Working tree contains the completed slice; commit must be created outside the sandbox.

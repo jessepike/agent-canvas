@@ -2088,6 +2088,7 @@ fn main() {
             set_review_state
         ])
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_persisted_scope::init())
         .run(tauri::generate_context!());
 
     if let Err(error) = result {
@@ -2163,6 +2164,50 @@ mod tests {
         // Symlink target canonicalizes through /private on macOS.
         let expected = inside.canonicalize().expect("canonicalize target");
         assert_eq!(bounded, expected);
+    }
+
+    #[test]
+    fn legacy_comment_anchor_deserializes_as_text_selection() {
+        let raw = r#"{
+          "source_hash": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+          "block_ids": [],
+          "comments": [{
+            "id": "00000000-0000-4000-8000-000000000000",
+            "author": "jesse",
+            "created_at": 1,
+            "anchor": { "block_id": null, "start_offset": 3, "end_offset": 9 },
+            "body": "legacy",
+            "resolved": false
+          }]
+        }"#;
+
+        let identity: IdentityMap = serde_json::from_str(raw).expect("legacy identity");
+        let comments = identity.comments.expect("comments");
+        let anchor = &comments[0].anchor;
+        assert_eq!(
+            serde_json::to_value(anchor).expect("anchor json")["kind"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            serde_json::to_value(anchor).expect("anchor json")["start_offset"],
+            3
+        );
+    }
+
+    #[test]
+    fn html_comment_anchor_round_trips_with_snapshot_text() {
+        let raw = r#"{
+          "kind": "html_selection",
+          "start_offset": 4,
+          "end_offset": 15,
+          "snapshot_text": "Hello world"
+        }"#;
+
+        let anchor: vellum_core::sidecar::CommentAnchor =
+            serde_json::from_str(raw).expect("html anchor");
+        let encoded = serde_json::to_value(anchor).expect("anchor json");
+        assert_eq!(encoded["kind"], "html_selection");
+        assert_eq!(encoded["snapshot_text"], "Hello world");
     }
 
     #[test]

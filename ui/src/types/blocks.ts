@@ -251,12 +251,24 @@ export type BaseSnapshot = z.infer<typeof BaseSnapshot>;
 const _checkBaseSnapshot: TypeEquals<BaseSnapshot, RsBaseSnapshot> = true;
 
 export const CommentAnchor = z
-  .object({
-    block_id: z.string().nullable(),
-    start_offset: z.number().int().nonnegative(),
-    end_offset: z.number().int().nonnegative()
-  })
-  .strict();
+  .union([
+    z
+      .object({
+        kind: z.literal("html_selection"),
+        start_offset: z.number().int().nonnegative(),
+        end_offset: z.number().int().nonnegative(),
+        snapshot_text: z.string()
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("text_selection").optional(),
+        block_id: z.string().nullable(),
+        start_offset: z.number().int().nonnegative(),
+        end_offset: z.number().int().nonnegative()
+      })
+      .strict()
+  ]);
 export type CommentAnchor = z.infer<typeof CommentAnchor>;
 const _checkCommentAnchor: TypeEquals<CommentAnchor, RsCommentAnchor> = true;
 

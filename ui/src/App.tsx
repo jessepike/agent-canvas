@@ -4,6 +4,7 @@ import { listen, TauriEvent } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { RenderedView } from "./components/RenderedView";
 import { SourceView, type SourceFormat, type SourceSelection, type SourceViewHandle } from "./components/SourceView";
+import { injectBootstrap } from "./htmlBootstrap";
 import { useFocusTrap } from "./hooks/useFocusTrap";
 import {
   addAgentSession,
@@ -99,11 +100,34 @@ type ProjectMenu = {
   project: string;
 } | null;
 
-type AnnotationSelection = {
+type AnnotationSelection = TextAnnotationSelection | HtmlAnnotationSelection | null;
+
+type TextAnnotationSelection = {
+  kind: "text";
   rect: DOMRect;
   startOffset: number;
   endOffset: number;
-} | null;
+};
+
+type HtmlAnnotationSelection = {
+  kind: "html";
+  rect: DOMRect;
+  startOffset: number;
+  endOffset: number;
+  text: string;
+};
+
+type IframeBridgeMessage = {
+  type?: unknown;
+  range?: {
+    startOffset?: unknown;
+    endOffset?: unknown;
+    text?: unknown;
+  };
+  level?: unknown;
+  message?: unknown;
+  payload?: unknown;
+};
 
 type MergeConflict = {
   path: string;
@@ -140,6 +164,7 @@ export default function App() {
   const searchRef = useRef<HTMLInputElement | null>(null);
   const paletteRef = useRef<HTMLElement | null>(null);
   const sourceViewRef = useRef<SourceViewHandle | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [artifact, setArtifact] = useState<OpenArtifact | null>(null);
@@ -631,6 +656,72 @@ export default function App() {
     return () => window.removeEventListener("focus", handleFocus);
   }, [refresh, reloadOpenArtifact]);
 
+  useEffect(() => {
+    function selectionFromIframeRange(range: NonNullable<IframeBridgeMessage["range"]>): HtmlAnnotationSelection | null {
+      if (
+        typeof range.startOffset !== "number" ||
+        typeof range.endOffset !== "number" ||
+        typeof range.text !== "string" ||
+        range.text.length === 0
+      ) {
+        return null;
+      }
+      return {
+        kind: "html",
+        rect: new DOMRect(window.innerWidth / 2, 96, 1, 1),
+        startOffset: range.startOffset,
+        endOffset: range.endOffset,
+        text: range.text
+      };
+    }
+
+    function handleIframeMessage(event: MessageEvent<IframeBridgeMessage>) {
+      if (!iframeRef.current?.contentWindow || event.source !== iframeRef.current.contentWindow) {
+        return;
+      }
+      const message = event.data;
+      if (!message || typeof message.type !== "string" || !message.type.startsWith("agentcanvas:")) {
+        return;
+      }
+      if (message.type === "agentcanvas:selection") {
+        const selection = message.range ? selectionFromIframeRange(message.range) : null;
+        if (!selection) {
+          return;
+        }
+        setAnnotationSelection(selection);
+        return;
+      }
+      if (message.type === "agentcanvas:comment_shortcut") {
+        const selection = message.range ? selectionFromIframeRange(message.range) : null;
+        if (!selection) {
+          return;
+        }
+        setAnnotationSelection(selection);
+        setCommentDialog(selection);
+        return;
+      }
+      if (message.type === "agentcanvas:console") {
+        const level = typeof message.level === "string" ? message.level : "log";
+        const text = typeof message.message === "string" ? message.message : String(message.message ?? "");
+        setError(`[iframe ${level}] ${text}`);
+        return;
+      }
+      if (message.type === "agentcanvas:send_back") {
+        console.info("AgentCanvas iframe send-back received", message.payload);
+        const toast = "Send-back received";
+        setHandoffToast(toast);
+        setHandoffToastBody("Slice 6 will wire this to agent sessions.");
+        window.setTimeout(() => {
+          setHandoffToast((current) => (current === toast ? null : current));
+          setHandoffToastBody(null);
+        }, 3000);
+      }
+    }
+
+    window.addEventListener("message", handleIframeMessage);
+    return () => window.removeEventListener("message", handleIframeMessage);
+  }, []);
+
   // Tauri 2 macOS WebView shows the native context menu by default, which
   // overlays React's custom menu. Suppress globally for non-text-input targets
   // so onContextMenu handlers on file rows + agent cards actually render.
@@ -710,17 +801,25 @@ export default function App() {
     if (!artifact || !commentDialog) {
       return;
     }
+    const anchor = commentDialog.kind === "html"
+      ? {
+        kind: "html_selection" as const,
+        start_offset: commentDialog.startOffset,
+        end_offset: commentDialog.endOffset,
+        snapshot_text: commentDialog.text
+      }
+      : {
+        block_id: null,
+        start_offset: commentDialog.startOffset,
+        end_offset: commentDialog.endOffset
+      };
     const nextComments = [
       ...comments,
       {
         id: crypto.randomUUID(),
         author: "jesse",
         created_at: Math.floor(Date.now() / 1000),
-        anchor: {
-          block_id: null,
-          start_offset: commentDialog.startOffset,
-          end_offset: commentDialog.endOffset
-        },
+        anchor,
         body,
         resolved: false
       }
@@ -752,8 +851,18 @@ export default function App() {
   }, [artifact, comments]);
 
   const revealComment = useCallback((comment: Comment) => {
+    if (artifact?.kind === "html" && comment.anchor.kind === "html_selection") {
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: "agentcanvas:scroll_to", text: comment.anchor.snapshot_text },
+        "*"
+      );
+      return;
+    }
+    if (comment.anchor.kind === "html_selection") {
+      return;
+    }
     sourceViewRef.current?.revealRange(comment.anchor.start_offset, comment.anchor.end_offset);
-  }, []);
+  }, [artifact?.kind]);
 
   const keepMineFromMerge = useCallback(async () => {
     if (!mergeConflict || !artifact) {
@@ -1826,7 +1935,12 @@ export default function App() {
                 </section>
               ) : artifact.kind === "html" ? (
                 <section className="html-panel" aria-label="Rendered HTML">
-                  <iframe title={fileName(artifact.path)} sandbox="allow-same-origin" srcDoc={artifact.source} />
+                  <iframe
+                    title={fileName(artifact.path)}
+                    sandbox="allow-scripts allow-forms allow-popups allow-downloads"
+                    srcDoc={injectBootstrap(artifact.source)}
+                    ref={iframeRef}
+                  />
                 </section>
               ) : artifact.kind === "json" && parsedJson ? (
                 <section className="json-panel" aria-label="JSON tree">
@@ -1877,7 +1991,7 @@ export default function App() {
               </article>
             )}
             {error ? <p className="error-banner">{error}</p> : null}
-            {annotationSelection && artifact?.kind === "md" && editMode ? (
+            {annotationSelection?.kind === "text" && artifact?.kind === "md" && editMode ? (
               <AnnotationToolbar selection={annotationSelection} onFormat={applyAnnotationFormat} onComment={openCommentDialog} />
             ) : null}
             {commentDialog ? (
@@ -2417,9 +2531,9 @@ function MultiSelectPlaceholder({ files, count, onSend, onArchive, onClear }: Mu
 }
 
 type AnnotationToolbarProps = {
-  selection: NonNullable<AnnotationSelection>;
+  selection: TextAnnotationSelection;
   onFormat: (format: SourceFormat) => void;
-  onComment: (selection: NonNullable<AnnotationSelection>) => void;
+  onComment: (selection: TextAnnotationSelection) => void;
 };
 
 function AnnotationToolbar({ selection, onFormat, onComment }: AnnotationToolbarProps) {
@@ -3185,6 +3299,7 @@ function filterFilesByQuery(files: FileMetadata[], query: string): FileMetadata[
 function selectionFromSource(selection: SourceSelection | null): AnnotationSelection {
   return selection
     ? {
+      kind: "text",
       rect: selection.bounds,
       startOffset: selection.startOffset,
       endOffset: selection.endOffset

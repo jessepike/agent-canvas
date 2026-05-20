@@ -16,7 +16,27 @@
         "width": 1280,
         "height": 780
       }
-    ]
+    ],
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": ["$HOME/**/*"],
+          "deny": [
+            "/etc/**/*",
+            "/System/**/*",
+            "/private/etc/**/*",
+            "/private/var/**/*",
+            "/usr/**/*",
+            "/var/**/*",
+            "/Library/Application Support/AgentCanvas/**/*",
+            "/Library/Application Support/Apple/**/*",
+            "$HOME/Library/Application Support/AgentCanvas/**/*",
+            "$HOME/Library/Application Support/com.apple/**/*"
+          ]
+        }
+      }
+    }
   },
   "bundle": {
     "active": true,

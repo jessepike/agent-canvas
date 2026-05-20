@@ -2,6 +2,11 @@
 
 Status: `todo` / `in-progress` / `blocked` / `done` / `cut`.
 
+## v0.3 Spinoffs
+
+- todo — [v0.3-slice2-spinoff] Replace the `ts-rs` warning-prone `CommentAnchor` export with an explicit generated-type strategy or custom TS binding so `serde(skip_serializing_if)` stays warning-free while preserving legacy sidecar output.
+- todo — [v0.3-slice1-spinoff] Fix macOS host test failures in `test_path_within_canvas_shim_accepts_safe_path`, `test_path_within_canvas_resolves_symlinks`, `migration_backfills_legacy_tags_idempotently`. Root cause: macOS TMPDIR resolves under `/var/folders/...` which the `path_safe_for_canvas` deny list excludes (`/var/**`). Tests pass in Linux VM (`/tmp` TMPDIR). Either narrow the deny list (keep `/var/folders` allowed), route tests through a canvas-allowed temp root, or add a test-only override.
+
 ## v0.1.0 Build Slices
 
 | Slice | Status | Item |
