@@ -296,3 +296,23 @@ Verification:
 - `./node_modules/.bin/vite build 2>&1 | tail -5` passes with the known large-chunk warning.
 - A22 grep audit: forbidden flags `0`, exact sandbox string `1`.
 - Commit attempt failed because this sandbox cannot create `.git/index.lock` (`Operation not permitted`). Working tree contains the completed slice; commit must be created outside the sandbox.
+
+## 2026-05-20 — v0.3 Slice 3 implemented by Codex
+
+Implemented file-level comments and grouped comments UI.
+
+- Added `{ kind: "file_level" }` comment anchors in Rust and TypeScript while preserving legacy markdown text anchors.
+- Added "Add comment about this file" toolbar buttons above Markdown, HTML, JSON, TXT, PNG, and PDF viewer bodies.
+- Grouped open comments into "Selections" and "About this file" sections, hiding empty headings.
+- File-level comment selection now activates the card without invoking source or iframe scroll-to-selection.
+- Wrote the full implementation report to `docs/active/codex-slice3-v0.3-report-2026-05-20.md`.
+
+Verification:
+
+- OrbStack dev VM `cargo check -q` in `crates/agent-canvas-app` passes with the existing non-fatal `ts-rs` serde-attribute warning.
+- OrbStack dev VM `cargo test --bin agent-canvas-app 2>&1 | tail -20` passes: 11 tests.
+- OrbStack dev VM `cargo test 2>&1 | tail -15` in `crates/vellum-core` passes; host run still hits the pre-existing watcher timeout.
+- `./node_modules/.bin/tsc --noEmit` passes.
+- `./node_modules/.bin/vite build 2>&1 | tail -5` passes with the known large-chunk warning.
+- A22 grep audit: forbidden flags `0`.
+- A15 raw-hex audit: no output.

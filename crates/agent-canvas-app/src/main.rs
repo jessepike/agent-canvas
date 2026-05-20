@@ -2211,6 +2211,16 @@ mod tests {
     }
 
     #[test]
+    fn file_level_comment_anchor_round_trips() {
+        let raw = r#"{ "kind": "file_level" }"#;
+
+        let anchor: vellum_core::sidecar::CommentAnchor =
+            serde_json::from_str(raw).expect("file-level anchor");
+        let encoded = serde_json::to_value(anchor).expect("anchor json");
+        assert_eq!(encoded["kind"], "file_level");
+    }
+
+    #[test]
     fn migration_backfills_legacy_tags_idempotently() {
         let temp = tempfile::tempdir().expect("tempdir");
         let legacy_root = temp.path().join("AgentCanvas");

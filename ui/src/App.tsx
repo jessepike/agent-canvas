@@ -55,7 +55,7 @@ import {
   type FileMetadata,
   type PersonaRegistry
 } from "./ipc";
-import type { BaseSnapshot, Block, Comment } from "./types/blocks";
+import type { BaseSnapshot, Block, Comment, CommentAnchor } from "./types/blocks";
 import "./styles.css";
 
 type OpenArtifact = {
@@ -200,6 +200,7 @@ export default function App() {
   const [comments, setComments] = useState<Comment[]>([]);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [commentDialog, setCommentDialog] = useState<AnnotationSelection>(null);
+  const [fileLevelDialogOpen, setFileLevelDialogOpen] = useState(false);
   const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null);
   const [actionTemplatesOpen, setActionTemplatesOpen] = useState(false);
   const [actionTemplates, setActionTemplatesState] = useState<ActionTemplate[]>([]);
@@ -835,6 +836,32 @@ export default function App() {
     }
   }, [artifact, commentDialog, comments]);
 
+  const saveFileLevelComment = useCallback(async (body: string) => {
+    if (!artifact) {
+      return;
+    }
+    const anchor: CommentAnchor = { kind: "file_level" };
+    const nextComments = [
+      ...comments,
+      {
+        id: crypto.randomUUID(),
+        author: "jesse",
+        created_at: Math.floor(Date.now() / 1000),
+        anchor,
+        body,
+        resolved: false
+      }
+    ];
+    try {
+      await updateSidecarComments(artifact.path, nextComments);
+      setComments(nextComments);
+      setCommentsOpen(true);
+      setFileLevelDialogOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [artifact, comments]);
+
   const resolveComment = useCallback(async (commentId: string) => {
     if (!artifact) {
       return;
@@ -851,6 +878,10 @@ export default function App() {
   }, [artifact, comments]);
 
   const revealComment = useCallback((comment: Comment) => {
+    if (comment.anchor.kind === "file_level") {
+      setHoveredCommentId(comment.id);
+      return;
+    }
     if (artifact?.kind === "html" && comment.anchor.kind === "html_selection") {
       iframeRef.current?.contentWindow?.postMessage(
         { type: "agentcanvas:scroll_to", text: comment.anchor.snapshot_text },
@@ -1918,64 +1949,99 @@ export default function App() {
               />
             ) : artifact ? (
               editMode || sourceMode || (artifact.kind === "json" && (jsonViewMode === "source" || !parsedJson)) ? (
-                <section className="source-panel" aria-label="Source editor">
-                  <SourceView
-                    ref={sourceViewRef}
-                    key={artifact.kind}
-                    language={sourceLanguageForArtifact(artifact.kind)}
-                    value={artifact.source}
-                    onChange={updateSource}
-                    onSave={saveArtifact}
-                    onSelectionBoundsChange={(selection) => setAnnotationSelection(selectionFromSource(selection))}
-                  />
-                </section>
-              ) : artifact.kind === "md" ? (
-                <section className="rendered-panel" aria-label="Rendered Markdown">
-                  <RenderedView blocks={artifact.blocks} />
-                </section>
-              ) : artifact.kind === "html" ? (
-                <section className="html-panel" aria-label="Rendered HTML">
-                  <iframe
-                    title={fileName(artifact.path)}
-                    sandbox="allow-scripts allow-forms allow-popups allow-downloads"
-                    srcDoc={injectBootstrap(artifact.source)}
-                    ref={iframeRef}
-                  />
-                </section>
-              ) : artifact.kind === "json" && parsedJson ? (
-                <section className="json-panel" aria-label="JSON tree">
-                  <JsonTree value={parsedJson} name={fileName(artifact.path)} />
-                </section>
-              ) : artifact.kind === "txt" ? (
-                <section className="source-panel" aria-label="Text source">
-                  <SourceView
-                    ref={sourceViewRef}
-                    key={artifact.kind}
-                    language="plaintext"
-                    value={artifact.source}
-                    onChange={updateSource}
-                    onSave={saveArtifact}
-                    onSelectionBoundsChange={(selection) => setAnnotationSelection(selectionFromSource(selection))}
-                  />
-                </section>
-              ) : artifact.kind === "png" ? (
-                <section className="image-panel" aria-label="PNG image">
-                  <div className="image-frame">
-                    <img src={artifact.dataUrl} alt={fileName(artifact.path)} />
-                    <p>{formatBytes(artifact.size ?? 0)}</p>
+                <div className="viewer-shell">
+                  <div className="viewer-toolbar">
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
                   </div>
-                </section>
-              ) : artifact.kind === "pdf" ? (
-                <section className="pdf-panel" aria-label="PDF document">
-                  <object data={artifact.dataUrl} type="application/pdf" aria-label={fileName(artifact.path)}>
-                    <div className="pdf-fallback">
-                      <p>This PDF can't be previewed inline.</p>
-                      <a href={artifact.dataUrl} download={fileName(artifact.path)} className="primary">
-                        Download {fileName(artifact.path)}
-                      </a>
+                  <section className="source-panel" aria-label="Source editor">
+                    <SourceView
+                      ref={sourceViewRef}
+                      key={artifact.kind}
+                      language={sourceLanguageForArtifact(artifact.kind)}
+                      value={artifact.source}
+                      onChange={updateSource}
+                      onSave={saveArtifact}
+                      onSelectionBoundsChange={(selection) => setAnnotationSelection(selectionFromSource(selection))}
+                    />
+                  </section>
+                </div>
+              ) : artifact.kind === "md" ? (
+                <div className="viewer-shell">
+                  <div className="viewer-toolbar">
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
+                  </div>
+                  <section className="rendered-panel" aria-label="Rendered Markdown">
+                    <RenderedView blocks={artifact.blocks} />
+                  </section>
+                </div>
+              ) : artifact.kind === "html" ? (
+                <div className="viewer-shell">
+                  <div className="viewer-toolbar">
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
+                  </div>
+                  <section className="html-panel" aria-label="Rendered HTML">
+                    <iframe
+                      title={fileName(artifact.path)}
+                      sandbox="allow-scripts allow-forms allow-popups allow-downloads"
+                      srcDoc={injectBootstrap(artifact.source)}
+                      ref={iframeRef}
+                    />
+                  </section>
+                </div>
+              ) : artifact.kind === "json" && parsedJson ? (
+                <div className="viewer-shell">
+                  <div className="viewer-toolbar">
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
+                  </div>
+                  <section className="json-panel" aria-label="JSON tree">
+                    <JsonTree value={parsedJson} name={fileName(artifact.path)} />
+                  </section>
+                </div>
+              ) : artifact.kind === "txt" ? (
+                <div className="viewer-shell">
+                  <div className="viewer-toolbar">
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
+                  </div>
+                  <section className="source-panel" aria-label="Text source">
+                    <SourceView
+                      ref={sourceViewRef}
+                      key={artifact.kind}
+                      language="plaintext"
+                      value={artifact.source}
+                      onChange={updateSource}
+                      onSave={saveArtifact}
+                      onSelectionBoundsChange={(selection) => setAnnotationSelection(selectionFromSource(selection))}
+                    />
+                  </section>
+                </div>
+              ) : artifact.kind === "png" ? (
+                <div className="viewer-shell">
+                  <div className="viewer-toolbar">
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
+                  </div>
+                  <section className="image-panel" aria-label="PNG image">
+                    <div className="image-frame">
+                      <img src={artifact.dataUrl} alt={fileName(artifact.path)} />
+                      <p>{formatBytes(artifact.size ?? 0)}</p>
                     </div>
-                  </object>
-                </section>
+                  </section>
+                </div>
+              ) : artifact.kind === "pdf" ? (
+                <div className="viewer-shell">
+                  <div className="viewer-toolbar">
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
+                  </div>
+                  <section className="pdf-panel" aria-label="PDF document">
+                    <object data={artifact.dataUrl} type="application/pdf" aria-label={fileName(artifact.path)}>
+                      <div className="pdf-fallback">
+                        <p>This PDF can't be previewed inline.</p>
+                        <a href={artifact.dataUrl} download={fileName(artifact.path)} className="primary">
+                          Download {fileName(artifact.path)}
+                        </a>
+                      </div>
+                    </object>
+                  </section>
+                </div>
               ) : (
                 <article className="document placeholder-document">
                   <p className="eyebrow">Unsupported artifact</p>
@@ -1996,8 +2062,16 @@ export default function App() {
             ) : null}
             {commentDialog ? (
               <CommentDialog
+                title="Comment on selection"
                 onCancel={() => setCommentDialog(null)}
                 onSave={(body) => void saveComment(body)}
+              />
+            ) : null}
+            {fileLevelDialogOpen ? (
+              <CommentDialog
+                title="Comment on file"
+                onCancel={() => setFileLevelDialogOpen(false)}
+                onSave={(body) => void saveFileLevelComment(body)}
               />
             ) : null}
             {sendPopoverOpen ? (
@@ -2372,6 +2446,18 @@ type MultiSelectPlaceholderProps = {
   onClear: () => void;
 };
 
+type FileLevelCommentButtonProps = {
+  onClick: () => void;
+};
+
+function FileLevelCommentButton({ onClick }: FileLevelCommentButtonProps) {
+  return (
+    <button type="button" className="file-comment-button" onClick={onClick}>
+      Add comment about this file
+    </button>
+  );
+}
+
 type CommentsPanelProps = {
   comments: Comment[];
   hoveredCommentId: string | null;
@@ -2382,6 +2468,26 @@ type CommentsPanelProps = {
 
 function CommentsPanel({ comments, hoveredCommentId, onHover, onSelect, onResolve }: CommentsPanelProps) {
   const openComments = comments.filter((comment) => !comment.resolved);
+  const selectionComments = openComments.filter((comment) => comment.anchor.kind !== "file_level");
+  const fileLevelComments = openComments.filter((comment) => comment.anchor.kind === "file_level");
+  const renderCard = (comment: Comment) => (
+    <article
+      className={`comment-card ${hoveredCommentId === comment.id ? "active" : ""}`}
+      key={comment.id}
+      onMouseEnter={() => {
+        onHover(comment.id);
+        onSelect(comment);
+      }}
+      onMouseLeave={() => onHover(null)}
+    >
+      <button type="button" className="comment-body" onClick={() => onSelect(comment)}>
+        <span>{comment.author} · {formatTime(comment.created_at)}</span>
+        <strong>{comment.body}</strong>
+      </button>
+      <button type="button" onClick={() => onResolve(comment.id)}>Resolve</button>
+    </article>
+  );
+
   return (
     <aside className="comments-panel">
       <div className="agent-panel-header">
@@ -2391,34 +2497,34 @@ function CommentsPanel({ comments, hoveredCommentId, onHover, onSelect, onResolv
       <div className="comments-list">
         {openComments.length === 0 ? (
           <div className="empty-list">No comments</div>
-        ) : openComments.map((comment) => (
-          <article
-            className={`comment-card ${hoveredCommentId === comment.id ? "active" : ""}`}
-            key={comment.id}
-            onMouseEnter={() => {
-              onHover(comment.id);
-              onSelect(comment);
-            }}
-            onMouseLeave={() => onHover(null)}
-          >
-            <button type="button" className="comment-body" onClick={() => onSelect(comment)}>
-              <span>{comment.author} · {formatTime(comment.created_at)}</span>
-              <strong>{comment.body}</strong>
-            </button>
-            <button type="button" onClick={() => onResolve(comment.id)}>Resolve</button>
-          </article>
-        ))}
+        ) : (
+          <>
+            {selectionComments.length > 0 ? (
+              <>
+                <div className="comments-section-label">Selections</div>
+                {selectionComments.map(renderCard)}
+              </>
+            ) : null}
+            {fileLevelComments.length > 0 ? (
+              <>
+                <div className="comments-section-label">About this file</div>
+                {fileLevelComments.map(renderCard)}
+              </>
+            ) : null}
+          </>
+        )}
       </div>
     </aside>
   );
 }
 
 type CommentDialogProps = {
+  title?: string;
   onCancel: () => void;
   onSave: (body: string) => void;
 };
 
-function CommentDialog({ onCancel, onSave }: CommentDialogProps) {
+function CommentDialog({ title = "Comment", onCancel, onSave }: CommentDialogProps) {
   const [body, setBody] = useState("");
   const dialogRef = useRef<HTMLFormElement | null>(null);
   useFocusTrap(dialogRef, onCancel);
@@ -2438,7 +2544,7 @@ function CommentDialog({ onCancel, onSave }: CommentDialogProps) {
           }
         }}
       >
-        <header id="comment-dialog-title">Comment</header>
+        <header id="comment-dialog-title">{title}</header>
         <label className="send-note">
           <span>Body</span>
           <textarea value={body} onChange={(event) => setBody(event.target.value)} rows={5} />

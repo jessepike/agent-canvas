@@ -2,6 +2,14 @@
 
 Status: `todo` / `in-progress` / `blocked` / `done` / `cut`.
 
+## v0.3 Build Slices
+
+| Slice | Status | Item |
+|---|---|---|
+| 1 | done | Sidecar comments on Markdown selections |
+| 2 | done | Interactive HTML viewer, postMessage bridge, comments-on-HTML |
+| 3 | done | File-level comments and grouped comments panel |
+
 ## v0.3 Spinoffs
 
 - todo — [v0.3-slice2-spinoff] Replace the `ts-rs` warning-prone `CommentAnchor` export with an explicit generated-type strategy or custom TS binding so `serde(skip_serializing_if)` stays warning-free while preserving legacy sidecar output.

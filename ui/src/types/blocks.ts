@@ -267,6 +267,11 @@ export const CommentAnchor = z
         start_offset: z.number().int().nonnegative(),
         end_offset: z.number().int().nonnegative()
       })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("file_level")
+      })
       .strict()
   ]);
 export type CommentAnchor = z.infer<typeof CommentAnchor>;

@@ -16,8 +16,10 @@ pub struct IdentityMap {
     pub source_hash: [u8; 32],
     pub block_ids: Vec<BlockIdentity>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub base_snapshot: Option<BaseSnapshot>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub comments: Option<Vec<Comment>>,
 }
 
@@ -41,6 +43,7 @@ pub struct BlockIdentity {
 pub struct Comment {
     pub id: String,
     pub author: String,
+    #[ts(type = "number")]
     pub created_at: i64,
     pub anchor: CommentAnchor,
     pub body: String,
@@ -53,6 +56,7 @@ pub struct Comment {
 pub enum CommentAnchor {
     HtmlSelection(HtmlCommentAnchor),
     TextSelection(TextCommentAnchor),
+    FileLevel(FileLevelAnchor),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
@@ -60,6 +64,7 @@ pub enum CommentAnchor {
 pub struct TextCommentAnchor {
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub kind: Option<TextCommentAnchorKind>,
     pub block_id: Option<String>,
     pub start_offset: usize,
@@ -75,6 +80,12 @@ pub struct HtmlCommentAnchor {
     pub snapshot_text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct FileLevelAnchor {
+    pub kind: FileLevelKind,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = "../../../ui/src/types/generated/")]
@@ -87,6 +98,13 @@ pub enum TextCommentAnchorKind {
 #[ts(export, export_to = "../../../ui/src/types/generated/")]
 pub enum HtmlCommentAnchorKind {
     HtmlSelection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub enum FileLevelKind {
+    FileLevel,
 }
 
 #[derive(Debug, Error)]
@@ -226,6 +244,50 @@ mod tests {
         save(vault.path(), &doc, &identity).unwrap();
 
         assert!(sidecar_path(vault.path(), &doc).exists());
+    }
+
+    #[test]
+    fn file_level_comment_anchor_round_trips() {
+        let raw = r#"{ "kind": "file_level" }"#;
+
+        let anchor: CommentAnchor = serde_json::from_str(raw).expect("file-level anchor");
+        assert_eq!(
+            anchor,
+            CommentAnchor::FileLevel(FileLevelAnchor {
+                kind: FileLevelKind::FileLevel
+            })
+        );
+
+        let encoded = serde_json::to_value(anchor).expect("anchor json");
+        assert_eq!(encoded["kind"], "file_level");
+    }
+
+    #[test]
+    fn legacy_markdown_comment_anchor_still_deserializes() {
+        let raw = r#"{
+          "source_hash": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+          "block_ids": [],
+          "comments": [{
+            "id": "00000000-0000-4000-8000-000000000000",
+            "author": "jesse",
+            "created_at": 1,
+            "anchor": { "block_id": null, "start_offset": 3, "end_offset": 9 },
+            "body": "legacy",
+            "resolved": false
+          }]
+        }"#;
+
+        let identity: IdentityMap = serde_json::from_str(raw).expect("legacy identity");
+        let comments = identity.comments.expect("comments");
+        assert!(matches!(
+            comments[0].anchor,
+            CommentAnchor::TextSelection(TextCommentAnchor {
+                kind: None,
+                block_id: None,
+                start_offset: 3,
+                end_offset: 9
+            })
+        ));
     }
 
     fn sample_identity(source: &str) -> IdentityMap {
