@@ -927,12 +927,12 @@ fn load_sidecar(state: tauri::State<AppState>, doc_path: String) -> Result<Ident
     let _ = state.paths()?;
     let doc_path = path_safe_for_canvas(Path::new(&doc_path))?;
     let vault_root = vault_root_for_absolute_doc(&doc_path)?;
-    let doc_source = fs::read_to_string(&doc_path).map_err(|error| error.to_string())?;
+    let doc_bytes = fs::read(&doc_path).map_err(|error| error.to_string())?;
 
-    let migrated = sidecar::load_or_migrate(vault_root, &doc_path, &doc_source)
+    let migrated = sidecar::load_or_migrate(vault_root, &doc_path, &doc_bytes)
         .map_err(|error| error.to_string())?;
     Ok(migrated.unwrap_or_else(|| IdentityMap {
-        source_hash: *vellum_core::hash::content_hash(doc_source.as_bytes()).as_bytes(),
+        source_hash: *vellum_core::hash::content_hash(&doc_bytes).as_bytes(),
         block_ids: Vec::new(),
         base_snapshot: None,
         comments: None,
@@ -962,11 +962,11 @@ fn update_sidecar_comments(
     let doc_path = path_safe_for_canvas(Path::new(&doc_path))?;
     ensure_regular_file(&doc_path)?;
     let vault_root = vault_root_for_absolute_doc(&doc_path)?;
-    let doc_source = fs::read_to_string(&doc_path).map_err(|error| error.to_string())?;
-    let mut identity = sidecar::load_or_migrate(vault_root, &doc_path, &doc_source)
+    let doc_bytes = fs::read(&doc_path).map_err(|error| error.to_string())?;
+    let mut identity = sidecar::load_or_migrate(vault_root, &doc_path, &doc_bytes)
         .map_err(|error| error.to_string())?
         .unwrap_or_else(|| IdentityMap {
-            source_hash: *vellum_core::hash::content_hash(doc_source.as_bytes()).as_bytes(),
+            source_hash: *vellum_core::hash::content_hash(&doc_bytes).as_bytes(),
             block_ids: Vec::new(),
             base_snapshot: None,
             comments: None,
@@ -977,7 +977,7 @@ fn update_sidecar_comments(
 
 fn update_base_snapshot(doc_path: &Path, source: &str, hash: [u8; 32]) -> Result<(), String> {
     let vault_root = vault_root_for_absolute_doc(doc_path)?;
-    let mut identity = sidecar::load_or_migrate(vault_root, doc_path, source)
+    let mut identity = sidecar::load_or_migrate(vault_root, doc_path, source.as_bytes())
         .map_err(|error| error.to_string())?
         .unwrap_or_else(|| IdentityMap {
             source_hash: hash,

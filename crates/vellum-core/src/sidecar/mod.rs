@@ -130,14 +130,14 @@ pub fn sidecar_path(vault_root: &Path, doc_path: &Path) -> PathBuf {
 pub fn load_or_migrate(
     vault_root: &Path,
     doc_path: &Path,
-    doc_source: &str,
+    doc_source: &[u8],
 ) -> Result<Option<IdentityMap>, SidecarError> {
     let expected_path = sidecar_path(vault_root, doc_path);
     if expected_path.exists() {
         return read_identity(&expected_path).map(Some);
     }
 
-    let source_hash = *blake3::hash(doc_source.as_bytes()).as_bytes();
+    let source_hash = *blake3::hash(doc_source).as_bytes();
     let cache_root = vault_root.join(".vellum-cache");
     if !cache_root.exists() {
         return Ok(None);
@@ -203,7 +203,7 @@ mod tests {
         let vault = TempDir::new().unwrap();
         let doc = vault.path().join("doc.md");
 
-        let identity = load_or_migrate(vault.path(), &doc, "# Hello\n").unwrap();
+        let identity = load_or_migrate(vault.path(), &doc, b"# Hello\n").unwrap();
 
         assert_eq!(identity, None);
     }
@@ -215,7 +215,7 @@ mod tests {
         let expected = sample_identity("# Hello\n");
         save(vault.path(), &doc, &expected).unwrap();
 
-        let actual = load_or_migrate(vault.path(), &doc, "# Hello\n").unwrap();
+        let actual = load_or_migrate(vault.path(), &doc, b"# Hello\n").unwrap();
 
         assert_eq!(actual, Some(expected));
     }
@@ -228,7 +228,7 @@ mod tests {
         let expected = sample_identity("# Hello\n");
         save(vault.path(), &old_doc, &expected).unwrap();
 
-        let actual = load_or_migrate(vault.path(), &new_doc, "# Hello\n").unwrap();
+        let actual = load_or_migrate(vault.path(), &new_doc, b"# Hello\n").unwrap();
 
         assert_eq!(actual, Some(expected));
         assert!(!sidecar_path(vault.path(), &old_doc).exists());
