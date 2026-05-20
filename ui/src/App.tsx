@@ -142,6 +142,29 @@ export default function App() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [artifact, setArtifact] = useState<OpenArtifact | null>(null);
+  const [confirmBeforeRemove, setConfirmBeforeRemoveState] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem("agentcanvas.confirmBeforeRemove") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const setConfirmBeforeRemove = useCallback((next: boolean) => {
+    setConfirmBeforeRemoveState(next);
+    try {
+      window.localStorage.setItem("agentcanvas.confirmBeforeRemove", next ? "true" : "false");
+    } catch {
+      // localStorage may be unavailable in some Tauri contexts; preference stays in-memory.
+    }
+  }, []);
+  const toggleConfirmBeforeRemove = useCallback(() => {
+    setConfirmBeforeRemove(!confirmBeforeRemove);
+    const message = confirmBeforeRemove
+      ? "Remove confirmation: off (click × removes immediately)"
+      : "Remove confirmation: on";
+    setHandoffToast(message);
+    window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+  }, [confirmBeforeRemove, setConfirmBeforeRemove]);
   const [editMode, setEditMode] = useState(false);
   const [sourceMode, setSourceMode] = useState(false);
   const [jsonViewMode, setJsonViewMode] = useState<"source" | "tree">("source");
@@ -1147,13 +1170,17 @@ export default function App() {
 
   const deleteArtifact = useCallback(
     async (file: FileMetadata) => {
-      const ok = await openConfirmDialog({
-        title: `Delete ${file.name}?`,
-        body: "This permanently removes the file from disk. This cannot be undone.",
-        confirmLabel: "Delete",
-        destructive: true
-      });
-      if (!ok) return;
+      if (confirmBeforeRemove) {
+        const ok = await openConfirmDialog({
+          title: `Remove ${file.name}?`,
+          body:
+            "This removes the file from AgentCanvas (deletes the canvas copy in iCloud). " +
+            "If the file was dragged in from Finder, the original is untouched.",
+          confirmLabel: "Remove",
+          destructive: true
+        });
+        if (!ok) return;
+      }
       try {
         await deleteFile(file.path);
         if (artifact?.path === file.path) {
@@ -1162,12 +1189,15 @@ export default function App() {
           setSelectedPaths(new Set());
         }
         setFileMenu(null);
+        const message = `Removed ${file.name}`;
+        setHandoffToast(message);
+        window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
         await refresh();
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
       }
     },
-    [artifact?.path, refresh, openConfirmDialog]
+    [artifact?.path, refresh, openConfirmDialog, confirmBeforeRemove]
   );
 
   const markFileReviewState = useCallback(async (file: FileMetadata, reviewState: FileMetadata["review_state"]) => {
@@ -1322,7 +1352,14 @@ export default function App() {
       { section: "ACTIONS", label: "Archive", run: archiveCurrent },
       { section: "ACTIONS", label: "Switch Agent Default...", run: switchAgentDefault },
       { section: "COMMANDS", label: "Reload Persona Registry", run: reloadPersonas },
-      { section: "COMMANDS", label: "Edit Action Templates...", run: () => setActionTemplatesOpen(true) }
+      { section: "COMMANDS", label: "Edit Action Templates...", run: () => setActionTemplatesOpen(true) },
+      {
+        section: "COMMANDS",
+        label: confirmBeforeRemove
+          ? "Remove confirmation: on (click to turn off)"
+          : "Remove confirmation: off (click to turn on)",
+        run: toggleConfirmBeforeRemove
+      }
     ];
     const projectItems = projects.map((project) => ({
       section: "PROJECTS",
@@ -1337,7 +1374,7 @@ export default function App() {
     const allItems = [...actions, ...projectItems, ...fileItems];
     const query = paletteQuery.trim().toLowerCase();
     return query ? allItems.filter((item) => item.label.toLowerCase().includes(query)) : allItems;
-  }, [archiveCurrent, files, openArtifact, openProject, openSendPopover, paletteQuery, projects, reloadPersonas, sendButtonLabel, switchAgentDefault, toggleCurrentPin]);
+  }, [archiveCurrent, confirmBeforeRemove, files, openArtifact, openProject, openSendPopover, paletteQuery, projects, reloadPersonas, sendButtonLabel, switchAgentDefault, toggleConfirmBeforeRemove, toggleCurrentPin]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -1518,8 +1555,8 @@ export default function App() {
                       className="file-row-trash"
                       role="button"
                       tabIndex={-1}
-                      aria-label={`Delete ${file.name}`}
-                      title={`Delete ${file.name}`}
+                      aria-label={`Remove ${file.name} from AgentCanvas`}
+                      title={`Remove ${file.name} from AgentCanvas`}
                       onClick={(event) => {
                         event.stopPropagation();
                         void deleteArtifact(file);
@@ -1638,8 +1675,8 @@ export default function App() {
                       className="file-row-trash"
                       role="button"
                       tabIndex={-1}
-                      aria-label={`Delete ${file.name}`}
-                      title={`Delete ${file.name}`}
+                      aria-label={`Remove ${file.name} from AgentCanvas`}
+                      title={`Remove ${file.name} from AgentCanvas`}
                       onClick={(event) => {
                         event.stopPropagation();
                         void deleteArtifact(file);
@@ -2070,7 +2107,7 @@ export default function App() {
                 Copy Relative Path
               </button>
               <button className="danger-item" type="button" onClick={() => void deleteArtifact(fileMenu.file)}>
-                Delete...
+                Remove from AgentCanvas
               </button>
             </div>
           </div>
