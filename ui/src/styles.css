@@ -242,6 +242,12 @@ button:hover {
   padding: 12px 8px;
   color: var(--text-secondary);
   font-size: 12.5px;
+  white-space: pre-line;
+}
+
+.empty-list strong {
+  color: var(--text-secondary);
+  font-size: 12.5px;
 }
 
 .empty-list span {
@@ -288,6 +294,22 @@ button:hover {
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
+}
+
+.review-dot.review-unread {
+  background: var(--accent);
+}
+
+.review-dot.review-reviewed {
+  background: var(--text-tertiary);
+}
+
+.review-dot.review-needs-work {
+  background: var(--pending);
+}
+
+.review-dot.review-approved {
+  background: var(--diff-add-strong);
 }
 
 @keyframes just-arrived {
@@ -413,7 +435,7 @@ button:hover {
 
 .middle-file {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 7px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   border-color: transparent;
@@ -1346,6 +1368,114 @@ button:hover {
   overflow: hidden;
   border-left: 0.5px solid var(--border);
   background: var(--bg-agent-panel);
+}
+
+.comments-gutter {
+  display: flex;
+  width: 46px;
+  flex-shrink: 0;
+  align-items: flex-start;
+  justify-content: center;
+  border-left: 0.5px solid var(--border);
+  background: var(--bg-agent-panel);
+  padding-top: 14px;
+}
+
+.comments-gutter button {
+  width: 30px;
+  height: 104px;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.2;
+  writing-mode: vertical-rl;
+}
+
+.comments-panel {
+  display: flex;
+  width: 280px;
+  flex-shrink: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 0.5px solid var(--border);
+  background: var(--bg-agent-panel);
+}
+
+.comments-list {
+  display: grid;
+  gap: 8px;
+  overflow: auto;
+  padding: 10px;
+}
+
+.comment-card {
+  display: grid;
+  gap: 8px;
+  border: 0.5px solid var(--border);
+  border-radius: 7px;
+  padding: 10px;
+  background: var(--bg-doc);
+  box-shadow: var(--shadow-card);
+}
+
+.comment-card.active {
+  border-color: var(--revision-mark-border);
+  background: var(--revision-mark-bg);
+}
+
+.comment-body {
+  display: grid;
+  gap: 5px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+}
+
+.comment-body span {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}
+
+.comment-body strong {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: pre-wrap;
+}
+
+.action-templates-dialog {
+  width: min(760px, calc(100vw - 48px));
+}
+
+.template-list {
+  display: grid;
+  gap: 10px;
+  max-height: 54vh;
+  overflow: auto;
+}
+
+.template-row {
+  display: grid;
+  gap: 6px;
+}
+
+.template-row span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.template-row textarea {
+  min-width: 0;
+  resize: vertical;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 8px;
+  color: var(--text);
+  background: var(--bg-doc);
+  font: inherit;
 }
 
 .agent-panel-header {

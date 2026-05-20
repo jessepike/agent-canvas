@@ -1,10 +1,33 @@
 ---
 project: agent-canvas
 updated: 2026-05-20
-stage: v0.2-finish Slice 5a-d viewers implemented
+stage: v0.2-finish Slice 6 implemented
 ---
 
 # AgentCanvas — Status
+
+## v0.2-finish Slice 6 Summary
+
+Slice 6 of `docs/BUILD-SPEC-v0.2-finish.md` was implemented on 2026-05-20.
+
+- Added optional sidecar `comments` with raw-source-offset anchors, comment creation dialog, and collapsible comments panel.
+- Added `files.review_state` additive migration, list-row review dots, manual "Mark as..." menu actions, first-open review transition, and Revise/Critique needs-work transition.
+- Added persisted action templates in the SQLite `settings` table plus an action-template editor dialog.
+- Added project-specific command-palette rows: `Open: {projectName}`.
+- Added shared focus trapping / focus restoration for dialogs and the command palette.
+- Improved empty-state copy across inbox, pinned, archive, and project views.
+- Wrote the implementation report to `docs/active/codex-slice6-report-2026-05-20.md`.
+
+Verification:
+
+- `CI=true pnpm install --no-frozen-lockfile 2>/dev/null` installed packages but exited with pnpm 11 `ERR_PNPM_IGNORED_BUILDS` for `esbuild@0.25.12`.
+- `pnpm build` was blocked by the same pnpm ignored-builds guard.
+- `./node_modules/.bin/tsc --noEmit` passes.
+- `./node_modules/.bin/vite build` passes with the known large-chunk warning.
+- `cd crates/agent-canvas-app && cargo check -q` passes.
+- `cd crates/agent-canvas-app && cargo test --bin agent-canvas-app 2>&1 | tail -5` passes: 6 tests.
+
+No commit was made; orchestrator commits from host.
 
 ## v0.2-finish Slice 5a-d Summary
 

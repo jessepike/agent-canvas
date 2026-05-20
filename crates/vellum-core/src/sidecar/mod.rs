@@ -17,6 +17,8 @@ pub struct IdentityMap {
     pub block_ids: Vec<BlockIdentity>,
     #[serde(default)]
     pub base_snapshot: Option<BaseSnapshot>,
+    #[serde(default)]
+    pub comments: Option<Vec<Comment>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
@@ -32,6 +34,25 @@ pub struct BlockIdentity {
     pub id: BlockId,
     pub byte_range_start: usize,
     pub kind: BlockKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct Comment {
+    pub id: String,
+    pub author: String,
+    pub created_at: i64,
+    pub anchor: CommentAnchor,
+    pub body: String,
+    pub resolved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../ui/src/types/generated/")]
+pub struct CommentAnchor {
+    pub block_id: Option<String>,
+    pub start_offset: usize,
+    pub end_offset: usize,
 }
 
 #[derive(Debug, Error)]
@@ -182,6 +203,7 @@ mod tests {
                 kind: BlockKind::Heading,
             }],
             base_snapshot: None,
+            comments: None,
         }
     }
 }

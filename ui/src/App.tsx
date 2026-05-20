@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { Dispatch, MouseEvent as ReactMouseEvent, SetStateAction } from "react";
 import { listen, TauriEvent } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { RenderedView } from "./components/RenderedView";
-import { SourceView, type SourceFormat, type SourceViewHandle } from "./components/SourceView";
+import { SourceView, type SourceFormat, type SourceSelection, type SourceViewHandle } from "./components/SourceView";
+import { useFocusTrap } from "./hooks/useFocusTrap";
 import {
   addAgentSession,
   archiveFile,
@@ -12,6 +13,7 @@ import {
   deleteFile,
   deleteProjectIfEmpty,
   exportFileTo,
+  getActionTemplates,
   getDefaultActionVerb,
   getBootstrapInfo,
   getProjectDefaultAgent,
@@ -33,21 +35,25 @@ import {
   revealInFinder,
   reloadPersonaRegistry,
   renameProject,
+  resetActionTemplates,
   sendMultiToClipboard,
   sendToClipboard,
+  setActionTemplates,
   setDefaultActionVerb,
   setProjectDefaultAgent,
+  setReviewState,
   targetFileExists,
   togglePin,
+  updateSidecarComments,
   writeDocument,
+  type ActionTemplate,
   type BootstrapInfo,
   type AgentSession,
   type ConflictStrategy,
   type FileMetadata,
   type PersonaRegistry
 } from "./ipc";
-import type { Block } from "./types/blocks";
-import type { BaseSnapshot } from "./types/blocks";
+import type { BaseSnapshot, Block, Comment } from "./types/blocks";
 import "./styles.css";
 
 type OpenArtifact = {
@@ -94,6 +100,8 @@ type ProjectMenu = {
 
 type AnnotationSelection = {
   rect: DOMRect;
+  startOffset: number;
+  endOffset: number;
 } | null;
 
 type MergeConflict = {
@@ -129,6 +137,7 @@ export default function App() {
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const paletteRef = useRef<HTMLElement | null>(null);
   const sourceViewRef = useRef<SourceViewHandle | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
@@ -139,6 +148,12 @@ export default function App() {
   const [conflict, setConflict] = useState(false);
   const [mergeConflict, setMergeConflict] = useState<MergeConflict>(null);
   const [annotationSelection, setAnnotationSelection] = useState<AnnotationSelection>(null);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [commentDialog, setCommentDialog] = useState<AnnotationSelection>(null);
+  const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null);
+  const [actionTemplatesOpen, setActionTemplatesOpen] = useState(false);
+  const [actionTemplates, setActionTemplatesState] = useState<ActionTemplate[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [handoffToast, setHandoffToast] = useState<string | null>(null);
@@ -169,6 +184,7 @@ export default function App() {
   const [pendingSendPath, setPendingSendPath] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const currentProjectKey = currentProject ?? "Inbox";
+  useFocusTrap(paletteRef, paletteOpen ? () => setPaletteOpen(false) : undefined);
 
   const refresh = useCallback(async () => {
     setIsLoading(true);
@@ -182,6 +198,7 @@ export default function App() {
         nextPersonas,
         nextSessions,
         nextDefaultVerb,
+        nextActionTemplates,
         nextPinned,
         nextArchive
       ] = await Promise.all([
@@ -192,6 +209,7 @@ export default function App() {
         listPersonas(),
         listAgentSessions(),
         getDefaultActionVerb(),
+        getActionTemplates(),
         listPinned(),
         listArchive()
       ]);
@@ -202,6 +220,7 @@ export default function App() {
       setPersonas(nextPersonas);
       setSessions(nextSessions);
       setDefaultActionVerbState(nextDefaultVerb);
+      setActionTemplatesState(nextActionTemplates);
       setPinnedFiles(nextPinned);
       setArchiveFiles(nextArchive);
       setSelectedPath((current) => current ?? nextFiles[0]?.path ?? null);
@@ -309,6 +328,7 @@ export default function App() {
     setConflict(false);
     setError(null);
     setSavedAt(null);
+    setComments([]);
 
     try {
       if (pngExtension(file.extension) || pdfExtension(file.extension)) {
@@ -327,6 +347,10 @@ export default function App() {
         setEditMode(false);
         setSourceMode(false);
         setJsonViewMode("source");
+        await loadCommentsForPath(file.path, setComments);
+        if (file.review_state === "unread") {
+          markReviewStateLocally(file.path, "reviewed", setFiles, setProjectFiles, setArchiveFiles, setPinnedFiles);
+        }
         return;
       }
 
@@ -347,6 +371,10 @@ export default function App() {
         setEditMode(false);
         setSourceMode(false);
         setJsonViewMode("source");
+        await loadCommentsForPath(file.path, setComments);
+        if (file.review_state === "unread") {
+          markReviewStateLocally(file.path, "reviewed", setFiles, setProjectFiles, setArchiveFiles, setPinnedFiles);
+        }
         return;
       }
 
@@ -373,6 +401,10 @@ export default function App() {
         setJsonViewMode(jsonParses(opened.source) ? "tree" : "source");
       } else {
         setJsonViewMode("source");
+      }
+      await loadCommentsForPath(opened.path, setComments);
+      if (file.review_state === "unread") {
+        markReviewStateLocally(file.path, "reviewed", setFiles, setProjectFiles, setArchiveFiles, setPinnedFiles);
       }
     } catch (caught) {
       // Even with extension check, openDocument can fail. Clear stale artifact so the
@@ -638,6 +670,59 @@ export default function App() {
     sourceViewRef.current?.applyFormat(format);
   }, []);
 
+  const openCommentDialog = useCallback((selection: NonNullable<AnnotationSelection>) => {
+    setCommentDialog(selection);
+  }, []);
+
+  const saveComment = useCallback(async (body: string) => {
+    if (!artifact || !commentDialog) {
+      return;
+    }
+    const nextComments = [
+      ...comments,
+      {
+        id: crypto.randomUUID(),
+        author: "jesse",
+        created_at: Math.floor(Date.now() / 1000),
+        anchor: {
+          block_id: null,
+          start_offset: commentDialog.startOffset,
+          end_offset: commentDialog.endOffset
+        },
+        body,
+        resolved: false
+      }
+    ];
+    try {
+      await updateSidecarComments(artifact.path, nextComments);
+      setComments(nextComments);
+      setCommentsOpen(true);
+      setCommentDialog(null);
+      setAnnotationSelection(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [artifact, commentDialog, comments]);
+
+  const resolveComment = useCallback(async (commentId: string) => {
+    if (!artifact) {
+      return;
+    }
+    const nextComments = comments.map((comment) =>
+      comment.id === commentId ? { ...comment, resolved: true } : comment
+    );
+    try {
+      await updateSidecarComments(artifact.path, nextComments);
+      setComments(nextComments);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [artifact, comments]);
+
+  const revealComment = useCallback((comment: Comment) => {
+    sourceViewRef.current?.revealRange(comment.anchor.start_offset, comment.anchor.end_offset);
+  }, []);
+
   const keepMineFromMerge = useCallback(async () => {
     if (!mergeConflict || !artifact) {
       return;
@@ -757,6 +842,13 @@ export default function App() {
         const message = "Copied to clipboard — paste into your Claude / Codex session";
         setHandoffToast(message);
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3500);
+      }
+      if (verb === "Revise" || verb === "Critique") {
+        const pathsToMark = selectedPaths.size > 1 ? [...selectedPaths] : artifact ? [artifact.path] : [];
+        await Promise.all(pathsToMark.map((path) => setReviewState(path, "needs-work")));
+        pathsToMark.forEach((path) =>
+          markReviewStateLocally(path, "needs-work", setFiles, setProjectFiles, setArchiveFiles, setPinnedFiles)
+        );
       }
       await setDefaultActionVerb(verb);
       setDefaultActionVerbState(verb);
@@ -1044,6 +1136,16 @@ export default function App() {
     [artifact?.path, refresh]
   );
 
+  const markFileReviewState = useCallback(async (file: FileMetadata, reviewState: FileMetadata["review_state"]) => {
+    try {
+      await setReviewState(file.path, reviewState);
+      markReviewStateLocally(file.path, reviewState, setFiles, setProjectFiles, setArchiveFiles, setPinnedFiles);
+      setFileMenu(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, []);
+
   const reloadPersonas = useCallback(async () => {
     try {
       const nextPersonas = await reloadPersonaRegistry();
@@ -1051,6 +1153,25 @@ export default function App() {
       const message = "Persona registry reloaded";
       setHandoffToast(message);
       window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, []);
+
+  const saveActionTemplates = useCallback(async (templates: ActionTemplate[]) => {
+    try {
+      await setActionTemplates(templates);
+      setActionTemplatesState(templates);
+      setActionTemplatesOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, []);
+
+  const resetActionTemplatesToDefaults = useCallback(async () => {
+    try {
+      const templates = await resetActionTemplates();
+      setActionTemplatesState(templates);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
@@ -1167,14 +1288,19 @@ export default function App() {
       { section: "ACTIONS", label: "Archive", run: archiveCurrent },
       { section: "ACTIONS", label: "Switch Agent Default...", run: switchAgentDefault },
       { section: "COMMANDS", label: "Reload Persona Registry", run: reloadPersonas },
-      { section: "COMMANDS", label: "Open Project", run: () => projects[0] && void openProject(projects[0]) }
+      { section: "COMMANDS", label: "Edit Action Templates...", run: () => setActionTemplatesOpen(true) }
     ];
+    const projectItems = projects.map((project) => ({
+      section: "PROJECTS",
+      label: `Open: ${project}`,
+      run: () => void openProject(project)
+    }));
     const fileItems = files.map((file) => ({
       section: "FILES",
       label: file.name,
       run: () => void openArtifact(file)
     }));
-    const allItems = [...actions, ...fileItems];
+    const allItems = [...actions, ...projectItems, ...fileItems];
     const query = paletteQuery.trim().toLowerCase();
     return query ? allItems.filter((item) => item.label.toLowerCase().includes(query)) : allItems;
   }, [archiveCurrent, files, openArtifact, openProject, openSendPopover, paletteQuery, projects, reloadPersonas, sendButtonLabel, switchAgentDefault, toggleCurrentPin]);
@@ -1185,6 +1311,11 @@ export default function App() {
         event.preventDefault();
         searchRef.current?.focus();
         searchRef.current?.select();
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "m" && annotationSelection) {
+        event.preventDefault();
+        openCommentDialog(annotationSelection);
         return;
       }
       if (isTextInput(event.target)) {
@@ -1251,6 +1382,8 @@ export default function App() {
   }, [
     archiveCurrent,
     openArtifact,
+    annotationSelection,
+    openCommentDialog,
     selectedFile,
     selectedPath,
     openSendPopover,
@@ -1300,8 +1433,15 @@ export default function App() {
             >
               {filteredFiles.length === 0 ? (
                 <div className="empty-list">
-                  {searchQuery && mode === "inbox" ? "No matching artifacts" : "Empty inbox"}
-                  <span>{bootstrap?.inbox_dir ?? "~/iCloud/AgentCanvas/Inbox"}</span>
+                  {searchQuery && mode === "inbox" ? (
+                    "No matching artifacts"
+                  ) : (
+                    <>
+                      <strong>Empty inbox</strong>
+                      <span>Drag files here or use ⌘N</span>
+                      <span>{bootstrap?.inbox_dir ?? "~/iCloud/AgentCanvas/Inbox"}</span>
+                    </>
+                  )}
                 </div>
               ) : (
                 filteredFiles.map((file) => (
@@ -1328,7 +1468,7 @@ export default function App() {
                       void selectFileFromList(file, filteredFiles, event);
                     }}
                   >
-                    <span className="arrival-dot" />
+                    <span className={`arrival-dot review-dot review-${file.review_state}`} title={reviewStateLabel(file.review_state)} />
                     <span className="file-name">
                       {file.pinned ? <span className="pin-star" title="Pinned">★ </span> : null}
                       {file.name}
@@ -1423,7 +1563,11 @@ export default function App() {
                 </div>
               </div>
               <div className="middle-list">
-                {visibleFiles.map((file) => (
+                {visibleFiles.length === 0 ? (
+                  <div className="empty-list">
+                    {searchQuery ? "No matching artifacts" : emptyStateForMode(mode)}
+                  </div>
+                ) : visibleFiles.map((file) => (
                   <button
                     className={`middle-file ${file.path === selectedPath ? "selected" : ""} ${
                       file.pinned ? "pinned" : ""
@@ -1436,6 +1580,7 @@ export default function App() {
                     }}
                     onClick={(event) => void selectFileFromList(file, visibleFiles, event)}
                   >
+                    <span className={`arrival-dot review-dot review-${file.review_state}`} title={reviewStateLabel(file.review_state)} />
                     <span>
                       {file.pinned ? <span className="pin-star" title="Pinned">★ </span> : null}
                       {file.name}
@@ -1492,6 +1637,9 @@ export default function App() {
                 <button className="primary" type="button" onClick={() => openSendPopover()} disabled={!artifact && !multiSelectActive}>
                   {sendButtonLabel}
                 </button>
+                <button type="button" onClick={() => setCommentsOpen((current) => !current)} disabled={!artifact}>
+                  Comments {comments.filter((comment) => !comment.resolved).length}
+                </button>
                 {artifact && isEditableArtifact(artifact.kind) ? (
                   <button type="button" onClick={() => void saveArtifact()} disabled={!artifact.dirty || isSaving}>
                     {isSaving ? "Saving" : "Save"}
@@ -1530,7 +1678,7 @@ export default function App() {
                     value={artifact.source}
                     onChange={updateSource}
                     onSave={saveArtifact}
-                    onSelectionBoundsChange={(bounds) => setAnnotationSelection(bounds ? { rect: bounds } : null)}
+                    onSelectionBoundsChange={(selection) => setAnnotationSelection(selectionFromSource(selection))}
                   />
                 </section>
               ) : artifact.kind === "md" ? (
@@ -1554,7 +1702,7 @@ export default function App() {
                     value={artifact.source}
                     onChange={updateSource}
                     onSave={saveArtifact}
-                    onSelectionBoundsChange={(bounds) => setAnnotationSelection(bounds ? { rect: bounds } : null)}
+                    onSelectionBoundsChange={(selection) => setAnnotationSelection(selectionFromSource(selection))}
                   />
                 </section>
               ) : artifact.kind === "png" ? (
@@ -1584,7 +1732,13 @@ export default function App() {
             )}
             {error ? <p className="error-banner">{error}</p> : null}
             {annotationSelection && artifact?.kind === "md" && editMode ? (
-              <AnnotationToolbar selection={annotationSelection} onFormat={applyAnnotationFormat} />
+              <AnnotationToolbar selection={annotationSelection} onFormat={applyAnnotationFormat} onComment={openCommentDialog} />
+            ) : null}
+            {commentDialog ? (
+              <CommentDialog
+                onCancel={() => setCommentDialog(null)}
+                onSave={(body) => void saveComment(body)}
+              />
             ) : null}
             {sendPopoverOpen ? (
               <SendPopover
@@ -1607,6 +1761,21 @@ export default function App() {
               />
             ) : null}
           </section>
+          {commentsOpen ? (
+            <CommentsPanel
+              comments={comments}
+              hoveredCommentId={hoveredCommentId}
+              onHover={setHoveredCommentId}
+              onSelect={revealComment}
+              onResolve={(commentId) => void resolveComment(commentId)}
+            />
+          ) : (
+            <aside className="comments-gutter">
+              <button type="button" onClick={() => setCommentsOpen(true)} disabled={!artifact}>
+                Comments
+              </button>
+            </aside>
+          )}
           {sessions.length === 0 && !showSessionForm ? (
             <aside className="agent-gutter">
               <button type="button" onClick={() => setShowSessionForm(true)}>
@@ -1677,7 +1846,14 @@ export default function App() {
           )}
         {paletteOpen ? (
           <div className="palette-backdrop" onMouseDown={() => setPaletteOpen(false)}>
-            <section className="palette" onMouseDown={(event) => event.stopPropagation()}>
+            <section
+              ref={paletteRef}
+              className="palette"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Command palette"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
               <div className="palette-search">
                 <input
                   autoFocus
@@ -1774,6 +1950,12 @@ export default function App() {
               <button type="button" onClick={() => { setRenamingFile(fileMenu.file); setFileMenu(null); }}>
                 Rename... (F2)
               </button>
+              <div className="context-menu-label">Mark as...</div>
+              {REVIEW_STATES.map((state) => (
+                <button key={state} type="button" onClick={() => void markFileReviewState(fileMenu.file, state)}>
+                  {reviewStateLabel(state)}
+                </button>
+              ))}
               <div className="context-menu-label">File to Project</div>
               {projects.map((project) => (
                 <button key={project} type="button" onClick={() => void moveKnownFileToProject(fileMenu.file, project)}>
@@ -1895,6 +2077,14 @@ export default function App() {
             onCancel={() => void cancelMergeAndReload()}
           />
         ) : null}
+        {actionTemplatesOpen ? (
+          <ActionTemplatesDialog
+            templates={actionTemplates}
+            onCancel={() => setActionTemplatesOpen(false)}
+            onSave={(templates) => void saveActionTemplates(templates)}
+            onReset={() => void resetActionTemplatesToDefaults()}
+          />
+        ) : null}
     </main>
   );
 }
@@ -1906,6 +2096,139 @@ type MultiSelectPlaceholderProps = {
   onArchive: () => void;
   onClear: () => void;
 };
+
+type CommentsPanelProps = {
+  comments: Comment[];
+  hoveredCommentId: string | null;
+  onHover: (id: string | null) => void;
+  onSelect: (comment: Comment) => void;
+  onResolve: (commentId: string) => void;
+};
+
+function CommentsPanel({ comments, hoveredCommentId, onHover, onSelect, onResolve }: CommentsPanelProps) {
+  const openComments = comments.filter((comment) => !comment.resolved);
+  return (
+    <aside className="comments-panel">
+      <div className="agent-panel-header">
+        <span>Comments</span>
+        <span className="count">{openComments.length}</span>
+      </div>
+      <div className="comments-list">
+        {openComments.length === 0 ? (
+          <div className="empty-list">No comments</div>
+        ) : openComments.map((comment) => (
+          <article
+            className={`comment-card ${hoveredCommentId === comment.id ? "active" : ""}`}
+            key={comment.id}
+            onMouseEnter={() => {
+              onHover(comment.id);
+              onSelect(comment);
+            }}
+            onMouseLeave={() => onHover(null)}
+          >
+            <button type="button" className="comment-body" onClick={() => onSelect(comment)}>
+              <span>{comment.author} · {formatTime(comment.created_at)}</span>
+              <strong>{comment.body}</strong>
+            </button>
+            <button type="button" onClick={() => onResolve(comment.id)}>Resolve</button>
+          </article>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+type CommentDialogProps = {
+  onCancel: () => void;
+  onSave: (body: string) => void;
+};
+
+function CommentDialog({ onCancel, onSave }: CommentDialogProps) {
+  const [body, setBody] = useState("");
+  const dialogRef = useRef<HTMLFormElement | null>(null);
+  useFocusTrap(dialogRef, onCancel);
+  return (
+    <div className="dialog-backdrop" onMouseDown={onCancel}>
+      <form
+        ref={dialogRef}
+        className="send-popover project-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="comment-dialog-title"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (body.trim()) {
+            onSave(body.trim());
+          }
+        }}
+      >
+        <header id="comment-dialog-title">Comment</header>
+        <label className="send-note">
+          <span>Body</span>
+          <textarea value={body} onChange={(event) => setBody(event.target.value)} rows={5} />
+        </label>
+        <footer>
+          <button type="button" onClick={onCancel}>Cancel</button>
+          <button className="primary" type="submit" disabled={!body.trim()}>Save</button>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
+type ActionTemplatesDialogProps = {
+  templates: ActionTemplate[];
+  onCancel: () => void;
+  onSave: (templates: ActionTemplate[]) => void;
+  onReset: () => void;
+};
+
+function ActionTemplatesDialog({ templates, onCancel, onSave, onReset }: ActionTemplatesDialogProps) {
+  const [drafts, setDrafts] = useState(templates);
+  const dialogRef = useRef<HTMLFormElement | null>(null);
+  useFocusTrap(dialogRef, onCancel);
+  useEffect(() => setDrafts(templates), [templates]);
+  return (
+    <div className="dialog-backdrop" onMouseDown={onCancel}>
+      <form
+        ref={dialogRef}
+        className="send-popover action-templates-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="action-templates-title"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave(drafts);
+        }}
+      >
+        <header id="action-templates-title">Action Templates</header>
+        <div className="template-list">
+          {drafts.map((template, index) => (
+            <label key={template.verb} className="template-row">
+              <span>{template.verb}</span>
+              <textarea
+                value={template.template}
+                onChange={(event) => {
+                  const next = [...drafts];
+                  next[index] = { ...template, template: event.target.value };
+                  setDrafts(next);
+                }}
+                rows={3}
+              />
+            </label>
+          ))}
+        </div>
+        <footer>
+          <button type="button" onClick={onCancel}>Cancel</button>
+          <button type="button" onClick={onReset}>Reset to defaults</button>
+          <button className="primary" type="submit">Save</button>
+        </footer>
+      </form>
+    </div>
+  );
+}
 
 function MultiSelectPlaceholder({ files, count, onSend, onArchive, onClear }: MultiSelectPlaceholderProps) {
   return (
@@ -1933,11 +2256,12 @@ function MultiSelectPlaceholder({ files, count, onSend, onArchive, onClear }: Mu
 }
 
 type AnnotationToolbarProps = {
-  selection: { rect: DOMRect };
+  selection: NonNullable<AnnotationSelection>;
   onFormat: (format: SourceFormat) => void;
+  onComment: (selection: NonNullable<AnnotationSelection>) => void;
 };
 
-function AnnotationToolbar({ selection, onFormat }: AnnotationToolbarProps) {
+function AnnotationToolbar({ selection, onFormat, onComment }: AnnotationToolbarProps) {
   const left = selection.rect.left + selection.rect.width / 2;
   const top = Math.max(8, selection.rect.top - 44);
   return (
@@ -1957,6 +2281,9 @@ function AnnotationToolbar({ selection, onFormat }: AnnotationToolbarProps) {
       <button type="button" title="Mark for Revision" onMouseDown={(event) => event.preventDefault()} onClick={() => onFormat("revision")}>
         Mark
       </button>
+      <button type="button" title="Comment (⌘⇧M)" onMouseDown={(event) => event.preventDefault()} onClick={() => onComment(selection)}>
+        Comment
+      </button>
     </div>
   );
 }
@@ -1970,10 +2297,13 @@ type ConflictMergeDialogProps = {
 };
 
 function ConflictMergeDialog({ conflict, isSaving, onKeepMine, onKeepTheirs, onCancel }: ConflictMergeDialogProps) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+  useFocusTrap(dialogRef, onCancel);
   return (
     <div className="palette-backdrop" onMouseDown={onCancel}>
       <section
         className="merge-dialog"
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="merge-dialog-title"
@@ -1983,7 +2313,6 @@ function ConflictMergeDialog({ conflict, isSaving, onKeepMine, onKeepTheirs, onC
             event.preventDefault();
             onCancel();
           }
-          trapFocusWithin(event);
         }}
       >
         <header>
@@ -2039,12 +2368,10 @@ type AgentPickerDialogProps = {
 
 function AgentPickerDialog({ project, sessions, defaultAgentId, onCancel, onConfirm }: AgentPickerDialogProps) {
   const [selected, setSelected] = useState(defaultAgentId ?? sessions[0]?.id ?? "");
-  const firstRadioRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
   const selectedSession = sessions.find((session) => session.id === selected) ?? null;
 
-  useEffect(() => {
-    firstRadioRef.current?.focus();
-  }, []);
+  useFocusTrap(dialogRef, onCancel);
 
   const confirm = () => {
     if (selectedSession) {
@@ -2056,6 +2383,10 @@ function AgentPickerDialog({ project, sessions, defaultAgentId, onCancel, onConf
     <div className="palette-backdrop" onMouseDown={onCancel}>
       <section
         className="rename-dialog agent-picker-dialog"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Default Agent for ${project}`}
         onMouseDown={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
@@ -2065,7 +2396,6 @@ function AgentPickerDialog({ project, sessions, defaultAgentId, onCancel, onConf
             event.preventDefault();
             confirm();
           }
-          trapFocusWithin(event);
         }}
       >
         <header>Default Agent for {project}</header>
@@ -2073,7 +2403,6 @@ function AgentPickerDialog({ project, sessions, defaultAgentId, onCancel, onConf
           {sessions.map((session, index) => (
             <label key={session.id}>
               <input
-                ref={index === 0 ? firstRadioRef : undefined}
                 type="radio"
                 name="default-agent"
                 value={session.id}
@@ -2103,6 +2432,8 @@ type RenameFileDialogProps = {
 function RenameFileDialog({ file, onCancel, onRename }: RenameFileDialogProps) {
   const [value, setValue] = useState(file.name);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useFocusTrap(dialogRef, onCancel);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -2125,7 +2456,14 @@ function RenameFileDialog({ file, onCancel, onRename }: RenameFileDialogProps) {
 
   return (
     <div className="palette-backdrop" onMouseDown={onCancel}>
-      <div className="rename-dialog" onMouseDown={(event) => event.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className="rename-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Rename ${file.name}`}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <header>Rename {file.name}</header>
         <input
           ref={inputRef}
@@ -2157,6 +2495,8 @@ type ConflictDialogProps = {
 };
 
 function ConflictDialog({ filename, target, onResolve }: ConflictDialogProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useFocusTrap(dialogRef, () => onResolve("cancel"));
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -2173,7 +2513,14 @@ function ConflictDialog({ filename, target, onResolve }: ConflictDialogProps) {
 
   return (
     <div className="palette-backdrop" onMouseDown={() => onResolve("cancel")}>
-      <div className="rename-dialog" onMouseDown={(event) => event.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className="rename-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Replace ${filename}`}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <header>Replace {filename}?</header>
         <p style={{ margin: "0 0 4px", color: "var(--text-secondary)", fontSize: 13 }}>
           A file with this name already exists in {target}.
@@ -2224,6 +2571,8 @@ function SendPopover({
   onSend
 }: SendPopoverProps) {
   const noteRef = useRef<HTMLTextAreaElement | null>(null);
+  const popoverRef = useRef<HTMLFormElement | null>(null);
+  useFocusTrap(popoverRef, onCancel);
 
   useEffect(() => {
     noteRef.current?.focus();
@@ -2232,7 +2581,11 @@ function SendPopover({
   return (
     <div className="send-popover-backdrop" onMouseDown={onCancel}>
       <form
+        ref={popoverRef}
         className="send-popover"
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
@@ -2324,6 +2677,8 @@ type ProjectRenameDialogProps = {
 function ProjectRenameDialog({ project, onCancel, onRename }: ProjectRenameDialogProps) {
   const [name, setName] = useState(project);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useRef<HTMLFormElement | null>(null);
+  useFocusTrap(dialogRef, onCancel);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -2334,6 +2689,10 @@ function ProjectRenameDialog({ project, onCancel, onRename }: ProjectRenameDialo
     <div className="dialog-backdrop" onMouseDown={onCancel}>
       <form
         className="send-popover project-dialog"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Rename Project"
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
@@ -2349,7 +2708,6 @@ function ProjectRenameDialog({ project, onCancel, onRename }: ProjectRenameDialo
             event.preventDefault();
             onCancel();
           }
-          trapFocusWithin(event);
         }}
       >
         <header>Rename Project</header>
@@ -2378,6 +2736,8 @@ type ProjectDeleteDialogProps = {
 
 function ProjectDeleteDialog({ project, onCancel, onDelete }: ProjectDeleteDialogProps) {
   const cancelRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
+  useFocusTrap(dialogRef, onCancel);
 
   useEffect(() => {
     cancelRef.current?.focus();
@@ -2387,13 +2747,16 @@ function ProjectDeleteDialog({ project, onCancel, onDelete }: ProjectDeleteDialo
     <div className="dialog-backdrop" onMouseDown={onCancel}>
       <section
         className="send-popover project-dialog"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Delete Project"
         onMouseDown={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();
             onCancel();
           }
-          trapFocusWithin(event);
         }}
       >
         <header>Delete Project</header>
@@ -2605,27 +2968,61 @@ function filterFilesByQuery(files: FileMetadata[], query: string): FileMetadata[
   return files.filter((file) => file.name.toLowerCase().includes(normalized));
 }
 
-function trapFocusWithin(event: ReactKeyboardEvent<HTMLElement>) {
-  if (event.key !== "Tab") {
-    return;
+function selectionFromSource(selection: SourceSelection | null): AnnotationSelection {
+  return selection
+    ? {
+      rect: selection.bounds,
+      startOffset: selection.startOffset,
+      endOffset: selection.endOffset
+    }
+    : null;
+}
+
+async function loadCommentsForPath(path: string, setComments: (comments: Comment[]) => void) {
+  try {
+    const sidecar = await loadSidecar(path);
+    setComments(sidecar.comments ?? []);
+  } catch {
+    setComments([]);
   }
-  const focusable = Array.from(
-    event.currentTarget.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )
-  );
-  if (focusable.length === 0) {
-    return;
+}
+
+function markReviewStateLocally(
+  path: string,
+  reviewState: FileMetadata["review_state"],
+  setFiles: Dispatch<SetStateAction<FileMetadata[]>>,
+  setProjectFiles: Dispatch<SetStateAction<FileMetadata[]>>,
+  setArchiveFiles: Dispatch<SetStateAction<FileMetadata[]>>,
+  setPinnedFiles: Dispatch<SetStateAction<FileMetadata[]>>
+) {
+  const update = (files: FileMetadata[]) =>
+    files.map((file) => (file.path === path ? { ...file, review_state: reviewState } : file));
+  setFiles(update);
+  setProjectFiles(update);
+  setArchiveFiles(update);
+  setPinnedFiles(update);
+}
+
+const REVIEW_STATES: FileMetadata["review_state"][] = ["unread", "reviewed", "needs-work", "approved"];
+
+function reviewStateLabel(state: FileMetadata["review_state"]): string {
+  if (state === "needs-work") {
+    return "Needs work";
   }
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
+  return state.slice(0, 1).toUpperCase() + state.slice(1);
+}
+
+function emptyStateForMode(mode: "inbox" | "project" | "archive" | "pinned"): string {
+  if (mode === "pinned") {
+    return "No pinned artifacts\n⌘P on any file to pin";
   }
+  if (mode === "archive") {
+    return "Empty archive\nMove artifacts here when you're done";
+  }
+  if (mode === "project") {
+    return "Empty project\nDrag inbox files to this project";
+  }
+  return "Empty inbox";
 }
 
 function isTextInput(target: EventTarget | null): boolean {

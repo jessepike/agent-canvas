@@ -21,7 +21,7 @@ use tauri::{Emitter, Manager};
 use vellum_core::{
     block::patch::BlockPatch,
     fs::{AtomicWriteError, OpenDocument, WriteResult, atomic_write, has_conflict_markers},
-    sidecar::{self, BaseSnapshot, IdentityMap},
+    sidecar::{self, BaseSnapshot, Comment, IdentityMap},
     watch::{self, WatchEvent, WatchHandle},
 };
 use walkdir::WalkDir;
@@ -82,6 +82,7 @@ struct FileMetadata {
     archived: bool,
     last_read_at: Option<i64>,
     persona: String,
+    review_state: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -112,6 +113,12 @@ struct SendPayload {
     contents: String,
     note: Option<String>,
     action_verb: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ActionTemplate {
+    verb: String,
+    template: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -670,7 +677,8 @@ fn send_to_clipboard(
         note: payload.note,
         action_verb: payload.action_verb,
     };
-    let formatted = format_send_payload(&payload, &paths.canvas_root)?;
+    let templates = action_templates_from_db(&state.db)?;
+    let formatted = format_send_payload(&payload, &paths.canvas_root, &templates)?;
     write_clipboard(&formatted)?;
     Ok(formatted)
 }
@@ -694,9 +702,32 @@ fn send_multi_to_clipboard(
             action_verb: payload.action_verb,
         });
     }
-    let formatted = format_send_multi_payload(&bounded, &paths.canvas_root)?;
+    let templates = action_templates_from_db(&state.db)?;
+    let formatted = format_send_multi_payload(&bounded, &paths.canvas_root, &templates)?;
     write_clipboard(&formatted)?;
     Ok(formatted)
+}
+
+#[tauri::command]
+fn get_action_templates(state: tauri::State<AppState>) -> Result<Vec<ActionTemplate>, String> {
+    action_templates_from_db(&state.db)
+}
+
+#[tauri::command]
+fn set_action_templates(
+    state: tauri::State<AppState>,
+    templates: Vec<ActionTemplate>,
+) -> Result<(), String> {
+    let value = serde_json::to_string(&templates).map_err(|error| error.to_string())?;
+    set_setting(&state.db, "action_templates", &value)
+}
+
+#[tauri::command]
+fn reset_action_templates(state: tauri::State<AppState>) -> Result<Vec<ActionTemplate>, String> {
+    let templates = default_action_templates();
+    let value = serde_json::to_string(&templates).map_err(|error| error.to_string())?;
+    set_setting(&state.db, "action_templates", &value)?;
+    Ok(templates)
 }
 
 #[tauri::command]
@@ -787,7 +818,10 @@ fn open_document(state: tauri::State<AppState>, doc_path: String) -> Result<Open
         .lock()
         .map_err(|_| "state db lock poisoned".to_owned())?;
     conn.execute(
-        "UPDATE files SET last_read_at = strftime('%s','now') WHERE path = ?1",
+        "UPDATE files
+         SET last_read_at = strftime('%s','now'),
+             review_state = CASE WHEN review_state = 'unread' THEN 'reviewed' ELSE review_state END
+         WHERE path = ?1",
         params![path_string],
     )
     .map_err(|error| error.to_string())?;
@@ -827,7 +861,10 @@ fn read_binary_artifact(
         .lock()
         .map_err(|_| "state db lock poisoned".to_owned())?;
     conn.execute(
-        "UPDATE files SET last_read_at = strftime('%s','now') WHERE path = ?1",
+        "UPDATE files
+         SET last_read_at = strftime('%s','now'),
+             review_state = CASE WHEN review_state = 'unread' THEN 'reviewed' ELSE review_state END
+         WHERE path = ?1",
         params![path_string],
     )
     .map_err(|error| error.to_string())?;
@@ -838,6 +875,30 @@ fn read_binary_artifact(
         size: bytes.len() as u64,
         mime: mime.to_owned(),
     })
+}
+
+#[tauri::command]
+fn set_review_state(
+    state: tauri::State<AppState>,
+    path: String,
+    review_state: String,
+) -> Result<(), String> {
+    let paths = state.paths()?;
+    let path = path_within_canvas(&paths.canvas_root, Path::new(&path))?;
+    ensure_regular_file(&path)?;
+    if !is_valid_review_state(&review_state) {
+        return Err("invalid review state".to_owned());
+    }
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute(
+        "UPDATE files SET review_state = ?1 WHERE path = ?2",
+        params![review_state, path.to_string_lossy()],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -875,6 +936,7 @@ fn load_sidecar(state: tauri::State<AppState>, doc_path: String) -> Result<Ident
         source_hash: *vellum_core::hash::content_hash(doc_source.as_bytes()).as_bytes(),
         block_ids: Vec::new(),
         base_snapshot: None,
+        comments: None,
     }))
 }
 
@@ -891,6 +953,29 @@ fn save_sidecar(
     sidecar::save(vault_root, &doc_path, &map).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn update_sidecar_comments(
+    state: tauri::State<AppState>,
+    doc_path: String,
+    comments: Vec<Comment>,
+) -> Result<(), String> {
+    let paths = state.paths()?;
+    let doc_path = path_within_canvas(&paths.canvas_root, Path::new(&doc_path))?;
+    ensure_regular_file(&doc_path)?;
+    let vault_root = vault_root_for_absolute_doc(&doc_path)?;
+    let doc_source = fs::read_to_string(&doc_path).map_err(|error| error.to_string())?;
+    let mut identity = sidecar::load_or_migrate(vault_root, &doc_path, &doc_source)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_else(|| IdentityMap {
+            source_hash: *vellum_core::hash::content_hash(doc_source.as_bytes()).as_bytes(),
+            block_ids: Vec::new(),
+            base_snapshot: None,
+            comments: None,
+        });
+    identity.comments = Some(comments);
+    sidecar::save(vault_root, &doc_path, &identity).map_err(|error| error.to_string())
+}
+
 fn update_base_snapshot(doc_path: &Path, source: &str, hash: [u8; 32]) -> Result<(), String> {
     let vault_root = vault_root_for_absolute_doc(doc_path)?;
     let mut identity = sidecar::load_or_migrate(vault_root, doc_path, source)
@@ -899,6 +984,7 @@ fn update_base_snapshot(doc_path: &Path, source: &str, hash: [u8; 32]) -> Result
             source_hash: hash,
             block_ids: Vec::new(),
             base_snapshot: None,
+            comments: None,
         });
     identity.source_hash = hash;
     identity.base_snapshot = Some(BaseSnapshot {
@@ -1079,6 +1165,32 @@ fn initialize_state_db(db: &Connection) -> Result<(), String> {
         "#,
     )
     .map_err(|error| error.to_string())?;
+    add_column_if_missing(
+        db,
+        "files",
+        "review_state",
+        "ALTER TABLE files ADD COLUMN review_state TEXT NOT NULL DEFAULT 'unread'",
+    )?;
+    Ok(())
+}
+
+fn add_column_if_missing(
+    db: &Connection,
+    table: &str,
+    column: &str,
+    sql: &str,
+) -> Result<(), String> {
+    let mut statement = db
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|error| error.to_string())?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    if !columns.iter().any(|existing| existing == column) {
+        db.execute(sql, []).map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
@@ -1162,17 +1274,18 @@ fn list_files_under(
 }
 
 fn hydrate_file_state(conn: &Connection, file: &mut FileMetadata) -> Result<(), String> {
-    let state: Option<(i64, i64, Option<i64>)> = conn
+    let state: Option<(i64, i64, Option<i64>, String)> = conn
         .query_row(
-            "SELECT pinned, archived, last_read_at FROM files WHERE path = ?1",
+            "SELECT pinned, archived, last_read_at, review_state FROM files WHERE path = ?1",
             params![file.path],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .ok();
-    if let Some((pinned, archived, last_read_at)) = state {
+    if let Some((pinned, archived, last_read_at, review_state)) = state {
         file.pinned = pinned != 0;
         file.archived = archived != 0;
         file.last_read_at = last_read_at;
+        file.review_state = review_state;
     }
     Ok(())
 }
@@ -1216,6 +1329,7 @@ fn metadata_for_file(path: &Path, canvas_root: &Path) -> Result<FileMetadata, St
         archived: false,
         last_read_at: None,
         persona,
+        review_state: "unread".to_owned(),
     })
 }
 
@@ -1257,6 +1371,10 @@ fn upsert_file_state(conn: &Connection, file: &FileMetadata) -> Result<(), Strin
     .map_err(|error| error.to_string())?;
 
     Ok(())
+}
+
+fn is_valid_review_state(state: &str) -> bool {
+    matches!(state, "unread" | "reviewed" | "needs-work" | "approved")
 }
 
 fn is_supported_artifact(path: &Path) -> bool {
@@ -1648,7 +1766,11 @@ fn path_within_canvas(canvas_root: &Path, candidate: &Path) -> Result<PathBuf, S
     }
 }
 
-fn format_send_payload(payload: &SendPayload, canvas_root: &Path) -> Result<String, String> {
+fn format_send_payload(
+    payload: &SendPayload,
+    canvas_root: &Path,
+    templates: &[ActionTemplate],
+) -> Result<String, String> {
     let note = payload.note.as_deref().unwrap_or("").trim();
     let note_block = if note.is_empty() {
         String::new()
@@ -1664,9 +1786,13 @@ fn format_send_payload(payload: &SendPayload, canvas_root: &Path) -> Result<Stri
     };
     let action = payload.action_verb.trim();
     let action = if action.is_empty() { "Review" } else { action };
+    let template_block = action_template_for(action, templates)
+        .filter(|template| !template.trim().is_empty())
+        .map(|template| format!("\n\n{}", template.trim()))
+        .unwrap_or_default();
 
     Ok(format!(
-        "I'm sending you `{relative_path}` from my AgentCanvas.\n\n{note_block}Contents:\n\n{fence}\n{}\n```\n\nAction: {action}",
+        "I'm sending you `{relative_path}` from my AgentCanvas.\n\n{note_block}Contents:\n\n{fence}\n{}\n```{template_block}\n\nAction: {action}",
         payload.contents
     ))
 }
@@ -1674,6 +1800,7 @@ fn format_send_payload(payload: &SendPayload, canvas_root: &Path) -> Result<Stri
 fn format_send_multi_payload(
     payloads: &[SendPayload],
     canvas_root: &Path,
+    templates: &[ActionTemplate],
 ) -> Result<String, String> {
     let count = payloads.len();
     let first = &payloads[0];
@@ -1685,6 +1812,10 @@ fn format_send_multi_payload(
     };
     let action = first.action_verb.trim();
     let action = if action.is_empty() { "Review" } else { action };
+    let template_block = action_template_for(action, templates)
+        .filter(|template| !template.trim().is_empty())
+        .map(|template| format!("{}\n\n", template.trim()))
+        .unwrap_or_default();
 
     let mut out = format!("I'm sending you {count} files from my AgentCanvas.\n\n{note_block}");
 
@@ -1706,8 +1837,51 @@ fn format_send_multi_payload(
         ));
     }
 
-    out.push_str(&format!("Action: {action}"));
+    out.push_str(&format!("{template_block}Action: {action}"));
     Ok(out)
+}
+
+fn default_action_templates() -> Vec<ActionTemplate> {
+    vec![
+        ActionTemplate {
+            verb: "Review".to_owned(),
+            template: "Review for clarity, completeness, and correctness. Flag anything that needs my attention.".to_owned(),
+        },
+        ActionTemplate {
+            verb: "Critique".to_owned(),
+            template: "Critique with rigor. Identify weak claims, missing evidence, structural issues.".to_owned(),
+        },
+        ActionTemplate {
+            verb: "Revise".to_owned(),
+            template: "Revise per my note above. Preserve voice and structure.".to_owned(),
+        },
+        ActionTemplate {
+            verb: "Expand".to_owned(),
+            template: "Expand on the thin sections. Add depth where the argument is asserted but not supported.".to_owned(),
+        },
+        ActionTemplate {
+            verb: "Summarize".to_owned(),
+            template: "Summarize in 200 words or fewer. Lead with the answer.".to_owned(),
+        },
+        ActionTemplate {
+            verb: "Respond to".to_owned(),
+            template: "Draft a response. Keep it under 200 words.".to_owned(),
+        },
+    ]
+}
+
+fn action_templates_from_db(db: &Mutex<Connection>) -> Result<Vec<ActionTemplate>, String> {
+    match get_setting(db, "action_templates")? {
+        Some(value) => serde_json::from_str(&value).map_err(|error| error.to_string()),
+        None => Ok(default_action_templates()),
+    }
+}
+
+fn action_template_for<'a>(action: &str, templates: &'a [ActionTemplate]) -> Option<&'a str> {
+    templates
+        .iter()
+        .find(|template| template.verb == action)
+        .map(|template| template.template.as_str())
 }
 
 fn relative_canvas_path(path: &str, canvas_root: &Path) -> Result<String, String> {
@@ -1839,6 +2013,9 @@ fn main() {
             reload_persona_registry,
             get_default_action_verb,
             set_default_action_verb,
+            get_action_templates,
+            set_action_templates,
+            reset_action_templates,
             toggle_pin,
             archive_file,
             copy_paths_to_inbox,
@@ -1860,7 +2037,9 @@ fn main() {
             read_binary_artifact,
             write_document,
             load_sidecar,
-            save_sidecar
+            save_sidecar,
+            update_sidecar_comments,
+            set_review_state
         ])
         .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!());
@@ -1986,11 +2165,12 @@ mod tests {
             action_verb: "Revise".to_owned(),
         };
 
-        let formatted = format_send_payload(&payload, root).expect("payload formats");
+        let formatted = format_send_payload(&payload, root, &default_action_templates())
+            .expect("payload formats");
 
         assert_eq!(
             formatted,
-            "I'm sending you `Inbox/test.md` from my AgentCanvas.\n\nMy note: Tighten this.\n\nContents:\n\n```markdown\n# Test\n\nBody\n```\n\nAction: Revise"
+            "I'm sending you `Inbox/test.md` from my AgentCanvas.\n\nMy note: Tighten this.\n\nContents:\n\n```markdown\n# Test\n\nBody\n```\n\nRevise per my note above. Preserve voice and structure.\n\nAction: Revise"
         );
         assert!(!formatted.contains("Path:"));
         assert!(!formatted.contains("/Users/jessepike/Library/Mobile Documents"));
@@ -2010,11 +2190,12 @@ mod tests {
             action_verb: " ".to_owned(),
         };
 
-        let formatted = format_send_payload(&payload, root).expect("payload formats");
+        let formatted = format_send_payload(&payload, root, &default_action_templates())
+            .expect("payload formats");
 
         assert_eq!(
             formatted,
-            "I'm sending you `Archive/report.html` from my AgentCanvas.\n\nContents:\n\n```html\n<h1>Report</h1>\n```\n\nAction: Review"
+            "I'm sending you `Archive/report.html` from my AgentCanvas.\n\nContents:\n\n```html\n<h1>Report</h1>\n```\n\nReview for clarity, completeness, and correctness. Flag anything that needs my attention.\n\nAction: Review"
         );
         assert!(!formatted.contains("My note:"));
     }

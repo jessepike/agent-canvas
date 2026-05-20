@@ -9,6 +9,7 @@ authors.workspace = true
 base64.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tauri = { workspace = true, default-features = false, features = ["wry"] }
 tauri-plugin-dialog.workspace = true
 ts-rs.workspace = true

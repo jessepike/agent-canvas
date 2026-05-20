@@ -5,6 +5,8 @@ import type { BlockError as RsBlockError } from "./generated/BlockError";
 import type { BlockId as RsBlockId } from "./generated/BlockId";
 import type { BlockIdentity as RsBlockIdentity } from "./generated/BlockIdentity";
 import type { BaseSnapshot as RsBaseSnapshot } from "./generated/BaseSnapshot";
+import type { Comment as RsComment } from "./generated/Comment";
+import type { CommentAnchor as RsCommentAnchor } from "./generated/CommentAnchor";
 import type { BlockKind as RsBlockKind } from "./generated/BlockKind";
 import type { BlockPatch as RsBlockPatch } from "./generated/BlockPatch";
 import type { BlockPayload as RsBlockPayload } from "./generated/BlockPayload";
@@ -248,11 +250,35 @@ export const BaseSnapshot = z
 export type BaseSnapshot = z.infer<typeof BaseSnapshot>;
 const _checkBaseSnapshot: TypeEquals<BaseSnapshot, RsBaseSnapshot> = true;
 
+export const CommentAnchor = z
+  .object({
+    block_id: z.string().nullable(),
+    start_offset: z.number().int().nonnegative(),
+    end_offset: z.number().int().nonnegative()
+  })
+  .strict();
+export type CommentAnchor = z.infer<typeof CommentAnchor>;
+const _checkCommentAnchor: TypeEquals<CommentAnchor, RsCommentAnchor> = true;
+
+export const Comment = z
+  .object({
+    id: z.string().uuid(),
+    author: z.string(),
+    created_at: z.number().int(),
+    anchor: CommentAnchor,
+    body: z.string(),
+    resolved: z.boolean()
+  })
+  .strict();
+export type Comment = z.infer<typeof Comment>;
+const _checkComment: TypeEquals<Comment, RsComment> = true;
+
 export const IdentityMap = z
   .object({
     source_hash: Hash32,
     block_ids: z.array(BlockIdentity),
-    base_snapshot: BaseSnapshot.nullable().optional()
+    base_snapshot: BaseSnapshot.nullable().optional(),
+    comments: z.array(Comment).nullable().optional()
   })
   .strict();
 export type IdentityMap = z.infer<typeof IdentityMap>;
@@ -291,6 +317,8 @@ export const BlockPatchSchema = BlockPatch;
 export const BlockIdentitySchema = BlockIdentity;
 export const IdentityMapSchema = IdentityMap;
 export const BaseSnapshotSchema = BaseSnapshot;
+export const CommentAnchorSchema = CommentAnchor;
+export const CommentSchema = Comment;
 export const OpenDocumentSchema = OpenDocument;
 export const WriteResultSchema = WriteResult;
 export const ParseErrorSchema = z.string();

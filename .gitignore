@@ -18,3 +18,4 @@ ui/.vite/
 
 # Pre-existing sibling directory; orthogonal to vellum (chroma + kb.db)
 data/
+.claude/

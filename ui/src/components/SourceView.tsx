@@ -6,9 +6,15 @@ import { basicSetup } from "codemirror";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
 export type SourceFormat = "bold" | "italic" | "strike" | "code" | "revision";
+export type SourceSelection = {
+  bounds: DOMRect;
+  startOffset: number;
+  endOffset: number;
+};
 
 export type SourceViewHandle = {
   applyFormat: (format: SourceFormat) => void;
+  revealRange: (startOffset: number, endOffset: number) => void;
 };
 
 type SourceViewProps = {
@@ -17,7 +23,7 @@ type SourceViewProps = {
   onChange: (next: string) => void;
   onOpen?: () => void;
   onSave?: () => void;
-  onSelectionBoundsChange?: (bounds: DOMRect | null) => void;
+  onSelectionBoundsChange?: (selection: SourceSelection | null) => void;
 };
 
 export const SourceView = forwardRef<SourceViewHandle, SourceViewProps>(function SourceView(
@@ -71,6 +77,21 @@ export const SourceView = forwardRef<SourceViewHandle, SourceViewProps>(function
           anchor: selection.from + prefix.length,
           head: selection.to + prefix.length
         },
+        scrollIntoView: true
+      });
+      view.focus();
+      updateSelectionBounds(view);
+    },
+    revealRange: (startOffset, endOffset) => {
+      const view = viewRef.current;
+      if (!view) {
+        return;
+      }
+      const docLength = view.state.doc.length;
+      const from = Math.max(0, Math.min(startOffset, docLength));
+      const to = Math.max(from, Math.min(endOffset, docLength));
+      view.dispatch({
+        selection: { anchor: from, head: to },
         scrollIntoView: true
       });
       view.focus();
@@ -230,10 +251,14 @@ function updateSelectionBounds(view: EditorView) {
   const right = Math.max(start.right, end.right);
   const top = Math.min(start.top, end.top);
   const bottom = Math.max(start.bottom, end.bottom);
-  callback(new DOMRect(left, top, Math.max(right - left, 1), Math.max(bottom - top, 1)));
+  callback({
+    bounds: new DOMRect(left, top, Math.max(right - left, 1), Math.max(bottom - top, 1)),
+    startOffset: selection.from,
+    endOffset: selection.to
+  });
 }
 
-const selectionCallbacks = new WeakMap<EditorView, (bounds: DOMRect | null) => void>();
+const selectionCallbacks = new WeakMap<EditorView, (selection: SourceSelection | null) => void>();
 
 function onSelectionBoundsChangeRefForView(view: EditorView) {
   return selectionCallbacks.get(view);

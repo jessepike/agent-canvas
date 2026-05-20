@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { z } from "zod";
-import { Block, BlockPatch, IdentityMap, OpenDocument, WriteResult, Hash32 } from "./types/blocks";
+import { Block, BlockPatch, IdentityMap, OpenDocument, WriteResult, Hash32, Comment } from "./types/blocks";
 import type {
   Block as BlockType,
   BlockPatch as BlockPatchType,
+  Comment as CommentType,
   IdentityMap as IdentityMapType,
   OpenDocument as OpenDocumentType,
   WriteResult as WriteResultType
@@ -23,7 +24,8 @@ export const FileMetadata = z
     pinned: z.boolean(),
     archived: z.boolean(),
     last_read_at: z.number().nullable(),
-    persona: z.string()
+    persona: z.string(),
+    review_state: z.enum(["unread", "reviewed", "needs-work", "approved"])
   })
   .strict();
 export type FileMetadata = z.infer<typeof FileMetadata>;
@@ -55,6 +57,14 @@ export const SendPayload = z
   })
   .strict();
 export type SendPayload = z.infer<typeof SendPayload>;
+
+export const ActionTemplate = z
+  .object({
+    verb: z.string(),
+    template: z.string()
+  })
+  .strict();
+export type ActionTemplate = z.infer<typeof ActionTemplate>;
 
 export const BinaryArtifact = z
   .object({
@@ -222,6 +232,32 @@ export async function setDefaultActionVerb(verb: string): Promise<void> {
     await invoke<unknown>("set_default_action_verb", { verb });
   } catch (caught) {
     throw ipcError("set_default_action_verb", caught);
+  }
+}
+
+export async function getActionTemplates(): Promise<ActionTemplate[]> {
+  try {
+    const result = await invoke<unknown>("get_action_templates");
+    return z.array(ActionTemplate).parse(result);
+  } catch (caught) {
+    throw ipcError("get_action_templates", caught);
+  }
+}
+
+export async function setActionTemplates(templates: ActionTemplate[]): Promise<void> {
+  try {
+    await invoke<unknown>("set_action_templates", { templates });
+  } catch (caught) {
+    throw ipcError("set_action_templates", caught);
+  }
+}
+
+export async function resetActionTemplates(): Promise<ActionTemplate[]> {
+  try {
+    const result = await invoke<unknown>("reset_action_templates");
+    return z.array(ActionTemplate).parse(result);
+  } catch (caught) {
+    throw ipcError("reset_action_templates", caught);
   }
 }
 
@@ -449,5 +485,21 @@ export async function saveSidecar(docPath: string, map: IdentityMapType): Promis
     z.null().parse(result);
   } catch (caught) {
     throw ipcError("save_sidecar", caught);
+  }
+}
+
+export async function updateSidecarComments(docPath: string, comments: CommentType[]): Promise<void> {
+  try {
+    await invoke<unknown>("update_sidecar_comments", { docPath, comments: z.array(Comment).parse(comments) });
+  } catch (caught) {
+    throw ipcError("update_sidecar_comments", caught);
+  }
+}
+
+export async function setReviewState(path: string, reviewState: FileMetadata["review_state"]): Promise<void> {
+  try {
+    await invoke<unknown>("set_review_state", { path, reviewState });
+  } catch (caught) {
+    throw ipcError("set_review_state", caught);
   }
 }
