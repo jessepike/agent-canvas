@@ -266,6 +266,10 @@ button:hover {
   box-shadow: var(--shadow-hairline);
 }
 
+.file-row.multi-selected {
+  background: var(--accent-soft);
+}
+
 .file-row.just-arrived {
   background: var(--accent-soft);
   animation: just-arrived 1.4s ease-out;
@@ -419,6 +423,10 @@ button:hover {
   border-color: var(--border);
   background: var(--selected-bg);
   box-shadow: var(--shadow-hairline);
+}
+
+.middle-file.multi-selected {
+  background: var(--accent-soft);
 }
 
 .middle-file span {
@@ -711,6 +719,65 @@ button:hover {
 }
 
 .rename-dialog footer .primary {
+  border-color: var(--accent-deep);
+  color: var(--btn-primary-text);
+  background: linear-gradient(to bottom, var(--btn-primary-top), var(--btn-primary-bot));
+}
+
+.agent-picker-dialog fieldset {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.agent-picker-dialog label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 0.5px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--bg-doc);
+}
+
+.agent-picker-dialog small {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select-placeholder ul {
+  display: grid;
+  max-width: 520px;
+  gap: 6px;
+  margin: 0 0 18px;
+  padding-left: 18px;
+}
+
+.multi-select-placeholder li {
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.multi-select-actions button {
+  padding: 6px 12px;
+}
+
+.multi-select-actions .primary {
   border-color: var(--accent-deep);
   color: var(--btn-primary-text);
   background: linear-gradient(to bottom, var(--btn-primary-top), var(--btn-primary-bot));

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { listen, TauriEvent } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { RenderedView } from "./components/RenderedView";
 import { SourceView } from "./components/SourceView";
 import {
@@ -11,6 +11,7 @@ import {
   copyTextToClipboard,
   deleteFile,
   deleteProjectIfEmpty,
+  exportFileTo,
   getDefaultActionVerb,
   getBootstrapInfo,
   getProjectDefaultAgent,
@@ -107,6 +108,7 @@ export default function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [artifact, setArtifact] = useState<OpenArtifact | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [sourceMode, setSourceMode] = useState(false);
@@ -116,6 +118,7 @@ export default function App() {
   const [handoffToast, setHandoffToast] = useState<string | null>(null);
   const [sendPopoverOpen, setSendPopoverOpen] = useState(false);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [defaultAgentId, setDefaultAgentId] = useState<string | null>(null);
   const [defaultActionVerb, setDefaultActionVerbState] = useState("Review");
@@ -176,6 +179,7 @@ export default function App() {
       setPinnedFiles(nextPinned);
       setArchiveFiles(nextArchive);
       setSelectedPath((current) => current ?? nextFiles[0]?.path ?? null);
+      setSelectedPaths((current) => current.size > 0 ? current : new Set(nextFiles[0]?.path ? [nextFiles[0].path] : []));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -205,6 +209,11 @@ export default function App() {
     () => [...files, ...projectFiles, ...archiveFiles, ...pinnedFiles].find((file) => file.path === selectedPath) ?? null,
     [archiveFiles, files, pinnedFiles, projectFiles, selectedPath]
   );
+  const selectedFileMetadatas = useMemo(() => {
+    const byPath = new Map([...files, ...projectFiles, ...archiveFiles, ...pinnedFiles].map((file) => [file.path, file]));
+    return [...selectedPaths].map((path) => byPath.get(path)).filter((file): file is FileMetadata => Boolean(file));
+  }, [archiveFiles, files, pinnedFiles, projectFiles, selectedPaths]);
+  const multiSelectActive = selectedPaths.size > 1;
   const filteredFiles = useMemo(() => filterFilesByQuery(files, mode === "inbox" ? searchQuery : ""), [files, mode, searchQuery]);
   const filteredProjectFiles = useMemo(
     () => filterFilesByQuery(projectFiles, mode === "project" ? searchQuery : ""),
@@ -231,8 +240,8 @@ export default function App() {
     return filteredFiles;
   }, [filteredArchiveFiles, filteredFiles, filteredPinnedFiles, filteredProjectFiles, mode]);
   const sendButtonLabel = useMemo(
-    () => sendLabelForSessions(sessions, defaultAgentId),
-    [defaultAgentId, sessions]
+    () => sendLabelForSessions(sessions, defaultAgentId, multiSelectActive ? selectedPaths.size : undefined),
+    [defaultAgentId, multiSelectActive, selectedPaths.size, sessions]
   );
   const defaultAgent = useMemo(
     () => sessions.find((session) => session.id === defaultAgentId) ?? null,
@@ -259,6 +268,7 @@ export default function App() {
 
   const openArtifact = useCallback(async (file: FileMetadata) => {
     setSelectedPath(file.path);
+    setSelectedPaths(new Set([file.path]));
     setIsOpening(true);
     setConflict(false);
     setError(null);
@@ -324,6 +334,7 @@ export default function App() {
         } else {
           setArtifact(null);
           setSelectedPath(null);
+          setSelectedPaths(new Set());
         }
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
@@ -344,6 +355,7 @@ export default function App() {
       } else {
         setArtifact(null);
         setSelectedPath(null);
+        setSelectedPaths(new Set());
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -362,6 +374,7 @@ export default function App() {
       } else {
         setArtifact(null);
         setSelectedPath(null);
+        setSelectedPaths(new Set());
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -373,6 +386,43 @@ export default function App() {
     setCurrentProject(null);
     setSearchQuery("");
   }, []);
+
+  const selectFileFromList = useCallback(
+    async (file: FileMetadata, list: FileMetadata[], event: ReactMouseEvent<HTMLButtonElement>) => {
+      if (event.shiftKey) {
+        event.preventDefault();
+        const anchorIndex = list.findIndex((candidate) => candidate.path === selectedPath);
+        const clickedIndex = list.findIndex((candidate) => candidate.path === file.path);
+        if (clickedIndex === -1) {
+          return;
+        }
+        const start = anchorIndex === -1 ? clickedIndex : Math.min(anchorIndex, clickedIndex);
+        const end = anchorIndex === -1 ? clickedIndex : Math.max(anchorIndex, clickedIndex);
+        const range = list.slice(start, end + 1).map((candidate) => candidate.path);
+        setSelectedPath(file.path);
+        setSelectedPaths((current) => new Set([...current, ...range]));
+        return;
+      }
+
+      if (event.metaKey || event.ctrlKey) {
+        event.preventDefault();
+        setSelectedPath(file.path);
+        setSelectedPaths((current) => {
+          const next = new Set(current);
+          if (next.has(file.path)) {
+            next.delete(file.path);
+          } else {
+            next.add(file.path);
+          }
+          return next;
+        });
+        return;
+      }
+
+      await openArtifact(file);
+    },
+    [openArtifact, selectedPath]
+  );
 
   const reloadOpenArtifact = useCallback(async () => {
     if (!artifact || artifact.dirty) {
@@ -479,7 +529,7 @@ export default function App() {
   }
 
   const openSendPopover = useCallback((forceAgentPicker = false) => {
-    if (!artifact) {
+    if (!artifact && selectedPaths.size <= 1) {
       return;
     }
     // Pasteboard handoff works regardless of declared agent sessions. The agent
@@ -493,10 +543,10 @@ export default function App() {
     setCustomActionVerb(defaultIsPreset ? "" : defaultActionVerb);
     setSendNote("");
     setSendPopoverOpen(true);
-  }, [artifact, defaultActionVerb, defaultAgentId, sessions]);
+  }, [artifact, defaultActionVerb, defaultAgentId, selectedPaths.size, sessions]);
 
   const sendCurrentArtifact = useCallback(async (actionVerb: string, note: string) => {
-    if (!artifact) {
+    if (!artifact && selectedPaths.size <= 1) {
       return;
     }
     const verb = actionVerb.trim() || "Review";
@@ -510,22 +560,42 @@ export default function App() {
           return;
         }
       }
-      await sendToClipboard({
-        path: artifact.path,
-        contents: artifact.source,
-        note: note.trim() ? note : null,
-        action_verb: verb
-      });
+      const agent = sessions.find((session) => session.id === selectedAgentId) ?? defaultAgent;
+      if (selectedPaths.size > 1) {
+        const payloads = await Promise.all(
+          [...selectedPaths].map(async (path) => {
+            const doc = await openDocument(path);
+            return {
+              path,
+              contents: doc.source,
+              note: note.trim() ? note : null,
+              action_verb: verb
+            };
+          })
+        );
+        await sendMultiToClipboard(payloads);
+        setSelectedPaths(selectedPath ? new Set([selectedPath]) : new Set());
+        const message = `Copied ${payloads.length} files to clipboard for ${agent ? agentSessionLabel(agent) : "Agent"}`;
+        setHandoffToast(message);
+        window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3500);
+      } else if (artifact) {
+        await sendToClipboard({
+          path: artifact.path,
+          contents: artifact.source,
+          note: note.trim() ? note : null,
+          action_verb: verb
+        });
+        const message = "Copied to clipboard — paste into your Claude / Codex session";
+        setHandoffToast(message);
+        window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3500);
+      }
       await setDefaultActionVerb(verb);
       setDefaultActionVerbState(verb);
       setSendPopoverOpen(false);
-      const message = "Copied to clipboard — paste into your Claude / Codex session";
-      setHandoffToast(message);
-      window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3500);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
-  }, [artifact, defaultAgent, selectedAgentId, sessions]);
+  }, [artifact, defaultAgent, selectedAgentId, selectedPath, selectedPaths, sessions]);
 
   const setDefaultAgentForProject = useCallback(
     async (session: AgentSession) => {
@@ -548,14 +618,8 @@ export default function App() {
       setShowSessionForm(true);
       return;
     }
-    const options = sessions.map((session, index) => `${index + 1}. ${agentSessionLabel(session)}`).join("\n");
-    const answer = window.prompt(`Switch default agent for ${currentProjectKey}:\n${options}`, "1");
-    const index = answer ? Number.parseInt(answer, 10) - 1 : Number.NaN;
-    const session = sessions[index];
-    if (session) {
-      await setDefaultAgentForProject(session);
-    }
-  }, [currentProjectKey, sessions, setDefaultAgentForProject]);
+    setAgentPickerOpen(true);
+  }, [sessions.length]);
 
   const openConflictDialog = useCallback(
     (filename: string, target: string): Promise<ConflictStrategy> => {
@@ -578,6 +642,15 @@ export default function App() {
         if (selectedPath === renamingFile.path) {
           setSelectedPath(updated.path);
         }
+        setSelectedPaths((current) => {
+          if (!current.has(renamingFile.path)) {
+            return current;
+          }
+          const next = new Set(current);
+          next.delete(renamingFile.path);
+          next.add(updated.path);
+          return next;
+        });
         const message = `Renamed → ${updated.name}`;
         setHandoffToast(message);
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
@@ -604,6 +677,7 @@ export default function App() {
     await archiveFile(artifact.path);
     setArtifact(null);
     setSelectedPath(null);
+    setSelectedPaths(new Set());
     await refresh();
   }, [artifact, refresh]);
 
@@ -656,6 +730,7 @@ export default function App() {
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
         setArtifact(null);
         setSelectedPath(null);
+        setSelectedPaths(new Set());
         await refresh();
         if (currentProject === project) {
           setProjectFiles(await listProjectFiles(project));
@@ -681,6 +756,7 @@ export default function App() {
         if (artifact?.path === file.path) {
           setArtifact(null);
           setSelectedPath(null);
+          setSelectedPaths(new Set());
         }
         setFileMenu(null);
         await refresh();
@@ -711,6 +787,7 @@ export default function App() {
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
         setArtifact(null);
         setSelectedPath(null);
+        setSelectedPaths(new Set());
         await refresh();
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
@@ -732,6 +809,7 @@ export default function App() {
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
         setArtifact(null);
         setSelectedPath(null);
+        setSelectedPaths(new Set());
         setFileMenu(null);
         await refresh();
       } catch (caught) {
@@ -740,6 +818,41 @@ export default function App() {
     },
     [artifact?.path, refresh]
   );
+
+  const archiveSelectedFiles = useCallback(async () => {
+    if (selectedPaths.size === 0) {
+      return;
+    }
+    try {
+      const paths = [...selectedPaths];
+      await Promise.all(paths.map((path) => moveFileToArchive(path, "keep_both")));
+      setArtifact(null);
+      setSelectedPath(null);
+      setSelectedPaths(new Set());
+      const message = `Archived ${paths.length} files`;
+      setHandoffToast(message);
+      window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [refresh, selectedPaths]);
+
+  const exportKnownFile = useCallback(async (file: FileMetadata) => {
+    try {
+      setFileMenu(null);
+      const targetPath = await save({ defaultPath: file.name });
+      if (!targetPath) {
+        return;
+      }
+      await exportFileTo(file.path, targetPath);
+      const message = `Exported ${file.name} → ${directoryName(targetPath)}`;
+      setHandoffToast(message);
+      window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3000);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, []);
 
   const deleteArtifact = useCallback(
     async (file: FileMetadata) => {
@@ -751,6 +864,7 @@ export default function App() {
         if (artifact?.path === file.path) {
           setArtifact(null);
           setSelectedPath(null);
+          setSelectedPaths(new Set());
         }
         setFileMenu(null);
         await refresh();
@@ -804,6 +918,7 @@ export default function App() {
           setProjectFiles([]);
           setArtifact(null);
           setSelectedPath(null);
+          setSelectedPaths(new Set());
         }
         const message = `Deleted ${name}`;
         setHandoffToast(message);
@@ -909,7 +1024,7 @@ export default function App() {
       if (event.key === "Escape") {
         event.preventDefault();
         setSearchQuery("");
-        setSelectedPath(null);
+        setSelectedPaths(selectedPath ? new Set([selectedPath]) : new Set());
         return;
       }
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -994,7 +1109,7 @@ export default function App() {
                     if (event.key === "Escape") {
                       event.preventDefault();
                       setSearchQuery("");
-                      setSelectedPath(null);
+                      setSelectedPaths(selectedPath ? new Set([selectedPath]) : new Set());
                     }
                   }}
                   placeholder="Search artifacts"
@@ -1024,7 +1139,9 @@ export default function App() {
                   <button
                     className={`file-row ${file.path === selectedPath ? "selected" : ""} ${
                       arrivedPaths.has(file.path) ? "just-arrived" : ""
-                    } ${file.pinned ? "pinned" : ""}`}
+                    } ${file.pinned ? "pinned" : ""} ${
+                      selectedPaths.has(file.path) && selectedPaths.size > 1 ? "multi-selected" : ""
+                    }`}
                     key={file.path}
                     type="button"
                     draggable
@@ -1036,10 +1153,10 @@ export default function App() {
                       event.preventDefault();
                       setFileMenu({ x: event.clientX, y: event.clientY, file });
                     }}
-                    onClick={() => {
+                    onClick={(event) => {
                       setMode("inbox");
                       setCurrentProject(null);
-                      void openArtifact(file);
+                      void selectFileFromList(file, filteredFiles, event);
                     }}
                   >
                     <span className="arrival-dot" />
@@ -1139,14 +1256,16 @@ export default function App() {
               <div className="middle-list">
                 {visibleFiles.map((file) => (
                   <button
-                    className={`middle-file ${file.path === selectedPath ? "selected" : ""} ${file.pinned ? "pinned" : ""}`}
+                    className={`middle-file ${file.path === selectedPath ? "selected" : ""} ${
+                      file.pinned ? "pinned" : ""
+                    } ${selectedPaths.has(file.path) && selectedPaths.size > 1 ? "multi-selected" : ""}`}
                     key={file.path}
                     type="button"
                     onContextMenu={(event) => {
                       event.preventDefault();
                       setFileMenu({ x: event.clientX, y: event.clientY, file });
                     }}
-                    onClick={() => void openArtifact(file)}
+                    onClick={(event) => void selectFileFromList(file, visibleFiles, event)}
                   >
                     <span>
                       {file.pinned ? <span className="pin-star" title="Pinned">★ </span> : null}
@@ -1184,7 +1303,7 @@ export default function App() {
                 >
                   {artifact?.kind === "html" ? (sourceMode ? "Render" : "View Source") : editMode ? "Preview" : "Edit"}
                 </button>
-                <button className="primary" type="button" onClick={() => openSendPopover()} disabled={!artifact}>
+                <button className="primary" type="button" onClick={() => openSendPopover()} disabled={!artifact && !multiSelectActive}>
                   {sendButtonLabel}
                 </button>
                 <button type="button" onClick={() => void saveArtifact()} disabled={!artifact?.dirty || isSaving}>
@@ -1201,7 +1320,15 @@ export default function App() {
             {personas?.warning ? <div className="registry-warning">{personas.warning}</div> : null}
             {savedAt ? <div className="saved-toast">Saved {savedAt}</div> : null}
             {handoffToast ? <div className="handoff-toast">{handoffToast}</div> : null}
-            {artifact ? (
+            {multiSelectActive ? (
+              <MultiSelectPlaceholder
+                files={selectedFileMetadatas}
+                count={selectedPaths.size}
+                onSend={() => openSendPopover()}
+                onArchive={() => void archiveSelectedFiles()}
+                onClear={() => setSelectedPaths(selectedPath ? new Set([selectedPath]) : new Set())}
+              />
+            ) : artifact ? (
               editMode || sourceMode ? (
                 <section className="source-panel" aria-label="Source editor">
                   <SourceView value={artifact.source} onChange={updateSource} onSave={saveArtifact} />
@@ -1429,6 +1556,9 @@ export default function App() {
               <button type="button" onClick={() => void sendFileFromMenu(fileMenu.file)}>
                 Send to Agent... (⌘⏎)
               </button>
+              <button type="button" onClick={() => void exportKnownFile(fileMenu.file)}>
+                Export to...
+              </button>
               <button type="button" onClick={() => { setFileMenu(null); void revealInFinder(fileMenu.file.path); }}>
                 Reveal in Finder
               </button>
@@ -1514,7 +1644,117 @@ export default function App() {
             }}
           />
         ) : null}
+        {agentPickerOpen ? (
+          <AgentPickerDialog
+            project={currentProjectKey}
+            sessions={sessions}
+            defaultAgentId={defaultAgentId}
+            onCancel={() => setAgentPickerOpen(false)}
+            onConfirm={(session) => {
+              setAgentPickerOpen(false);
+              void setDefaultAgentForProject(session);
+            }}
+          />
+        ) : null}
     </main>
+  );
+}
+
+type MultiSelectPlaceholderProps = {
+  files: FileMetadata[];
+  count: number;
+  onSend: () => void;
+  onArchive: () => void;
+  onClear: () => void;
+};
+
+function MultiSelectPlaceholder({ files, count, onSend, onArchive, onClear }: MultiSelectPlaceholderProps) {
+  return (
+    <article className="document multi-select-placeholder">
+      <p className="eyebrow">Selection</p>
+      <h1>{count} files selected</h1>
+      <ul>
+        {files.map((file) => (
+          <li key={file.path}>{file.name}</li>
+        ))}
+      </ul>
+      <div className="multi-select-actions">
+        <button className="primary" type="button" onClick={onSend}>
+          Send to Agent (⌘⏎)
+        </button>
+        <button type="button" onClick={onArchive}>
+          Archive
+        </button>
+        <button type="button" onClick={onClear}>
+          Clear (Esc)
+        </button>
+      </div>
+    </article>
+  );
+}
+
+type AgentPickerDialogProps = {
+  project: string;
+  sessions: AgentSession[];
+  defaultAgentId: string | null;
+  onCancel: () => void;
+  onConfirm: (session: AgentSession) => void;
+};
+
+function AgentPickerDialog({ project, sessions, defaultAgentId, onCancel, onConfirm }: AgentPickerDialogProps) {
+  const [selected, setSelected] = useState(defaultAgentId ?? sessions[0]?.id ?? "");
+  const firstRadioRef = useRef<HTMLInputElement | null>(null);
+  const selectedSession = sessions.find((session) => session.id === selected) ?? null;
+
+  useEffect(() => {
+    firstRadioRef.current?.focus();
+  }, []);
+
+  const confirm = () => {
+    if (selectedSession) {
+      onConfirm(selectedSession);
+    }
+  };
+
+  return (
+    <div className="palette-backdrop" onMouseDown={onCancel}>
+      <section
+        className="rename-dialog agent-picker-dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+          } else if (event.key === "Enter") {
+            event.preventDefault();
+            confirm();
+          }
+          trapFocusWithin(event);
+        }}
+      >
+        <header>Default Agent for {project}</header>
+        <fieldset>
+          {sessions.map((session, index) => (
+            <label key={session.id}>
+              <input
+                ref={index === 0 ? firstRadioRef : undefined}
+                type="radio"
+                name="default-agent"
+                value={session.id}
+                checked={selected === session.id}
+                onChange={() => setSelected(session.id)}
+              />
+              <span>{agentSessionLabel(session)}</span>
+              <small>[{session.context || "current"}]</small>
+            </label>
+          ))}
+        </fieldset>
+        <footer>
+          <button type="button" onClick={onCancel}>Cancel</button>
+          <button type="button" className="primary" onClick={confirm} disabled={!selectedSession}>OK</button>
+        </footer>
+      </section>
+    </div>
   );
 }
 
@@ -1884,15 +2124,16 @@ function fallbackPersonaColor(persona: string): string {
   return "var(--text-secondary)";
 }
 
-function sendLabelForSessions(sessions: AgentSession[], defaultSessionId: string | null): string {
+function sendLabelForSessions(sessions: AgentSession[], defaultSessionId: string | null, fileCount?: number): string {
+  const prefix = fileCount && fileCount > 1 ? `Send ${fileCount} files to` : "Send to";
   if (sessions.length === 0) {
-    return "Send to Agent";
+    return `${prefix} Agent`;
   }
   if (sessions.length === 1) {
-    return `Send to ${agentSessionLabel(sessions[0])}`;
+    return `${prefix} ${agentSessionLabel(sessions[0])}`;
   }
   const defaultSession = sessions.find((session) => session.id === defaultSessionId);
-  return defaultSession ? `Send to ${agentSessionLabel(defaultSession)}` : "Send to Agent";
+  return defaultSession ? `${prefix} ${agentSessionLabel(defaultSession)}` : `${prefix} Agent`;
 }
 
 function agentSessionLabel(session: AgentSession): string {
@@ -1982,6 +2223,10 @@ function isTextInput(target: EventTarget | null): boolean {
 
 function fileName(path: string): string {
   return path.split(/[\\/]/).pop() || path;
+}
+
+function directoryName(path: string): string {
+  return path.split(/[\\/]/).slice(0, -1).join("/") || ".";
 }
 
 function formatTime(epochSeconds: number): string {

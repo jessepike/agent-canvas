@@ -611,16 +611,41 @@ fn rename_file(
         .map_err(|_| "state db lock poisoned".to_owned())?;
     conn.execute(
         "UPDATE files SET path = ?1 WHERE path = ?2",
-        params![
-            target_bounded.to_string_lossy(),
-            source.to_string_lossy()
-        ],
+        params![target_bounded.to_string_lossy(), source.to_string_lossy()],
     )
     .map_err(|error| error.to_string())?;
 
     let mut file = metadata_for_file(&target_bounded, &paths.canvas_root)?;
     hydrate_file_state(&conn, &mut file)?;
     Ok(file)
+}
+
+#[tauri::command]
+fn export_file_to(
+    state: tauri::State<AppState>,
+    source_path: String,
+    target_path: String,
+) -> Result<(), String> {
+    let paths = state.paths()?;
+    let source = path_within_canvas(&paths.canvas_root, Path::new(&source_path))?;
+    ensure_regular_file(&source)?;
+
+    let target = PathBuf::from(target_path);
+    if target.exists() {
+        return Err("export target already exists".to_owned());
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| "export target must have a parent directory".to_owned())?;
+    if !parent.exists() {
+        return Err("export target parent does not exist".to_owned());
+    }
+    if !parent.is_dir() {
+        return Err("export target parent is not a directory".to_owned());
+    }
+
+    fs::copy(&source, &target).map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1575,9 +1600,7 @@ fn format_send_multi_payload(
     let action = first.action_verb.trim();
     let action = if action.is_empty() { "Review" } else { action };
 
-    let mut out = format!(
-        "I'm sending you {count} files from my AgentCanvas.\n\n{note_block}"
-    );
+    let mut out = format!("I'm sending you {count} files from my AgentCanvas.\n\n{note_block}");
 
     for (index, payload) in payloads.iter().enumerate() {
         let relative_path = relative_canvas_path(&payload.path, canvas_root)?;
@@ -1740,6 +1763,7 @@ fn main() {
             reveal_in_finder,
             delete_file,
             rename_file,
+            export_file_to,
             send_to_clipboard,
             send_multi_to_clipboard,
             list_agent_sessions,

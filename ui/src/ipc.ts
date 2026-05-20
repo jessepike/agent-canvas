@@ -242,6 +242,14 @@ export async function renameFile(oldPath: string, newName: string): Promise<File
   }
 }
 
+export async function exportFileTo(sourcePath: string, targetPath: string): Promise<void> {
+  try {
+    await invoke<unknown>("export_file_to", { sourcePath, targetPath });
+  } catch (caught) {
+    throw ipcError("export_file_to", caught);
+  }
+}
+
 export async function togglePin(path: string): Promise<boolean> {
   try {
     const result = await invoke<unknown>("toggle_pin", { path });

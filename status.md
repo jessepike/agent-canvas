@@ -1,10 +1,29 @@
 ---
 project: agent-canvas
 updated: 2026-05-19
-stage: v0.2-finish Slice 3 implemented
+stage: v0.2-finish Slice 4 deferred items implemented
 ---
 
 # AgentCanvas — Status
+
+## v0.2-finish Slice 4 Extension Summary
+
+Deferred Slice 4 items from `docs/active/slice4-partial-report-2026-05-19.md` were implemented on 2026-05-19.
+
+- Added multi-file selection across inbox, project, archive, and pinned visible file lists.
+- Added `MultiSelectPlaceholder` with bulk send, archive, and clear actions.
+- Wired multi-file send UI to the existing `sendMultiToClipboard()` IPC path.
+- Replaced the default-agent `window.prompt` with `AgentPickerDialog`.
+- Added `Export to...` context-menu fallback using the native save dialog and new `export_file_to` command.
+- Wrote the implementation report to `docs/active/codex-slice4ext-report-2026-05-19.md`.
+
+Verification:
+
+- `orb run -m dev bash -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/agent-canvas/ui && pnpm build'` passes. Vite reports the known large-chunk warning.
+- `orb run -m dev bash -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/agent-canvas/crates/agent-canvas-app && cargo check'` passes.
+- `orb run -m dev bash -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/agent-canvas && cargo test --bin agent-canvas-app 2>&1 | tail -5'` passes: 6 tests.
+
+No commit was made; orchestrator commits from host.
 
 ## v0.2-finish Slice 3 Summary
 
