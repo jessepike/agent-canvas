@@ -25,7 +25,8 @@ export const FileMetadata = z
     archived: z.boolean(),
     last_read_at: z.number().nullable(),
     persona: z.string(),
-    review_state: z.enum(["unread", "reviewed", "needs-work", "approved"])
+    review_state: z.enum(["unread", "reviewed", "needs-work", "approved"]),
+    comment_count: z.number()
   })
   .strict();
 export type FileMetadata = z.infer<typeof FileMetadata>;

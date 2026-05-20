@@ -199,6 +199,10 @@ export default function App() {
   const [annotationSelection, setAnnotationSelection] = useState<AnnotationSelection>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [commentsOpen, setCommentsOpen] = useState(false);
+  const fileLevelOpenCount = useMemo(
+    () => comments.filter((c) => !c.resolved && c.anchor.kind === "file_level").length,
+    [comments]
+  );
   const [commentDialog, setCommentDialog] = useState<AnnotationSelection>(null);
   const [fileLevelDialogOpen, setFileLevelDialogOpen] = useState(false);
   const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null);
@@ -1718,6 +1722,11 @@ export default function App() {
                     <span className="file-name">
                       {file.pinned ? <span className="pin-star" title="Pinned">★ </span> : null}
                       {file.name}
+                      {file.comment_count > 0 ? (
+                        <span className="file-comment-count" title={`${file.comment_count} open comment${file.comment_count === 1 ? "" : "s"}`}>
+                          {" "}💬 {file.comment_count}
+                        </span>
+                      ) : null}
                     </span>
                     <span
                       className="badge persona-badge"
@@ -1844,6 +1853,11 @@ export default function App() {
                     <span>
                       {file.pinned ? <span className="pin-star" title="Pinned">★ </span> : null}
                       {file.name}
+                      {file.comment_count > 0 ? (
+                        <span className="file-comment-count" title={`${file.comment_count} open comment${file.comment_count === 1 ? "" : "s"}`}>
+                          {" "}💬 {file.comment_count}
+                        </span>
+                      ) : null}
                     </span>
                     <small title={formatTimeTooltip(file.mtime)}>{formatTime(file.mtime)}</small>
                     <span
@@ -1951,7 +1965,7 @@ export default function App() {
               editMode || sourceMode || (artifact.kind === "json" && (jsonViewMode === "source" || !parsedJson)) ? (
                 <div className="viewer-shell">
                   <div className="viewer-toolbar">
-                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} count={fileLevelOpenCount} />
                   </div>
                   <section className="source-panel" aria-label="Source editor">
                     <SourceView
@@ -1968,7 +1982,7 @@ export default function App() {
               ) : artifact.kind === "md" ? (
                 <div className="viewer-shell">
                   <div className="viewer-toolbar">
-                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} count={fileLevelOpenCount} />
                   </div>
                   <section className="rendered-panel" aria-label="Rendered Markdown">
                     <RenderedView blocks={artifact.blocks} />
@@ -1977,7 +1991,7 @@ export default function App() {
               ) : artifact.kind === "html" ? (
                 <div className="viewer-shell">
                   <div className="viewer-toolbar">
-                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} count={fileLevelOpenCount} />
                   </div>
                   <section className="html-panel" aria-label="Rendered HTML">
                     <iframe
@@ -1991,7 +2005,7 @@ export default function App() {
               ) : artifact.kind === "json" && parsedJson ? (
                 <div className="viewer-shell">
                   <div className="viewer-toolbar">
-                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} count={fileLevelOpenCount} />
                   </div>
                   <section className="json-panel" aria-label="JSON tree">
                     <JsonTree value={parsedJson} name={fileName(artifact.path)} />
@@ -2000,7 +2014,7 @@ export default function App() {
               ) : artifact.kind === "txt" ? (
                 <div className="viewer-shell">
                   <div className="viewer-toolbar">
-                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} count={fileLevelOpenCount} />
                   </div>
                   <section className="source-panel" aria-label="Text source">
                     <SourceView
@@ -2017,7 +2031,7 @@ export default function App() {
               ) : artifact.kind === "png" ? (
                 <div className="viewer-shell">
                   <div className="viewer-toolbar">
-                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} count={fileLevelOpenCount} />
                   </div>
                   <section className="image-panel" aria-label="PNG image">
                     <div className="image-frame">
@@ -2029,7 +2043,7 @@ export default function App() {
               ) : artifact.kind === "pdf" ? (
                 <div className="viewer-shell">
                   <div className="viewer-toolbar">
-                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} />
+                    <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} count={fileLevelOpenCount} />
                   </div>
                   <section className="pdf-panel" aria-label="PDF document">
                     <object data={artifact.dataUrl} type="application/pdf" aria-label={fileName(artifact.path)}>
@@ -2448,12 +2462,13 @@ type MultiSelectPlaceholderProps = {
 
 type FileLevelCommentButtonProps = {
   onClick: () => void;
+  count: number;
 };
 
-function FileLevelCommentButton({ onClick }: FileLevelCommentButtonProps) {
+function FileLevelCommentButton({ onClick, count }: FileLevelCommentButtonProps) {
   return (
     <button type="button" className="file-comment-button" onClick={onClick}>
-      Add comment about this file
+      {count > 0 ? `Comments (${count}) — add another` : "Add comment about this file"}
     </button>
   );
 }

@@ -82,6 +82,7 @@ struct FileMetadata {
     last_read_at: Option<i64>,
     persona: String,
     review_state: String,
+    comment_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1393,6 +1394,8 @@ fn metadata_for_file(path: &Path, canvas_root: &Path) -> Result<FileMetadata, St
         default_persona
     };
 
+    let comment_count = unresolved_comment_count(path);
+
     Ok(FileMetadata {
         path: path.to_string_lossy().into_owned(),
         relative_path: relative_path.to_string_lossy().into_owned(),
@@ -1410,7 +1413,33 @@ fn metadata_for_file(path: &Path, canvas_root: &Path) -> Result<FileMetadata, St
         last_read_at: None,
         persona,
         review_state: "unread".to_owned(),
+        comment_count,
     })
+}
+
+/// Count unresolved comments in a file's sidecar if it exists. Cheap because we
+/// only read the sidecar JSON (~KB), not the underlying file. Returns 0 on any
+/// error or missing sidecar — comment counts are advisory.
+fn unresolved_comment_count(doc_path: &Path) -> u32 {
+    let Ok(vault_root) = vault_root_for_absolute_doc(doc_path) else {
+        return 0;
+    };
+    let sidecar = sidecar::sidecar_path(vault_root, doc_path);
+    if !sidecar.exists() {
+        return 0;
+    }
+    let Ok(bytes) = fs::read(&sidecar) else {
+        return 0;
+    };
+    let Ok(identity) = serde_json::from_slice::<IdentityMap>(&bytes) else {
+        return 0;
+    };
+    identity
+        .comments
+        .unwrap_or_default()
+        .iter()
+        .filter(|c| !c.resolved)
+        .count() as u32
 }
 
 fn upsert_file_state(conn: &Connection, file: &FileMetadata) -> Result<(), String> {
