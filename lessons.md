@@ -9,6 +9,7 @@ One line per insight, dated. Keep last 15. Promote cross-project patterns to KB 
 
 ## 2026-05-10 (scaffold + Gate 30A + Gate 30B start)
 
+- [pending] **Iframe keyboard shortcuts must be bridged inside the iframe.** Parent `document` keydown handlers do not receive `Cmd+Shift+M` when focus is inside an opaque-origin iframe, so the injected srcdoc bootstrap needs its own keydown listener that posts the selected range to the host.
 - [pending] **Rollup optional native deps can disappear after host/VM node_modules drift.** Symptom: Vite fails on missing `@rollup/rollup-linux-arm64-gnu`. Fix inside OrbStack dev VM with `CI=true pnpm install --frozen-lockfile`; do not install on host.
 - [pending] **Codex sandbox cannot commit (`.git/index.lock` Operation not permitted).** Pattern: Codex does the work, I commit. Tell Codex explicitly "do not commit" in every prompt — otherwise it tries and the failure muddies the report.
 - [pending] **Pre-staging the next Codex prompt while the current one runs respects the single-Codex-job constraint.** Only one Codex job at a time (token race). But the orchestrator can DRAFT the next prompt in parallel. Cuts wall-clock between delegations to near zero.
