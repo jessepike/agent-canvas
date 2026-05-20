@@ -8,9 +8,8 @@ import { useFocusTrap } from "./hooks/useFocusTrap";
 import {
   addAgentSession,
   archiveFile,
-  copyPathsToInbox,
   copyTextToClipboard,
-  deleteFile,
+  deleteFileFromDisk,
   deleteProjectIfEmpty,
   exportFileTo,
   getActionTemplates,
@@ -43,7 +42,9 @@ import {
   setProjectDefaultAgent,
   setReviewState,
   targetFileExists,
+  trackPathsInInbox,
   togglePin,
+  untrackFile,
   updateSidecarComments,
   writeDocument,
   type ActionTemplate,
@@ -180,6 +181,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [handoffToast, setHandoffToast] = useState<string | null>(null);
+  const [handoffToastBody, setHandoffToastBody] = useState<string | null>(null);
   const [sendPopoverOpen, setSendPopoverOpen] = useState(false);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
@@ -993,9 +995,9 @@ export default function App() {
         return;
       }
       try {
-        const copied = await copyPathsToInbox(paths);
-        setArrivedPaths((current) => new Set([...current, ...copied.map((file) => file.path)]));
-        const first = copied[0];
+        const tracked = await trackPathsInInbox(paths);
+        setArrivedPaths((current) => new Set([...current, ...tracked.map((file) => file.path)]));
+        const first = tracked[0];
         if (first) {
           const message = `+ ${first.name}`;
           setHandoffToast(message);
@@ -1039,7 +1041,7 @@ export default function App() {
           return;
         }
         const moved = await moveFileToProject(path, project, strategy);
-        const message = `Moved ${moved.name} → ${project}`;
+        const message = `Tagged ${moved.name} → ${project}`;
         setHandoffToast(message);
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
         setArtifact(null);
@@ -1064,7 +1066,7 @@ export default function App() {
           return;
         }
         const moved = await moveFileToProject(file.path, project, strategy);
-        const message = `Moved ${moved.name} → ${project}`;
+        const message = `Tagged ${moved.name} → ${project}`;
         setHandoffToast(message);
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
         if (artifact?.path === file.path) {
@@ -1096,7 +1098,7 @@ export default function App() {
           return;
         }
         const moved = await moveFileToArchive(path, strategy);
-        const message = `Moved ${moved.name} → Archive`;
+        const message = `Tagged ${moved.name} → Archive`;
         setHandoffToast(message);
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
         setArtifact(null);
@@ -1118,7 +1120,7 @@ export default function App() {
           return;
         }
         const moved = await moveFileToArchive(file.path, strategy);
-        const message = `Moved ${moved.name} → Archive`;
+        const message = `Tagged ${moved.name} → Archive`;
         setHandoffToast(message);
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
         setArtifact(null);
@@ -1168,21 +1170,53 @@ export default function App() {
     }
   }, []);
 
-  const deleteArtifact = useCallback(
+  const removeFromCanvas = useCallback(
     async (file: FileMetadata) => {
       if (confirmBeforeRemove) {
         const ok = await openConfirmDialog({
           title: `Remove ${file.name}?`,
           body:
-            "This removes the file from AgentCanvas (deletes the canvas copy in iCloud). " +
-            "If the file was dragged in from Finder, the original is untouched.",
+            `This removes the file from AgentCanvas tracking. The file at ${file.path} stays on disk.`,
           confirmLabel: "Remove",
-          destructive: true
+          destructive: false
         });
         if (!ok) return;
       }
       try {
-        await deleteFile(file.path);
+        await untrackFile(file.path);
+        if (artifact?.path === file.path) {
+          setArtifact(null);
+          setSelectedPath(null);
+          setSelectedPaths(new Set());
+        }
+        setFileMenu(null);
+        const message = `Removed ${file.name}`;
+        const body = `Untracked. File at ${file.path} still on disk.`;
+        setHandoffToast(message);
+        setHandoffToastBody(body);
+        window.setTimeout(() => {
+          setHandoffToast((current) => (current === message ? null : current));
+          setHandoffToastBody((current) => (current === body ? null : current));
+        }, 2500);
+        await refresh();
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [artifact?.path, refresh, openConfirmDialog, confirmBeforeRemove]
+  );
+
+  const deleteArtifact = useCallback(
+    async (file: FileMetadata) => {
+      const ok = await openConfirmDialog({
+        title: `Delete ${file.name} from disk?`,
+        body: `This permanently deletes ${file.path} from disk and removes it from AgentCanvas.`,
+        confirmLabel: "Delete from disk",
+        destructive: true
+      });
+      if (!ok) return;
+      try {
+        await deleteFileFromDisk(file.path);
         if (artifact?.path === file.path) {
           setArtifact(null);
           setSelectedPath(null);
@@ -1191,13 +1225,14 @@ export default function App() {
         setFileMenu(null);
         const message = `Removed ${file.name}`;
         setHandoffToast(message);
+        setHandoffToastBody(null);
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
         await refresh();
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
       }
     },
-    [artifact?.path, refresh, openConfirmDialog, confirmBeforeRemove]
+    [artifact?.path, refresh, openConfirmDialog]
   );
 
   const markFileReviewState = useCallback(async (file: FileMetadata, reviewState: FileMetadata["review_state"]) => {
@@ -1559,7 +1594,7 @@ export default function App() {
                       title={`Remove ${file.name} from AgentCanvas`}
                       onClick={(event) => {
                         event.stopPropagation();
-                        void deleteArtifact(file);
+                        void removeFromCanvas(file);
                       }}
                       onMouseDown={(event) => event.stopPropagation()}
                     >
@@ -1679,7 +1714,7 @@ export default function App() {
                       title={`Remove ${file.name} from AgentCanvas`}
                       onClick={(event) => {
                         event.stopPropagation();
-                        void deleteArtifact(file);
+                        void removeFromCanvas(file);
                       }}
                       onMouseDown={(event) => event.stopPropagation()}
                     >
@@ -1758,7 +1793,12 @@ export default function App() {
             ) : null}
             {personas?.warning ? <div className="registry-warning">{personas.warning}</div> : null}
             {savedAt ? <div className="saved-toast">Saved {savedAt}</div> : null}
-            {handoffToast ? <div className="handoff-toast">{handoffToast}</div> : null}
+            {handoffToast ? (
+              <div className="handoff-toast">
+                <strong>{handoffToast}</strong>
+                {handoffToastBody ? <span>{handoffToastBody}</span> : null}
+              </div>
+            ) : null}
             {multiSelectActive ? (
               <MultiSelectPlaceholder
                 files={selectedFileMetadatas}
@@ -2106,8 +2146,11 @@ export default function App() {
               >
                 Copy Relative Path
               </button>
-              <button className="danger-item" type="button" onClick={() => void deleteArtifact(fileMenu.file)}>
+              <button type="button" onClick={() => void removeFromCanvas(fileMenu.file)}>
                 Remove from AgentCanvas
+              </button>
+              <button className="danger-item" type="button" onClick={() => void deleteArtifact(fileMenu.file)}>
+                Delete file from disk...
               </button>
             </div>
           </div>

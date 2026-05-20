@@ -1,10 +1,31 @@
 ---
 project: agent-canvas
 updated: 2026-05-20
-stage: v0.2.0 released
+stage: v0.3 Slice 1 implemented
 ---
 
 # AgentCanvas — Status
+
+## v0.3 Slice 1 Summary (2026-05-20)
+
+Slice 1 of `docs/BUILD-SPEC-v0.3.md` was implemented.
+
+- Added the Flavor 2 tag model to `files`: `in_inbox`, `project_tag`, and idempotent `archived` migration guard.
+- Added legacy iCloud-path backfill from `Inbox/`, `Projects/{project}/`, and `Archive/` into DB tags.
+- Replaced directory-scanned Inbox, Projects, Archive, and Pinned lists with tag-backed DB queries.
+- Replaced drag/file-picker copy semantics with in-place tracking via `track_paths_in_inbox`.
+- Reworked project/archive moves as DB tag updates only; disk paths do not change.
+- Added `untrack_file` for the default row × removal path and `delete_file_from_disk` for explicit destructive deletion.
+- Rewired UI removal, context menu, and IPC wrappers for untrack vs delete-from-disk.
+- Wrote the implementation report to `docs/active/codex-slice1-v0.3-report-2026-05-20.md`.
+
+Verification:
+
+- `cd crates/agent-canvas-app && cargo check -q` passes.
+- `cd crates/agent-canvas-app && cargo test --bin agent-canvas-app 2>&1 | tail -10` passes: 8 tests.
+- `cd ui && ./node_modules/.bin/tsc --noEmit` passes.
+- `cd ui && ./node_modules/.bin/vite build 2>&1 | tail -5` passes with the known large-chunk warning.
+- CSS raw-hex regression prints `0`.
 
 ## v0.2.0 Release (2026-05-20)
 

@@ -316,14 +316,16 @@ export async function archiveFile(path: string): Promise<string> {
 
 export type ConflictStrategy = "replace" | "keep_both" | "cancel";
 
-export async function copyPathsToInbox(paths: string[]): Promise<FileMetadata[]> {
+export async function trackPathsInInbox(paths: string[]): Promise<FileMetadata[]> {
   try {
-    const result = await invoke<unknown>("copy_paths_to_inbox", { paths });
+    const result = await invoke<unknown>("track_paths_in_inbox", { paths });
     return z.array(FileMetadata).parse(result);
   } catch (caught) {
-    throw ipcError("copy_paths_to_inbox", caught);
+    throw ipcError("track_paths_in_inbox", caught);
   }
 }
+
+export const copyPathsToInbox = trackPathsInInbox;
 
 export async function moveFileToProject(
   path: string,
@@ -364,11 +366,19 @@ export async function revealInFinder(path: string): Promise<void> {
   }
 }
 
-export async function deleteFile(path: string): Promise<void> {
+export async function untrackFile(path: string): Promise<void> {
   try {
-    await invoke<unknown>("delete_file", { path });
+    await invoke<unknown>("untrack_file", { path });
   } catch (caught) {
-    throw ipcError("delete_file", caught);
+    throw ipcError("untrack_file", caught);
+  }
+}
+
+export async function deleteFileFromDisk(path: string): Promise<void> {
+  try {
+    await invoke<unknown>("delete_file_from_disk", { path });
+  } catch (caught) {
+    throw ipcError("delete_file_from_disk", caught);
   }
 }
 

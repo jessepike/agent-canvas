@@ -49,7 +49,6 @@ impl AppState {
 
 #[derive(Debug, Clone)]
 struct AgentCanvasPaths {
-    cloud_docs_root: PathBuf,
     canvas_root: PathBuf,
     user_symlink: PathBuf,
     inbox_dir: PathBuf,
@@ -166,7 +165,12 @@ fn bootstrap_info(state: tauri::State<AppState>) -> Result<BootstrapInfo, String
 #[tauri::command]
 fn list_inbox(state: tauri::State<AppState>) -> Result<Vec<FileMetadata>, String> {
     let paths = state.paths()?;
-    list_files_under(&paths.inbox_dir, &paths.canvas_root, &state.db)
+    list_tracked_files(
+        &state.db,
+        &paths.canvas_root,
+        "in_inbox = 1 AND archived = 0",
+        [],
+    )
 }
 
 #[tauri::command]
@@ -175,135 +179,94 @@ fn list_project_files(
     project: String,
 ) -> Result<Vec<FileMetadata>, String> {
     let paths = state.paths()?;
-    let project_dir = paths.projects_dir.join(safe_project_segment(&project)?);
-    list_files_under(&project_dir, &paths.canvas_root, &state.db)
+    let project = safe_project_segment(&project)?;
+    list_tracked_files(
+        &state.db,
+        &paths.canvas_root,
+        "project_tag = ?1 AND archived = 0",
+        [project],
+    )
 }
 
 #[tauri::command]
 fn list_archive(state: tauri::State<AppState>) -> Result<Vec<FileMetadata>, String> {
     let paths = state.paths()?;
-    list_files_under(&paths.archive_dir, &paths.canvas_root, &state.db)
+    list_tracked_files(&state.db, &paths.canvas_root, "archived = 1", [])
 }
 
 #[tauri::command]
 fn list_pinned(state: tauri::State<AppState>) -> Result<Vec<FileMetadata>, String> {
     let state_paths = state.paths()?;
-    // Collect pinned paths from the state DB.
-    let paths: Vec<String> = {
-        let conn = state
-            .db
-            .lock()
-            .map_err(|_| "state db lock poisoned".to_owned())?;
-        let mut stmt = conn
-            .prepare("SELECT path FROM files WHERE pinned = 1")
-            .map_err(|error| error.to_string())?;
-        let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| error.to_string())?;
-        rows.filter_map(|row| row.ok()).collect()
-    };
-
-    // Build metadata for paths that still exist on disk.
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| "state db lock poisoned".to_owned())?;
-    let mut files = Vec::new();
-    for path_str in paths {
-        let path = PathBuf::from(&path_str);
-        if !path.exists() || !is_supported_artifact(&path) {
-            continue;
-        }
-        let mut file = metadata_for_file(&path, &state_paths.canvas_root)?;
-        hydrate_file_state(&conn, &mut file)?;
-        files.push(file);
-    }
-    files.sort_by(|left, right| {
-        right
-            .mtime
-            .cmp(&left.mtime)
-            .then_with(|| left.name.cmp(&right.name))
-    });
-    Ok(files)
+    list_tracked_files(
+        &state.db,
+        &state_paths.canvas_root,
+        "pinned = 1 AND archived = 0",
+        [],
+    )
 }
 
 #[tauri::command]
 fn list_projects(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
-    let paths = state.paths()?;
-    let mut projects = Vec::new();
-    for entry in fs::read_dir(&paths.projects_dir).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        if entry
-            .file_type()
-            .map_err(|error| error.to_string())?
-            .is_dir()
-            && let Some(name) = entry.file_name().to_str()
-        {
-            upsert_project(&state.db, name, None)?;
-            projects.push(name.to_owned());
-        }
-    }
-    projects.sort();
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT name FROM projects
+             UNION
+             SELECT project_tag FROM files WHERE project_tag IS NOT NULL AND project_tag != ''
+             ORDER BY 1",
+        )
+        .map_err(|error| error.to_string())?;
+    let projects = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
     Ok(projects)
 }
 
 #[tauri::command]
 fn list_project_counts(state: tauri::State<AppState>) -> Result<HashMap<String, usize>, String> {
-    let paths = state.paths()?;
     let mut counts = HashMap::new();
-    for entry in fs::read_dir(&paths.projects_dir).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        if !entry
-            .file_type()
-            .map_err(|error| error.to_string())?
-            .is_dir()
-        {
-            continue;
-        }
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        let project_dir = path_within_canvas(&paths.canvas_root, &entry.path())?;
-        let count = WalkDir::new(project_dir)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_file() && is_supported_artifact(entry.path()))
-            .count();
-        counts.insert(name, count);
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT project_tag, COUNT(*) FROM files
+             WHERE project_tag IS NOT NULL AND project_tag != '' AND archived = 0
+             GROUP BY project_tag",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| error.to_string())?;
+    for row in rows {
+        let (project, count) = row.map_err(|error| error.to_string())?;
+        counts.insert(project, count as usize);
     }
     Ok(counts)
 }
 
 #[tauri::command]
 fn rename_project(state: tauri::State<AppState>, old: String, new: String) -> Result<(), String> {
-    let paths = state.paths()?;
     let old = safe_project_segment(&old)?;
     let new = safe_project_segment(&new)?;
     if new.contains("..") {
         return Err("invalid project name".to_owned());
     }
-
-    let old_dir = path_within_canvas(&paths.canvas_root, &paths.projects_dir.join(old))?;
-    if !old_dir.exists() {
-        return Err("project not found".to_owned());
-    }
-    let new_dir = path_within_canvas(&paths.canvas_root, &paths.projects_dir.join(new))?;
-    if new_dir.exists() {
-        return Err("project already exists".to_owned());
-    }
-
-    fs::rename(&old_dir, &new_dir).map_err(|error| error.to_string())?;
-
-    let old_segment = format!("/Projects/{old}/");
-    let new_segment = format!("/Projects/{new}/");
-    let like_pattern = format!("%{old_segment}%");
     let conn = state
         .db
         .lock()
         .map_err(|_| "state db lock poisoned".to_owned())?;
     conn.execute(
-        "UPDATE files SET path = REPLACE(path, ?1, ?2) WHERE path LIKE ?3",
-        params![old_segment, new_segment, like_pattern],
+        "UPDATE files SET project_tag = ?1 WHERE project_tag = ?2",
+        params![new, old],
     )
     .map_err(|error| error.to_string())?;
     conn.execute(
@@ -316,25 +279,21 @@ fn rename_project(state: tauri::State<AppState>, old: String, new: String) -> Re
 
 #[tauri::command]
 fn delete_project_if_empty(state: tauri::State<AppState>, name: String) -> Result<(), String> {
-    let paths = state.paths()?;
     let name = safe_project_segment(&name)?;
-    let project_dir = path_within_canvas(&paths.canvas_root, &paths.projects_dir.join(name))?;
-    if !project_dir.exists() {
-        return Err("project not found".to_owned());
-    }
-    let has_artifacts = WalkDir::new(&project_dir)
-        .into_iter()
-        .filter_map(Result::ok)
-        .any(|entry| entry.file_type().is_file() && is_supported_artifact(entry.path()));
-    if has_artifacts {
-        return Err("Move files out before deleting project".to_owned());
-    }
-
-    fs::remove_dir(&project_dir).map_err(|error| error.to_string())?;
     let conn = state
         .db
         .lock()
         .map_err(|_| "state db lock poisoned".to_owned())?;
+    let has_artifacts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE project_tag = ?1 AND archived = 0",
+            params![name],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if has_artifacts > 0 {
+        return Err("Move files out before deleting project".to_owned());
+    }
     conn.execute("DELETE FROM projects WHERE name = ?1", params![name])
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -422,8 +381,7 @@ fn set_default_action_verb(state: tauri::State<AppState>, verb: String) -> Resul
 
 #[tauri::command]
 fn toggle_pin(state: tauri::State<AppState>, path: String) -> Result<bool, String> {
-    let paths = state.paths()?;
-    let path = path_within_canvas(&paths.canvas_root, Path::new(&path))?;
+    let path = path_safe_for_canvas(Path::new(&path))?;
     let path = path.to_string_lossy().into_owned();
     let conn = state
         .db
@@ -448,24 +406,48 @@ fn toggle_pin(state: tauri::State<AppState>, path: String) -> Result<bool, Strin
 #[tauri::command]
 fn archive_file(state: tauri::State<AppState>, path: String) -> Result<String, String> {
     let paths = state.paths()?;
-    let source = path_within_canvas(&paths.canvas_root, Path::new(&path))?;
+    let source = path_safe_for_canvas(Path::new(&path))?;
     ensure_regular_file(&source)?;
-    let file_name = source
-        .file_name()
-        .ok_or_else(|| "archive source has no filename".to_owned())?;
-    let target = unique_archive_path(&paths.archive_dir.join(file_name));
-    let target = path_within_canvas(&paths.canvas_root, &target)?;
-    fs::rename(&source, &target).map_err(|error| error.to_string())?;
     let conn = state
         .db
         .lock()
         .map_err(|_| "state db lock poisoned".to_owned())?;
+    let mut file = metadata_for_file(&source, &paths.canvas_root)?;
+    upsert_file_state(&conn, &file)?;
     conn.execute(
-        "UPDATE files SET path = ?1, archived = 1 WHERE path = ?2",
-        params![target.to_string_lossy(), source.to_string_lossy()],
+        "UPDATE files SET archived = 1, in_inbox = 0 WHERE path = ?1",
+        params![source.to_string_lossy()],
     )
     .map_err(|error| error.to_string())?;
-    Ok(target.to_string_lossy().into_owned())
+    file.archived = true;
+    Ok(file.path)
+}
+
+#[tauri::command]
+fn track_paths_in_inbox(
+    state: tauri::State<AppState>,
+    paths: Vec<String>,
+) -> Result<Vec<FileMetadata>, String> {
+    let state_paths = state.paths()?;
+    let mut tracked = Vec::new();
+    for path in paths {
+        let source = path_safe_for_canvas(Path::new(&path))?;
+        ensure_regular_file(&source)?;
+        let mut file = metadata_for_file(&source, &state_paths.canvas_root)?;
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        upsert_file_state(&conn, &file)?;
+        conn.execute(
+            "UPDATE files SET in_inbox = 1, project_tag = NULL, archived = 0 WHERE path = ?1",
+            params![file.path],
+        )
+        .map_err(|error| error.to_string())?;
+        hydrate_file_state(&conn, &mut file)?;
+        tracked.push(file);
+    }
+    Ok(tracked)
 }
 
 #[tauri::command]
@@ -473,26 +455,7 @@ fn copy_paths_to_inbox(
     state: tauri::State<AppState>,
     paths: Vec<String>,
 ) -> Result<Vec<FileMetadata>, String> {
-    let state_paths = state.paths()?;
-    let mut copied = Vec::new();
-    for path in paths {
-        let source = PathBuf::from(path);
-        ensure_regular_file(&source)?;
-        let file_name = source
-            .file_name()
-            .ok_or_else(|| "dropped file has no filename".to_owned())?;
-        let target = unique_path(&state_paths.inbox_dir.join(file_name));
-        let target = path_within_canvas(&state_paths.canvas_root, &target)?;
-        fs::copy(&source, &target).map_err(|error| error.to_string())?;
-        let file = metadata_for_file(&target, &state_paths.canvas_root)?;
-        let conn = state
-            .db
-            .lock()
-            .map_err(|_| "state db lock poisoned".to_owned())?;
-        upsert_file_state(&conn, &file)?;
-        copied.push(file);
-    }
-    Ok(copied)
+    track_paths_in_inbox(state, paths)
 }
 
 #[tauri::command]
@@ -500,46 +463,71 @@ fn move_file_to_project(
     state: tauri::State<AppState>,
     path: String,
     project: String,
-    strategy: ConflictStrategy,
+    _strategy: ConflictStrategy,
 ) -> Result<FileMetadata, String> {
     let paths = state.paths()?;
     let project = safe_project_segment(&project)?;
-    let target_dir = path_within_canvas(&paths.canvas_root, &paths.projects_dir.join(project))?;
-    move_file_to_target(&state, &path, &target_dir, false, strategy)
+    upsert_project(&state.db, project, None)?;
+    let source = path_safe_for_canvas(Path::new(&path))?;
+    ensure_regular_file(&source)?;
+    let mut file = metadata_for_file(&source, &paths.canvas_root)?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    upsert_file_state(&conn, &file)?;
+    conn.execute(
+        "UPDATE files SET project_tag = ?1, in_inbox = 0, archived = 0 WHERE path = ?2",
+        params![project, file.path],
+    )
+    .map_err(|error| error.to_string())?;
+    hydrate_file_state(&conn, &mut file)?;
+    Ok(file)
 }
 
 #[tauri::command]
 fn move_file_to_archive(
     state: tauri::State<AppState>,
     path: String,
-    strategy: ConflictStrategy,
+    _strategy: ConflictStrategy,
 ) -> Result<FileMetadata, String> {
     let paths = state.paths()?;
-    let target_dir = path_within_canvas(&paths.canvas_root, &paths.archive_dir)?;
-    move_file_to_target(&state, &path, &target_dir, true, strategy)
+    let source = path_safe_for_canvas(Path::new(&path))?;
+    ensure_regular_file(&source)?;
+    let mut file = metadata_for_file(&source, &paths.canvas_root)?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    upsert_file_state(&conn, &file)?;
+    conn.execute(
+        "UPDATE files SET archived = 1, in_inbox = 0 WHERE path = ?1",
+        params![file.path],
+    )
+    .map_err(|error| error.to_string())?;
+    hydrate_file_state(&conn, &mut file)?;
+    Ok(file)
 }
 
 #[tauri::command]
 fn target_file_exists(
-    state: tauri::State<AppState>,
+    _state: tauri::State<AppState>,
     target: String,
     project: Option<String>,
     filename: String,
 ) -> Result<bool, String> {
-    let paths = state.paths()?;
     if filename.contains('/') || filename.contains('\\') || filename.is_empty() {
         return Err("invalid filename".to_owned());
     }
-    let dir = match target.as_str() {
-        "archive" => paths.archive_dir.clone(),
+    match target.as_str() {
+        "archive" => {}
         "project" => {
             let project = project.ok_or_else(|| "project is required".to_owned())?;
-            paths.projects_dir.join(safe_project_segment(&project)?)
+            safe_project_segment(&project)?;
         }
         _ => return Err("invalid target".to_owned()),
-    };
-    let target = path_within_canvas(&paths.canvas_root, &dir.join(filename))?;
-    Ok(target.exists())
+    }
+    Ok(false)
 }
 
 #[tauri::command]
@@ -550,8 +538,8 @@ fn copy_text_to_clipboard(text: String) -> Result<String, String> {
 
 #[tauri::command]
 fn reveal_in_finder(state: tauri::State<AppState>, path: String) -> Result<(), String> {
-    let paths = state.paths()?;
-    let path = path_within_canvas(&paths.canvas_root, Path::new(&path))?;
+    let _ = state.paths()?;
+    let path = path_safe_for_canvas(Path::new(&path))?;
     ensure_regular_file(&path)?;
     #[cfg(target_os = "macos")]
     {
@@ -573,21 +561,31 @@ fn reveal_in_finder(state: tauri::State<AppState>, path: String) -> Result<(), S
 }
 
 #[tauri::command]
-fn delete_file(state: tauri::State<AppState>, path: String) -> Result<(), String> {
-    let paths = state.paths()?;
-    let source = path_within_canvas(&paths.canvas_root, Path::new(&path))?;
-    ensure_regular_file(&source)?;
-    fs::remove_file(&source).map_err(|error| error.to_string())?;
+fn untrack_file(state: tauri::State<AppState>, path: String) -> Result<(), String> {
+    let _ = state.paths()?;
+    let source = path_safe_for_canvas(Path::new(&path))?;
     let conn = state
         .db
         .lock()
         .map_err(|_| "state db lock poisoned".to_owned())?;
-    conn.execute(
-        "DELETE FROM files WHERE path = ?1",
-        params![source.to_string_lossy()],
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(())
+    untrack_file_impl(&conn, &source)
+}
+
+#[tauri::command]
+fn delete_file_from_disk(state: tauri::State<AppState>, path: String) -> Result<(), String> {
+    let _ = state.paths()?;
+    let source = path_safe_for_canvas(Path::new(&path))?;
+    ensure_regular_file(&source)?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    delete_file_from_disk_impl(&conn, &source)
+}
+
+#[tauri::command]
+fn delete_file(state: tauri::State<AppState>, path: String) -> Result<(), String> {
+    delete_file_from_disk(state, path)
 }
 
 #[tauri::command]
@@ -597,7 +595,7 @@ fn rename_file(
     new_name: String,
 ) -> Result<FileMetadata, String> {
     let paths = state.paths()?;
-    let source = path_within_canvas(&paths.canvas_root, Path::new(&old_path))?;
+    let source = path_safe_for_canvas(Path::new(&old_path))?;
     ensure_regular_file(&source)?;
 
     if new_name.is_empty()
@@ -618,7 +616,7 @@ fn rename_file(
         return Err(format!("a file named '{new_name}' already exists here"));
     }
 
-    let target_bounded = path_within_canvas(&paths.canvas_root, &target)?;
+    let target_bounded = path_safe_for_canvas(&target)?;
     fs::rename(&source, &target_bounded).map_err(|error| error.to_string())?;
 
     let conn = state
@@ -642,8 +640,8 @@ fn export_file_to(
     source_path: String,
     target_path: String,
 ) -> Result<(), String> {
-    let paths = state.paths()?;
-    let source = path_within_canvas(&paths.canvas_root, Path::new(&source_path))?;
+    let _ = state.paths()?;
+    let source = path_safe_for_canvas(Path::new(&source_path))?;
     ensure_regular_file(&source)?;
 
     let target = PathBuf::from(target_path);
@@ -660,6 +658,7 @@ fn export_file_to(
         return Err("export target parent is not a directory".to_owned());
     }
 
+    let target = path_safe_for_canvas(&target)?;
     fs::copy(&source, &target).map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -670,7 +669,7 @@ fn send_to_clipboard(
     payload: SendPayload,
 ) -> Result<String, String> {
     let paths = state.paths()?;
-    let payload_path = path_within_canvas(&paths.canvas_root, Path::new(&payload.path))?;
+    let payload_path = path_safe_for_canvas(Path::new(&payload.path))?;
     let payload = SendPayload {
         path: payload_path.to_string_lossy().into_owned(),
         contents: payload.contents,
@@ -694,7 +693,7 @@ fn send_multi_to_clipboard(
     let paths = state.paths()?;
     let mut bounded: Vec<SendPayload> = Vec::with_capacity(payloads.len());
     for payload in payloads {
-        let bounded_path = path_within_canvas(&paths.canvas_root, Path::new(&payload.path))?;
+        let bounded_path = path_safe_for_canvas(Path::new(&payload.path))?;
         bounded.push(SendPayload {
             path: bounded_path.to_string_lossy().into_owned(),
             contents: payload.contents,
@@ -805,8 +804,8 @@ fn save_document(source: String, patches: Vec<BlockPatch>) -> Result<String, Str
 
 #[tauri::command]
 fn open_document(state: tauri::State<AppState>, doc_path: String) -> Result<OpenDocument, String> {
-    let paths = state.paths()?;
-    let doc_path = path_within_canvas(&paths.canvas_root, Path::new(&doc_path))?;
+    let _ = state.paths()?;
+    let doc_path = path_safe_for_canvas(Path::new(&doc_path))?;
     ensure_regular_file(&doc_path)?;
 
     let bytes = fs::read(&doc_path).map_err(|error| error.to_string())?;
@@ -839,8 +838,8 @@ fn read_binary_artifact(
     state: tauri::State<AppState>,
     doc_path: String,
 ) -> Result<BinaryArtifact, String> {
-    let paths = state.paths()?;
-    let doc_path = path_within_canvas(&paths.canvas_root, Path::new(&doc_path))?;
+    let _ = state.paths()?;
+    let doc_path = path_safe_for_canvas(Path::new(&doc_path))?;
     ensure_regular_file(&doc_path)?;
 
     let extension = normalized_extension(&doc_path);
@@ -883,8 +882,8 @@ fn set_review_state(
     path: String,
     review_state: String,
 ) -> Result<(), String> {
-    let paths = state.paths()?;
-    let path = path_within_canvas(&paths.canvas_root, Path::new(&path))?;
+    let _ = state.paths()?;
+    let path = path_safe_for_canvas(Path::new(&path))?;
     ensure_regular_file(&path)?;
     if !is_valid_review_state(&review_state) {
         return Err("invalid review state".to_owned());
@@ -908,8 +907,8 @@ fn write_document(
     source: String,
     base_hash: [u8; 32],
 ) -> Result<WriteResult, String> {
-    let paths = state.paths()?;
-    let doc_path = path_within_canvas(&paths.canvas_root, Path::new(&doc_path))?;
+    let _ = state.paths()?;
+    let doc_path = path_safe_for_canvas(Path::new(&doc_path))?;
 
     match atomic_write(&doc_path, source.as_bytes(), Some(&base_hash)) {
         Ok(new_hash) => {
@@ -925,8 +924,8 @@ fn write_document(
 
 #[tauri::command]
 fn load_sidecar(state: tauri::State<AppState>, doc_path: String) -> Result<IdentityMap, String> {
-    let paths = state.paths()?;
-    let doc_path = path_within_canvas(&paths.canvas_root, Path::new(&doc_path))?;
+    let _ = state.paths()?;
+    let doc_path = path_safe_for_canvas(Path::new(&doc_path))?;
     let vault_root = vault_root_for_absolute_doc(&doc_path)?;
     let doc_source = fs::read_to_string(&doc_path).map_err(|error| error.to_string())?;
 
@@ -946,8 +945,8 @@ fn save_sidecar(
     doc_path: String,
     map: IdentityMap,
 ) -> Result<(), String> {
-    let paths = state.paths()?;
-    let doc_path = path_within_canvas(&paths.canvas_root, Path::new(&doc_path))?;
+    let _ = state.paths()?;
+    let doc_path = path_safe_for_canvas(Path::new(&doc_path))?;
     let vault_root = vault_root_for_absolute_doc(&doc_path)?;
 
     sidecar::save(vault_root, &doc_path, &map).map_err(|error| error.to_string())
@@ -959,8 +958,8 @@ fn update_sidecar_comments(
     doc_path: String,
     comments: Vec<Comment>,
 ) -> Result<(), String> {
-    let paths = state.paths()?;
-    let doc_path = path_within_canvas(&paths.canvas_root, Path::new(&doc_path))?;
+    let _ = state.paths()?;
+    let doc_path = path_safe_for_canvas(Path::new(&doc_path))?;
     ensure_regular_file(&doc_path)?;
     let vault_root = vault_root_for_absolute_doc(&doc_path)?;
     let doc_source = fs::read_to_string(&doc_path).map_err(|error| error.to_string())?;
@@ -997,7 +996,7 @@ fn update_base_snapshot(doc_path: &Path, source: &str, hash: [u8; 32]) -> Result
 fn bootstrap() -> Result<AppState, String> {
     let paths = AgentCanvasPaths::resolve()?;
     paths.ensure()?;
-    let db = open_state_db(&paths.state_db)?;
+    let db = open_state_db(&paths.state_db, &legacy_icloud_canvas_root()?)?;
     Ok(AppState {
         paths: Ok(paths),
         db: Mutex::new(db),
@@ -1028,12 +1027,8 @@ fn bootstrap_or_error_state() -> AppState {
 impl AgentCanvasPaths {
     fn resolve() -> Result<Self, String> {
         let home = home_dir()?;
-        let cloud_docs_root = home
-            .join("Library")
-            .join("Mobile Documents")
-            .join("com~apple~CloudDocs");
-        let canvas_root = cloud_docs_root.join("AgentCanvas");
-        let user_symlink = home.join("iCloud");
+        let canvas_root = home.join("AgentCanvas");
+        let user_symlink = canvas_root.clone();
         let app_support = home
             .join("Library")
             .join("Application Support")
@@ -1048,7 +1043,6 @@ impl AgentCanvasPaths {
             });
 
         Ok(Self {
-            cloud_docs_root,
             inbox_dir: canvas_root.join("Inbox"),
             projects_dir: canvas_root.join("Projects"),
             archive_dir: canvas_root.join("Archive"),
@@ -1064,12 +1058,6 @@ impl AgentCanvasPaths {
         fs::create_dir_all(self.projects_dir.join("Default")).map_err(|error| error.to_string())?;
         fs::create_dir_all(&self.archive_dir).map_err(|error| error.to_string())?;
 
-        if !self.user_symlink.exists() {
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&self.cloud_docs_root, &self.user_symlink)
-                .map_err(|error| error.to_string())?;
-        }
-
         if let Some(parent) = self.state_db.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
@@ -1083,28 +1071,24 @@ impl AgentCanvasPaths {
             projects_dir: self.projects_dir.to_string_lossy().into_owned(),
             archive_dir: self.archive_dir.to_string_lossy().into_owned(),
             state_db: self.state_db.to_string_lossy().into_owned(),
-            user_path: self
-                .user_symlink
-                .join("AgentCanvas")
-                .to_string_lossy()
-                .into_owned(),
+            user_path: self.user_symlink.to_string_lossy().into_owned(),
         }
     }
 }
 
-fn open_state_db(path: &Path) -> Result<Connection, String> {
+fn open_state_db(path: &Path, legacy_canvas_root: &Path) -> Result<Connection, String> {
     let db = Connection::open(path).map_err(|error| error.to_string())?;
-    initialize_state_db(&db)?;
+    initialize_state_db(&db, legacy_canvas_root)?;
     Ok(db)
 }
 
 fn open_in_memory_state_db() -> Result<Connection, String> {
     let db = Connection::open_in_memory().map_err(|error| error.to_string())?;
-    initialize_state_db(&db)?;
+    initialize_state_db(&db, &legacy_icloud_canvas_root()?)?;
     Ok(db)
 }
 
-fn initialize_state_db(db: &Connection) -> Result<(), String> {
+fn initialize_state_db(db: &Connection, legacy_canvas_root: &Path) -> Result<(), String> {
     db.execute_batch(
         r#"
         PRAGMA journal_mode = WAL;
@@ -1162,6 +1146,8 @@ fn initialize_state_db(db: &Connection) -> Result<(), String> {
           default_agent_session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
           updated_at INTEGER NOT NULL
         );
+        INSERT OR IGNORE INTO projects(name, updated_at)
+        VALUES ('Default', strftime('%s','now'));
         "#,
     )
     .map_err(|error| error.to_string())?;
@@ -1171,6 +1157,25 @@ fn initialize_state_db(db: &Connection) -> Result<(), String> {
         "review_state",
         "ALTER TABLE files ADD COLUMN review_state TEXT NOT NULL DEFAULT 'unread'",
     )?;
+    add_column_if_missing(
+        db,
+        "files",
+        "in_inbox",
+        "ALTER TABLE files ADD COLUMN in_inbox INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        db,
+        "files",
+        "project_tag",
+        "ALTER TABLE files ADD COLUMN project_tag TEXT",
+    )?;
+    add_column_if_missing(
+        db,
+        "files",
+        "archived",
+        "ALTER TABLE files ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+    )?;
+    backfill_file_tags_from_legacy_paths(db, legacy_canvas_root)?;
     Ok(())
 }
 
@@ -1190,6 +1195,73 @@ fn add_column_if_missing(
         .map_err(|error| error.to_string())?;
     if !columns.iter().any(|existing| existing == column) {
         db.execute(sql, []).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn legacy_icloud_canvas_root() -> Result<PathBuf, String> {
+    Ok(home_dir()?
+        .join("Library")
+        .join("Mobile Documents")
+        .join("com~apple~CloudDocs")
+        .join("AgentCanvas"))
+}
+
+fn backfill_file_tags_from_legacy_paths(db: &Connection, canvas_root: &Path) -> Result<(), String> {
+    let canvas_root = if canvas_root.exists() {
+        canvas_root
+            .canonicalize()
+            .map_err(|error| format!("could not resolve legacy AgentCanvas root: {error}"))?
+    } else {
+        canvas_root.to_path_buf()
+    };
+    let inbox_prefix = canvas_root.join("Inbox");
+    let projects_prefix = canvas_root.join("Projects");
+    let archive_prefix = canvas_root.join("Archive");
+
+    let mut stmt = db
+        .prepare(
+            "SELECT path FROM files
+             WHERE in_inbox = 0 AND project_tag IS NULL AND archived = 0",
+        )
+        .map_err(|error| error.to_string())?;
+    let paths = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(stmt);
+
+    for path in paths {
+        let path_buf = PathBuf::from(&path);
+        if path_buf.starts_with(&inbox_prefix) {
+            db.execute(
+                "UPDATE files SET in_inbox = 1 WHERE path = ?1",
+                params![path],
+            )
+            .map_err(|error| error.to_string())?;
+            continue;
+        }
+        if path_buf.starts_with(&archive_prefix) {
+            db.execute(
+                "UPDATE files SET archived = 1 WHERE path = ?1",
+                params![path],
+            )
+            .map_err(|error| error.to_string())?;
+            continue;
+        }
+        if let Ok(relative) = path_buf.strip_prefix(&projects_prefix)
+            && let Some(project) = relative.components().next()
+        {
+            let project = project.as_os_str().to_string_lossy();
+            if !project.is_empty() {
+                db.execute(
+                    "UPDATE files SET project_tag = ?1 WHERE path = ?2",
+                    params![project.as_ref(), path],
+                )
+                .map_err(|error| error.to_string())?;
+            }
+        }
     }
     Ok(())
 }
@@ -1241,24 +1313,32 @@ fn upsert_project(
     Ok(())
 }
 
-fn list_files_under(
-    root: &Path,
-    canvas_root: &Path,
+fn list_tracked_files<const N: usize>(
     db: &Mutex<Connection>,
+    canvas_root: &Path,
+    where_clause: &str,
+    values: [&str; N],
 ) -> Result<Vec<FileMetadata>, String> {
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
+    let conn = db.lock().map_err(|_| "state db lock poisoned".to_owned())?;
+    let mut stmt = conn
+        .prepare(&format!("SELECT path FROM files WHERE {where_clause}"))
+        .map_err(|error| error.to_string())?;
+    let paths = stmt
+        .query_map(rusqlite::params_from_iter(values), |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(stmt);
 
     let mut files = Vec::new();
-    let conn = db.lock().map_err(|_| "state db lock poisoned".to_owned())?;
-
-    for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
-        if !entry.file_type().is_file() || !is_supported_artifact(entry.path()) {
+    for path_str in paths {
+        let path = PathBuf::from(&path_str);
+        if !path.exists() || !is_supported_artifact(&path) {
             continue;
         }
-        let mut file = metadata_for_file(entry.path(), canvas_root)?;
-        upsert_file_state(&conn, &file)?;
+        let mut file = metadata_for_file(&path, canvas_root)?;
         hydrate_file_state(&conn, &mut file)?;
         files.push(file);
     }
@@ -1354,8 +1434,8 @@ fn upsert_file_state(conn: &Connection, file: &FileMetadata) -> Result<(), Strin
 
     conn.execute(
         r#"
-        INSERT INTO files(path, last_seen_hash, size, mtime, pinned, archived)
-        VALUES (?1, ?2, ?3, ?4, 0, 0)
+        INSERT INTO files(path, last_seen_hash, size, mtime, pinned, archived, in_inbox)
+        VALUES (?1, ?2, ?3, ?4, 0, 0, 0)
         ON CONFLICT(path) DO UPDATE SET
           last_seen_hash = excluded.last_seen_hash,
           size = excluded.size,
@@ -1658,90 +1738,10 @@ fn display_label(name: &str) -> String {
     }
 }
 
-fn unique_archive_path(target: &Path) -> PathBuf {
-    unique_path(target)
-}
-
-fn unique_path(target: &Path) -> PathBuf {
-    if !target.exists() {
-        return target.to_path_buf();
+fn path_safe_for_canvas(candidate: &Path) -> Result<PathBuf, String> {
+    if !candidate.is_absolute() {
+        return Err(format!("path must be absolute: {}", candidate.display()));
     }
-    let stem = target
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("artifact");
-    let extension = target.extension().and_then(|extension| extension.to_str());
-    for index in 1.. {
-        let candidate_name = match extension {
-            Some(extension) => format!("{stem}-{index}.{extension}"),
-            None => format!("{stem}-{index}"),
-        };
-        let candidate = target.with_file_name(candidate_name);
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-    unreachable!("archive path suffix search is unbounded")
-}
-
-fn move_file_to_target(
-    state: &AppState,
-    source: &str,
-    target_dir: &Path,
-    archived: bool,
-    strategy: ConflictStrategy,
-) -> Result<FileMetadata, String> {
-    let paths = state.paths()?;
-    if matches!(strategy, ConflictStrategy::Cancel) {
-        return Err("move cancelled".to_owned());
-    }
-    let source = path_within_canvas(&paths.canvas_root, Path::new(source))?;
-    ensure_regular_file(&source)?;
-    let target_dir = path_within_canvas(&paths.canvas_root, target_dir)?;
-    fs::create_dir_all(&target_dir).map_err(|error| error.to_string())?;
-    let file_name = source
-        .file_name()
-        .ok_or_else(|| "move source has no filename".to_owned())?;
-    let target = target_dir.join(file_name);
-    let target = if target.exists() {
-        match strategy {
-            ConflictStrategy::Replace => {
-                let target = path_within_canvas(&paths.canvas_root, &target)?;
-                fs::remove_file(&target).map_err(|error| error.to_string())?;
-                target
-            }
-            ConflictStrategy::KeepBoth => unique_path(&target),
-            ConflictStrategy::Cancel => return Err("move cancelled".to_owned()),
-        }
-    } else {
-        target
-    };
-    let target = path_within_canvas(&paths.canvas_root, &target)?;
-
-    fs::rename(&source, &target).map_err(|error| error.to_string())?;
-    let mut file = metadata_for_file(&target, &paths.canvas_root)?;
-    file.archived = archived;
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| "state db lock poisoned".to_owned())?;
-    conn.execute(
-        "UPDATE files SET path = ?1, archived = ?2 WHERE path = ?3",
-        params![
-            file.path,
-            if archived { 1 } else { 0 },
-            source.to_string_lossy()
-        ],
-    )
-    .map_err(|error| error.to_string())?;
-    upsert_file_state(&conn, &file)?;
-    Ok(file)
-}
-
-fn path_within_canvas(canvas_root: &Path, candidate: &Path) -> Result<PathBuf, String> {
-    let canonical_root = canvas_root
-        .canonicalize()
-        .map_err(|error| format!("could not resolve AgentCanvas root: {error}"))?;
     let canonical_candidate = if candidate.exists() {
         candidate
             .canonicalize()
@@ -1759,11 +1759,56 @@ fn path_within_canvas(canvas_root: &Path, candidate: &Path) -> Result<PathBuf, S
             .join(file_name)
     };
 
-    if canonical_candidate.starts_with(&canonical_root) {
-        Ok(canonical_candidate)
-    } else {
-        Err(format!("path outside AgentCanvas: {}", candidate.display()))
+    let mut denied = vec![
+        PathBuf::from("/etc"),
+        PathBuf::from("/System"),
+        PathBuf::from("/private/etc"),
+        PathBuf::from("/private/var"),
+        PathBuf::from("/usr"),
+        PathBuf::from("/var"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/sbin"),
+        PathBuf::from("/Library/Application Support/AgentCanvas"),
+        PathBuf::from("/Library/Application Support/Apple"),
+        PathBuf::from("/Users/jessepike/Library/Application Support/AgentCanvas"),
+    ];
+    if let Ok(home) = home_dir() {
+        denied.push(
+            home.join("Library")
+                .join("Application Support")
+                .join("AgentCanvas"),
+        );
     }
+
+    if denied
+        .iter()
+        .any(|prefix| canonical_candidate.starts_with(prefix))
+    {
+        return Err(format!(
+            "path is not safe for AgentCanvas: {}",
+            candidate.display()
+        ));
+    }
+    Ok(canonical_candidate)
+}
+
+#[allow(dead_code)]
+fn path_within_canvas(_canvas_root: &Path, candidate: &Path) -> Result<PathBuf, String> {
+    path_safe_for_canvas(candidate)
+}
+
+fn untrack_file_impl(conn: &Connection, source: &Path) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM files WHERE path = ?1",
+        params![source.to_string_lossy()],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn delete_file_from_disk_impl(conn: &Connection, source: &Path) -> Result<(), String> {
+    fs::remove_file(source).map_err(|error| error.to_string())?;
+    untrack_file_impl(conn, source)
 }
 
 fn format_send_payload(
@@ -1886,10 +1931,8 @@ fn action_template_for<'a>(action: &str, templates: &'a [ActionTemplate]) -> Opt
 
 fn relative_canvas_path(path: &str, canvas_root: &Path) -> Result<String, String> {
     let path = Path::new(path);
-    let relative = path
-        .strip_prefix(canvas_root)
-        .map_err(|_| "send payload path must live under AgentCanvas root".to_owned())?;
-    Ok(relative.to_string_lossy().into_owned())
+    let display_path = path.strip_prefix(canvas_root).unwrap_or(path);
+    Ok(display_path.to_string_lossy().into_owned())
 }
 
 fn language_from_path(path: &str) -> &'static str {
@@ -2018,12 +2061,15 @@ fn main() {
             reset_action_templates,
             toggle_pin,
             archive_file,
+            track_paths_in_inbox,
             copy_paths_to_inbox,
             move_file_to_project,
             move_file_to_archive,
             target_file_exists,
             copy_text_to_clipboard,
             reveal_in_finder,
+            untrack_file,
+            delete_file_from_disk,
             delete_file,
             rename_file,
             export_file_to,
@@ -2075,30 +2121,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_path_within_canvas_rejects_outside() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let canvas_root = temp.path().join("AgentCanvas");
-        fs::create_dir_all(&canvas_root).expect("canvas root");
-
-        assert!(path_within_canvas(&canvas_root, Path::new("/etc/passwd")).is_err());
-        assert!(path_within_canvas(&canvas_root, Path::new("/tmp/foo")).is_err());
+    fn test_path_safe_for_canvas_allow_deny_matrix() {
+        assert!(path_safe_for_canvas(Path::new("/etc/passwd")).is_err());
+        assert!(path_safe_for_canvas(Path::new("/Users/jessepike/code/foo.html")).is_ok());
+        assert!(
+            path_safe_for_canvas(Path::new(
+                "/Users/jessepike/Library/Application Support/AgentCanvas/state.db"
+            ))
+            .is_err()
+        );
     }
 
     #[test]
-    fn test_path_within_canvas_accepts_descendant() {
+    fn test_path_within_canvas_shim_accepts_safe_path() {
         let temp = tempfile::tempdir().expect("tempdir");
         let canvas_root = temp.path().join("AgentCanvas");
         let inbox = canvas_root.join("Inbox");
         fs::create_dir_all(&inbox).expect("inbox");
+        fs::write(inbox.join("x.md"), "x").expect("file");
 
         let candidate = inbox.join("x.md");
-        let bounded = path_within_canvas(&canvas_root, &candidate).expect("descendant accepted");
+        let bounded = path_within_canvas(&canvas_root, &candidate).expect("safe path accepted");
 
         // On macOS, tempdirs canonicalize through /private. Compare canonicalized expectation.
-        let expected = inbox
-            .canonicalize()
-            .expect("canonicalize inbox")
-            .join("x.md");
+        let expected = candidate.canonicalize().expect("canonicalize candidate");
         assert_eq!(bounded, expected);
     }
 
@@ -2117,6 +2163,107 @@ mod tests {
         // Symlink target canonicalizes through /private on macOS.
         let expected = inside.canonicalize().expect("canonicalize target");
         assert_eq!(bounded, expected);
+    }
+
+    #[test]
+    fn migration_backfills_legacy_tags_idempotently() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let legacy_root = temp.path().join("AgentCanvas");
+        fs::create_dir_all(legacy_root.join("Inbox")).expect("inbox");
+        fs::create_dir_all(legacy_root.join("Projects/Alpha")).expect("project");
+        fs::create_dir_all(legacy_root.join("Archive")).expect("archive");
+        let conn = Connection::open_in_memory().expect("db");
+        initialize_state_db(&conn, &legacy_root).expect("init");
+        let hash = vec![0_u8; 32];
+        for path in [
+            legacy_root.join("Inbox/a.md"),
+            legacy_root.join("Projects/Alpha/b.md"),
+            legacy_root.join("Archive/c.md"),
+            temp.path().join("elsewhere/d.md"),
+        ] {
+            conn.execute(
+                "INSERT INTO files(path, last_seen_hash, size, mtime) VALUES (?1, ?2, 1, 1)",
+                params![path.to_string_lossy(), hash],
+            )
+            .expect("insert file");
+        }
+
+        backfill_file_tags_from_legacy_paths(&conn, &legacy_root).expect("backfill 1");
+        backfill_file_tags_from_legacy_paths(&conn, &legacy_root).expect("backfill 2");
+
+        let inbox: i64 = conn
+            .query_row(
+                "SELECT in_inbox FROM files WHERE path = ?1",
+                params![legacy_root.join("Inbox/a.md").to_string_lossy()],
+                |row| row.get(0),
+            )
+            .expect("inbox");
+        let project: String = conn
+            .query_row(
+                "SELECT project_tag FROM files WHERE path = ?1",
+                params![legacy_root.join("Projects/Alpha/b.md").to_string_lossy()],
+                |row| row.get(0),
+            )
+            .expect("project");
+        let archived: i64 = conn
+            .query_row(
+                "SELECT archived FROM files WHERE path = ?1",
+                params![legacy_root.join("Archive/c.md").to_string_lossy()],
+                |row| row.get(0),
+            )
+            .expect("archive");
+        let untouched: (i64, Option<String>, i64) = conn
+            .query_row(
+                "SELECT in_inbox, project_tag, archived FROM files WHERE path = ?1",
+                params![temp.path().join("elsewhere/d.md").to_string_lossy()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("untouched");
+
+        assert_eq!(inbox, 1);
+        assert_eq!(project, "Alpha");
+        assert_eq!(archived, 1);
+        assert_eq!(untouched, (0, None, 0));
+    }
+
+    #[test]
+    fn untrack_keeps_file_delete_from_disk_removes_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let conn = open_in_memory_state_db().expect("db");
+        let keep = temp.path().join("keep.md");
+        let delete = temp.path().join("delete.md");
+        fs::write(&keep, "keep").expect("keep");
+        fs::write(&delete, "delete").expect("delete");
+        let hash = vec![0_u8; 32];
+        for path in [&keep, &delete] {
+            conn.execute(
+                "INSERT INTO files(path, last_seen_hash, size, mtime, in_inbox) VALUES (?1, ?2, 1, 1, 1)",
+                params![path.to_string_lossy(), hash],
+            )
+            .expect("insert");
+        }
+
+        untrack_file_impl(&conn, &keep).expect("untrack");
+        assert!(keep.exists());
+        let keep_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE path = ?1",
+                params![keep.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .expect("keep count");
+        assert_eq!(keep_rows, 0);
+
+        delete_file_from_disk_impl(&conn, &delete).expect("delete from disk");
+        assert!(!delete.exists());
+        let delete_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE path = ?1",
+                params![delete.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .expect("delete count");
+        assert_eq!(delete_rows, 0);
     }
 
     #[test]

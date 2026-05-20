@@ -9,6 +9,7 @@ One line per insight, dated. Keep last 15. Promote cross-project patterns to KB 
 
 ## 2026-05-10 (scaffold + Gate 30A + Gate 30B start)
 
+- [pending] **Rollup optional native deps can disappear after host/VM node_modules drift.** Symptom: Vite fails on missing `@rollup/rollup-linux-arm64-gnu`. Fix inside OrbStack dev VM with `CI=true pnpm install --frozen-lockfile`; do not install on host.
 - [pending] **Codex sandbox cannot commit (`.git/index.lock` Operation not permitted).** Pattern: Codex does the work, I commit. Tell Codex explicitly "do not commit" in every prompt — otherwise it tries and the failure muddies the report.
 - [pending] **Pre-staging the next Codex prompt while the current one runs respects the single-Codex-job constraint.** Only one Codex job at a time (token race). But the orchestrator can DRAFT the next prompt in parallel. Cuts wall-clock between delegations to near zero.
 - [pending] **Patch contracts ship in spec BEFORE code touches the IPC.** Codex external review surfaced: if the patch type isn't pinned in the spec, the first implementation pins it accidentally. Decision: BlockPatch struct + BlockEdit enum landed in v0.3 spec §Block patch contract before 30B-00 implementation began.
