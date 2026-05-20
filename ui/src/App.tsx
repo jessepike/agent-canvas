@@ -979,11 +979,19 @@ export default function App() {
           window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
         }
         await refresh();
+        // Auto-select + open the first dropped file so the content pane updates
+        // without an extra click. If multiple files dropped, collapse selection
+        // onto the first; the user can still ⌘-click to multi-select.
+        if (first) {
+          setMode("inbox");
+          setCurrentProject(null);
+          void openArtifact(first);
+        }
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
       }
     },
-    [refresh]
+    [refresh, openArtifact]
   );
 
   const openFileDialog = useCallback(async () => {
@@ -1505,7 +1513,21 @@ export default function App() {
                     >
                       {labelForPersona(file.persona)}
                     </span>
-                    <span className="file-time">{formatTime(file.mtime)}</span>
+                    <span className="file-time" title={formatTimeTooltip(file.mtime)}>{formatTime(file.mtime)}</span>
+                    <span
+                      className="file-row-trash"
+                      role="button"
+                      tabIndex={-1}
+                      aria-label={`Delete ${file.name}`}
+                      title={`Delete ${file.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void deleteArtifact(file);
+                      }}
+                      onMouseDown={(event) => event.stopPropagation()}
+                    >
+                      ×
+                    </span>
                   </button>
                 ))
               )}
@@ -1611,7 +1633,21 @@ export default function App() {
                       {file.pinned ? <span className="pin-star" title="Pinned">★ </span> : null}
                       {file.name}
                     </span>
-                    <small>{formatTime(file.mtime)}</small>
+                    <small title={formatTimeTooltip(file.mtime)}>{formatTime(file.mtime)}</small>
+                    <span
+                      className="file-row-trash"
+                      role="button"
+                      tabIndex={-1}
+                      aria-label={`Delete ${file.name}`}
+                      title={`Delete ${file.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void deleteArtifact(file);
+                      }}
+                      onMouseDown={(event) => event.stopPropagation()}
+                    >
+                      ×
+                    </span>
                   </button>
                 ))}
               </div>
@@ -1740,7 +1776,14 @@ export default function App() {
                 </section>
               ) : artifact.kind === "pdf" ? (
                 <section className="pdf-panel" aria-label="PDF document">
-                  <iframe title={fileName(artifact.path)} sandbox="allow-same-origin" src={artifact.dataUrl} />
+                  <object data={artifact.dataUrl} type="application/pdf" aria-label={fileName(artifact.path)}>
+                    <div className="pdf-fallback">
+                      <p>This PDF can't be previewed inline.</p>
+                      <a href={artifact.dataUrl} download={fileName(artifact.path)} className="primary">
+                        Download {fileName(artifact.path)}
+                      </a>
+                    </div>
+                  </object>
                 </section>
               ) : (
                 <article className="document placeholder-document">
@@ -3143,6 +3186,14 @@ function formatTime(epochSeconds: number): string {
   }
   const date = new Date(epochSeconds * 1000);
   return `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
+}
+
+function formatTimeTooltip(epochSeconds: number): string {
+  if (!epochSeconds) {
+    return "Unknown modified time";
+  }
+  const date = new Date(epochSeconds * 1000);
+  return `Modified ${date.toLocaleString()}`;
 }
 
 function currentTime(): string {

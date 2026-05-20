@@ -261,13 +261,46 @@ button:hover {
 .project-row {
   display: grid;
   min-height: 30px;
-  grid-template-columns: 7px minmax(0, 1fr) auto auto;
+  grid-template-columns: 7px minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 7px;
   border-color: transparent;
   background: transparent;
   box-shadow: none;
   text-align: left;
+}
+
+.project-row {
+  /* Projects don't have a trash column — collapse the last grid track. */
+  grid-template-columns: 7px minmax(0, 1fr) auto auto;
+}
+
+.file-row-trash {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease-out, color 0.12s ease-out, background 0.12s ease-out;
+}
+
+.file-row:hover .file-row-trash,
+.file-row.selected .file-row-trash,
+.middle-file:hover .file-row-trash,
+.middle-file.selected .file-row-trash {
+  opacity: 0.6;
+}
+
+.file-row-trash:hover {
+  opacity: 1 !important;
+  color: var(--diff-rem-strong);
+  background: var(--hover-bg);
 }
 
 .file-row.selected {
@@ -435,7 +468,7 @@ button:hover {
 
 .middle-file {
   display: grid;
-  grid-template-columns: 7px minmax(0, 1fr) auto;
+  grid-template-columns: 7px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   border-color: transparent;
@@ -1194,11 +1227,34 @@ button:hover {
   background: var(--bg-doc);
 }
 
-.pdf-panel iframe {
+.pdf-panel iframe,
+.pdf-panel object {
   width: 100%;
   height: 100%;
   border: 0;
   background: var(--bg-doc);
+}
+
+.pdf-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.pdf-fallback a.primary {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 16px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, var(--btn-primary-top), var(--btn-primary-bot));
+  color: var(--btn-primary-text);
+  text-decoration: none;
+  font-weight: 500;
 }
 
 .image-panel {
