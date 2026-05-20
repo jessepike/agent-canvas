@@ -11,6 +11,8 @@
   --bg-titlebar-top: #f2f0e8;
   --bg-titlebar-bot: #e7e4da;
   --bg-doc: #ffffff;
+  --bg-middle: #f4f2ea;
+  --bg-agent-panel: #f4f1e8;
   --border-soft: #e8e5d9;
   --border: #ddd9cc;
   --border-strong: #c6c1b0;
@@ -20,6 +22,7 @@
   --text-secondary: #6e6a5e;
   --text-tertiary: #a09b8b;
   --text-faded: #bfbaab;
+  --text-prose: #2a2823;
   --accent: #1f5bd8;
   --accent-deep: #173f95;
   --accent-soft: #e5ebfa;
@@ -41,19 +44,27 @@
   --diff-rem-strong: #b8453a;
   --drop-target-bg: #dce7fb;
   --drop-target-border: var(--accent);
-  --persona-cpo: #1f5bd8;
-  --persona-cto: #4d5fd7;
-  --persona-cfo: #2a5a1f;
-  --persona-cro: #c2691e;
-  --persona-cmo: #6b4a8f;
-  --persona-ciso: #b8453a;
-  --persona-krypton: #9b3f7f;
-  --persona-forge: #c19433;
-  --persona-agf-architect: #3d766c;
   --persona-claude: #6e6a5e;
   --persona-codex: #1b1a14;
+  --btn-bg-top: #ffffff;
+  --btn-bg-bot: #f5f3ec;
+  --btn-primary-top: #3270e8;
+  --btn-primary-bot: #1f4ecc;
+  --btn-primary-text: #ffffff;
+  --control-fill: rgba(255, 255, 255, 0.7);
+  --count-bg: rgba(0, 0, 0, 0.04);
+  --row-hover-pin: rgba(193, 148, 51, 0.06);
+  --pulse-dot-start: rgba(31, 91, 216, 0.35);
+  --pulse-dot-end: rgba(31, 91, 216, 0);
+  --overlay-modal-bg: rgba(20, 18, 12, 0.32);
+  --overlay-popover-bg: transparent;
+  --palette-border: rgba(0, 0, 0, 0.18);
   --shadow-window: 0 28px 70px rgba(20, 18, 12, 0.3), 0 10px 24px rgba(20, 18, 12, 0.16);
   --shadow-toolbar-btn: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-hairline: 0 0 0 0.5px var(--border), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-modal: 0 30px 80px rgba(20, 18, 12, 0.32), 0 12px 30px rgba(20, 18, 12, 0.18);
+  --shadow-context-menu: 0 16px 36px rgba(20, 18, 12, 0.18), 0 4px 12px rgba(20, 18, 12, 0.12);
 }
 
 * {
@@ -88,7 +99,7 @@ button {
   border: 0.5px solid var(--border-strong);
   border-radius: 6px;
   color: var(--text);
-  background: linear-gradient(to bottom, #ffffff, #f5f3ec);
+  background: linear-gradient(to bottom, var(--btn-bg-top), var(--btn-bg-bot));
   box-shadow: var(--shadow-toolbar-btn);
   cursor: pointer;
 }
@@ -139,7 +150,7 @@ button:hover {
   border-radius: 6px;
   outline: none;
   padding: 5px 10px;
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--control-fill);
 }
 
 .section-header {
@@ -168,7 +179,7 @@ button:hover {
 .section-button.selected {
   border-color: var(--border);
   background: var(--selected-bg);
-  box-shadow: 0 0 0 0.5px var(--border), 0 1px 2px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-hairline);
 }
 
 .section-button.selected .section-label {
@@ -186,7 +197,7 @@ button:hover {
 }
 
 .file-row.pinned {
-  background: rgba(193, 148, 51, 0.06);
+  background: var(--row-hover-pin);
 }
 
 .file-row.pinned.selected {
@@ -194,7 +205,7 @@ button:hover {
 }
 
 .middle-file.pinned {
-  background: rgba(193, 148, 51, 0.06);
+  background: var(--row-hover-pin);
 }
 
 .middle-file.pinned.selected {
@@ -205,7 +216,7 @@ button:hover {
   border-radius: 8px;
   padding: 1px 6px;
   color: var(--text-tertiary);
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--count-bg);
   font-size: 10.5px;
 }
 
@@ -252,7 +263,7 @@ button:hover {
 .file-row.selected {
   border-color: var(--border);
   background: var(--selected-bg);
-  box-shadow: 0 0 0 0.5px var(--border), 0 1px 2px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-hairline);
 }
 
 .file-row.just-arrived {
@@ -282,10 +293,10 @@ button:hover {
 
 @keyframes pulse-dot {
   0% {
-    box-shadow: 0 0 0 0 rgba(31, 91, 216, 0.35);
+    box-shadow: 0 0 0 0 var(--pulse-dot-start);
   }
   100% {
-    box-shadow: 0 0 0 6px rgba(31, 91, 216, 0);
+    box-shadow: 0 0 0 6px var(--pulse-dot-end);
   }
 }
 
@@ -305,7 +316,7 @@ button:hover {
   border: 0.5px solid var(--border-strong);
   border-radius: 3px;
   padding: 1px 5px;
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--control-fill);
   color: var(--text-secondary);
   font-size: 10.5px;
   font-weight: 500;
@@ -315,44 +326,6 @@ button:hover {
   font-family: var(--font-serif);
   font-style: italic;
   text-transform: lowercase;
-}
-
-.badge-cpo {
-  color: var(--persona-cpo);
-}
-
-.badge-cto {
-  color: var(--persona-cto);
-  font-family: var(--font-serif);
-  font-style: italic;
-}
-
-.badge-cfo {
-  color: var(--persona-cfo);
-}
-
-.badge-cro {
-  color: var(--persona-cro);
-}
-
-.badge-cmo {
-  color: var(--persona-cmo);
-}
-
-.badge-ciso {
-  color: var(--persona-ciso);
-}
-
-.badge-krypton {
-  color: var(--persona-krypton);
-}
-
-.badge-forge {
-  color: var(--persona-forge);
-}
-
-.badge-agf-architect {
-  color: var(--persona-agf-architect);
 }
 
 .badge-claude {
@@ -399,7 +372,7 @@ button:hover {
   flex-direction: column;
   overflow: hidden;
   border-right: 0.5px solid var(--border);
-  background: #f4f2ea;
+  background: var(--bg-middle);
 }
 
 .middle-header {
@@ -445,7 +418,7 @@ button:hover {
 .middle-file.selected {
   border-color: var(--border);
   background: var(--selected-bg);
-  box-shadow: 0 0 0 0.5px var(--border), 0 1px 2px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-hairline);
 }
 
 .middle-file span {
@@ -559,21 +532,21 @@ button:hover {
 
 .toolbar-actions .primary {
   border-color: var(--accent-deep);
-  color: #ffffff;
-  background: linear-gradient(to bottom, #3270e8, #1f4ecc);
+  color: var(--btn-primary-text);
+  background: linear-gradient(to bottom, var(--btn-primary-top), var(--btn-primary-bot));
 }
 
 .toolbar-actions .primary:disabled {
   border-color: var(--border-strong);
   color: var(--text-tertiary);
-  background: linear-gradient(to bottom, #ffffff, #f5f3ec);
+  background: linear-gradient(to bottom, var(--btn-bg-top), var(--btn-bg-bot));
 }
 
 .send-popover-backdrop {
   position: absolute;
   inset: 46px 0 0;
   z-index: 40;
-  background: transparent;
+  background: var(--overlay-popover-bg);
 }
 
 .send-popover {
@@ -587,7 +560,7 @@ button:hover {
   border-radius: 8px;
   padding: 0 14px 14px;
   background: var(--bg-window);
-  box-shadow: 0 16px 36px rgba(20, 18, 12, 0.18), 0 4px 12px rgba(20, 18, 12, 0.12);
+  box-shadow: var(--shadow-context-menu);
 }
 
 .send-popover header {
@@ -696,8 +669,8 @@ button:hover {
 
 .send-popover .primary {
   border-color: var(--accent-deep);
-  color: #ffffff;
-  background: linear-gradient(to bottom, #3270e8, #1f4ecc);
+  color: var(--btn-primary-text);
+  background: linear-gradient(to bottom, var(--btn-primary-top), var(--btn-primary-bot));
 }
 
 .dialog-backdrop {
@@ -707,7 +680,7 @@ button:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: transparent;
+  background: var(--overlay-popover-bg);
 }
 
 .project-dialog {
@@ -741,7 +714,7 @@ button:hover {
   border-radius: 7px;
   padding: 5px;
   background: var(--bg-window);
-  box-shadow: 0 16px 36px rgba(20, 18, 12, 0.18), 0 4px 12px rgba(20, 18, 12, 0.12);
+  box-shadow: var(--shadow-context-menu);
 }
 
 .context-menu button {
@@ -799,7 +772,7 @@ button:hover {
 
 .document p {
   margin: 0 0 12px;
-  color: #2a2823;
+  color: var(--text-prose);
   font-size: 14.5px;
   line-height: 1.65;
 }
@@ -845,7 +818,7 @@ button:hover {
   min-height: 100%;
   margin: 0 auto;
   outline: none;
-  color: #2a2823;
+  color: var(--text-prose);
   font-family: var(--font-serif);
   font-size: 16px;
   line-height: 1.68;
@@ -989,7 +962,7 @@ button:hover {
   align-items: flex-start;
   justify-content: center;
   border-left: 0.5px solid var(--border);
-  background: #f4f1e8;
+  background: var(--bg-agent-panel);
   padding-top: 14px;
 }
 
@@ -1010,7 +983,7 @@ button:hover {
   flex-direction: column;
   overflow: hidden;
   border-left: 0.5px solid var(--border);
-  background: #f4f1e8;
+  background: var(--bg-agent-panel);
 }
 
 .agent-panel-header {
@@ -1067,7 +1040,7 @@ button:hover {
   border-radius: 7px;
   padding: 10px;
   background: var(--bg-doc);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-card);
 }
 
 .agent-card.default-agent {
@@ -1113,7 +1086,7 @@ button:hover {
   align-items: flex-start;
   justify-content: center;
   padding-top: 12vh;
-  background: rgba(20, 18, 12, 0.32);
+  background: var(--overlay-modal-bg);
   backdrop-filter: blur(3px);
 }
 
@@ -1123,10 +1096,10 @@ button:hover {
   max-height: 70vh;
   flex-direction: column;
   overflow: hidden;
-  border: 0.5px solid rgba(0, 0, 0, 0.18);
+  border: 0.5px solid var(--palette-border);
   border-radius: 12px;
   background: var(--bg-window);
-  box-shadow: 0 30px 80px rgba(20, 18, 12, 0.32), 0 12px 30px rgba(20, 18, 12, 0.18);
+  box-shadow: var(--shadow-modal);
 }
 
 .palette-search {

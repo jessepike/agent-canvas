@@ -107,6 +107,75 @@ Round 2 and beyond should preserve this system unless a deliberate decision move
 
 Window shadow is generous and warm (RGBA dark warm, not pure black) — sits the app on the desktop without feeling stark.
 
+## Token Inventory
+
+Every color used in `ui/src/styles.css` must be referenced through one of these `:root` tokens. Persona badge colors are registry-derived from `~/code/_shared/pike-agents/plugins/<name>/agents/<name>.md` frontmatter `color:` values; only built-in Claude/Codex fallback tokens remain in CSS.
+
+- `--font-ui` — primary UI font stack for chrome and controls.
+- `--font-display` — display font stack for titles and large headings.
+- `--font-serif` — serif font stack for rendered prose and persona badges.
+- `--font-mono` — monospace font stack for code and technical labels.
+- `--bg-desktop` — warm taupe desktop background behind the app window.
+- `--bg-window` — primary warm off-white application surface.
+- `--bg-sidebar` — sidebar surface.
+- `--bg-titlebar-top` — titlebar gradient top stop.
+- `--bg-titlebar-bot` — titlebar gradient bottom stop.
+- `--bg-doc` — document canvas surface.
+- `--bg-middle` — middle file-list pane surface.
+- `--bg-agent-panel` — agent gutter and session panel surface.
+- `--border-soft` — lowest-emphasis border.
+- `--border` — standard border.
+- `--border-strong` — higher-emphasis control border.
+- `--hover-bg` — hover fill for sidebar controls.
+- `--selected-bg` — selected row surface.
+- `--text` — primary warm near-black text.
+- `--text-secondary` — secondary text.
+- `--text-tertiary` — tertiary metadata text.
+- `--text-faded` — faded disabled or low-priority text.
+- `--text-prose` — rendered document body text.
+- `--accent` — primary ink-blue accent.
+- `--accent-deep` — pressed, hover, or strong accent text.
+- `--accent-soft` — subtle accent fill.
+- `--accent-soft-deep` — stronger accent fill for transitions.
+- `--pin` — pinned item gold.
+- `--pin-soft` — soft pinned-item fill.
+- `--pending` — pending edit orange.
+- `--pending-deep` — pending edit text.
+- `--pending-bg` — pending banner fill.
+- `--pending-border` — pending banner border.
+- `--pending-row-bg` — pending edit row tint.
+- `--diff-add-bg` — inline addition diff fill.
+- `--diff-add-text` — addition diff text.
+- `--diff-add-strong` — strong addition accent.
+- `--diff-add-block` — block addition fill.
+- `--diff-add-block-border` — block addition border.
+- `--diff-rem-bg` — inline removal diff fill.
+- `--diff-rem-text` — removal diff text.
+- `--diff-rem-strong` — strong removal accent.
+- `--drop-target-bg` — drag-and-drop target fill.
+- `--drop-target-border` — drag-and-drop target border.
+- `--persona-claude` — fallback Claude badge color when registry data is absent.
+- `--persona-codex` — fallback Codex badge color when registry data is absent.
+- `--btn-bg-top` — default button gradient top stop.
+- `--btn-bg-bot` — default button gradient bottom stop.
+- `--btn-primary-top` — primary button gradient top stop.
+- `--btn-primary-bot` — primary button gradient bottom stop.
+- `--btn-primary-text` — primary button foreground text.
+- `--control-fill` — translucent control and badge fill.
+- `--count-bg` — count badge fill.
+- `--row-hover-pin` — pinned row tint.
+- `--pulse-dot-start` — arrival pulse starting shadow color.
+- `--pulse-dot-end` — arrival pulse ending shadow color.
+- `--overlay-modal-bg` — modal and palette backdrop overlay.
+- `--overlay-popover-bg` — transparent popover/dialog backdrop token.
+- `--palette-border` — command palette border.
+- `--shadow-window` — large window shadow stack.
+- `--shadow-toolbar-btn` — small inset toolbar button shadow.
+- `--shadow-hairline` — selected row hairline and lift shadow.
+- `--shadow-card` — compact card shadow.
+- `--shadow-modal` — modal and palette shadow stack.
+- `--shadow-context-menu` — context menu and popover shadow stack.
+
 ## Aesthetic Principles
 
 1. **Warm off-white over cool gray.** The chrome is paper-warm (#FBFAF6, #EFEDE6) rather than the cool blue-gray of system defaults. Pairs with the warm-ink-blue accent.

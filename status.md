@@ -1,10 +1,29 @@
 ---
 project: agent-canvas
 updated: 2026-05-19
-stage: v0.2-finish Slice 2 implemented
+stage: v0.2-finish Slice 3 implemented
 ---
 
 # AgentCanvas — Status
+
+## v0.2-finish Slice 3 Summary
+
+Slice 3 of `docs/BUILD-SPEC-v0.2-finish.md` was implemented on 2026-05-19.
+
+- Removed hard-coded non-built-in persona badge color classes and moved file/session persona badge colors to inline registry-derived `Persona.color` values.
+- Kept `--persona-claude` and `--persona-codex` as CSS fallback tokens; custom persona colors now come from pike-agents frontmatter.
+- Added Markdown frontmatter persona detection in `metadata_for_file()` for `persona`, `author`, then `agent`, with cache key `(path, mtime, size)` and registry validation.
+- Reconciled `ui/src/styles.css` raw color usage through `:root` tokens and documented the full token inventory in `prototypes/visual-system.md`.
+- Wrote the implementation report to `docs/active/codex-slice3-report-2026-05-19.md`.
+
+Verification:
+
+- `orb run -m dev sh -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/agent-canvas/ui && pnpm build'` passes. Vite reports the known large-chunk warning.
+- `orb run -m dev sh -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/agent-canvas/crates/agent-canvas-app && cargo check'` passes.
+- `orb run -m dev sh -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/agent-canvas && cargo test --bin agent-canvas-app 2>&1 | tail -5'` passes: 6 tests.
+- `orb run -m dev sh -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/agent-canvas && cargo fmt --all --check'` passes.
+- Non-root hex literals in `ui/src/styles.css`: `0`.
+- Non-root `rgba(` uses in `ui/src/styles.css`: `0`.
 
 ## v0.2-finish Slice 2 Summary
 

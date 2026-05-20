@@ -1,10 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -24,6 +24,11 @@ use vellum_core::{
     watch::{self, WatchEvent, WatchHandle},
 };
 use walkdir::WalkDir;
+
+type PersonaMetadataCacheKey = (String, i64, u64);
+
+static PERSONA_METADATA_CACHE: OnceLock<Mutex<HashMap<PersonaMetadataCacheKey, String>>> =
+    OnceLock::new();
 
 struct AppState {
     paths: Result<AgentCanvasPaths, String>,
@@ -1007,6 +1012,7 @@ fn hydrate_file_state(conn: &Connection, file: &mut FileMetadata) -> Result<(), 
 fn metadata_for_file(path: &Path, canvas_root: &Path) -> Result<FileMetadata, String> {
     let bytes = fs::read(path).map_err(|error| error.to_string())?;
     let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+    let size = metadata.len();
     let mtime = metadata
         .modified()
         .ok()
@@ -1014,6 +1020,17 @@ fn metadata_for_file(path: &Path, canvas_root: &Path) -> Result<FileMetadata, St
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0);
     let relative_path = path.strip_prefix(canvas_root).unwrap_or(path);
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let default_persona = infer_persona(path);
+    let persona = if markdown_extension(&extension) {
+        cached_frontmatter_persona(path, &bytes, mtime, size).unwrap_or(default_persona)
+    } else {
+        default_persona
+    };
 
     Ok(FileMetadata {
         path: path.to_string_lossy().into_owned(),
@@ -1023,18 +1040,14 @@ fn metadata_for_file(path: &Path, canvas_root: &Path) -> Result<FileMetadata, St
             .and_then(|name| name.to_str())
             .unwrap_or("artifact")
             .to_owned(),
-        extension: path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase(),
-        size: metadata.len(),
+        extension,
+        size,
         mtime,
         last_seen_hash: *vellum_core::hash::content_hash(&bytes).as_bytes(),
         pinned: false,
         archived: false,
         last_read_at: None,
-        persona: infer_persona(path),
+        persona,
     })
 }
 
@@ -1085,35 +1098,18 @@ fn is_supported_artifact(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn markdown_extension(extension: &str) -> bool {
+    extension == "md" || extension == "markdown"
+}
+
 fn resolve_personas(
     registry_root: &Path,
     db: &Mutex<Connection>,
 ) -> Result<PersonaRegistry, String> {
-    let mut personas = Vec::new();
+    let mut personas = discover_personas(registry_root);
     let mut warning = None;
 
-    if registry_root.exists() {
-        for &(name, fallback_color) in builtin_persona_colors() {
-            let path = registry_root
-                .join(name)
-                .join("agents")
-                .join(format!("{name}.md"));
-            if let Ok(source) = fs::read_to_string(&path) {
-                let color = frontmatter_value(&source, "color")
-                    .unwrap_or_else(|| fallback_color.to_owned());
-                personas.push(Persona {
-                    name: name.to_owned(),
-                    color,
-                    display_label: display_label(name),
-                    source: "pike-agents".to_owned(),
-                });
-            }
-        }
-        if personas.is_empty() {
-            warning = Some("persona registry unavailable, using defaults".to_owned());
-            personas = builtin_personas();
-        }
-    } else {
+    if !registry_root.exists() || personas.is_empty() {
         warning = Some("persona registry unavailable, using defaults".to_owned());
         personas = builtin_personas();
     }
@@ -1143,6 +1139,63 @@ fn resolve_personas(
     Ok(PersonaRegistry { personas, warning })
 }
 
+fn discover_personas(registry_root: &Path) -> Vec<Persona> {
+    if !registry_root.exists() {
+        return Vec::new();
+    }
+
+    let mut personas = Vec::new();
+    for entry in WalkDir::new(registry_root)
+        .min_depth(3)
+        .max_depth(3)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("md") {
+            continue;
+        }
+        let Some(agent_name) = path.file_stem().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(agents_dir) = path.parent() else {
+            continue;
+        };
+        if agents_dir.file_name().and_then(|name| name.to_str()) != Some("agents") {
+            continue;
+        }
+        let Some(plugin_name) = agents_dir
+            .parent()
+            .and_then(|plugin_dir| plugin_dir.file_name())
+            .and_then(|name| name.to_str())
+        else {
+            continue;
+        };
+        if agent_name != plugin_name {
+            continue;
+        }
+        if let Ok(source) = fs::read_to_string(path) {
+            let name = frontmatter_value(&source, "name").unwrap_or_else(|| agent_name.to_owned());
+            let color = frontmatter_value(&source, "color")
+                .or_else(|| builtin_persona_color(&name).map(str::to_owned))
+                .unwrap_or_else(|| "neutral".to_owned());
+            personas.push(Persona {
+                display_label: display_label(&name),
+                name,
+                color,
+                source: "pike-agents".to_owned(),
+            });
+        }
+    }
+
+    personas.sort_by(|left, right| left.name.cmp(&right.name));
+    personas.dedup_by(|left, right| left.name == right.name);
+    personas
+}
+
 fn frontmatter_value(source: &str, key: &str) -> Option<String> {
     let mut lines = source.lines();
     if lines.next()? != "---" {
@@ -1162,6 +1215,93 @@ fn frontmatter_value(source: &str, key: &str) -> Option<String> {
     None
 }
 
+fn cached_frontmatter_persona(path: &Path, bytes: &[u8], mtime: i64, size: u64) -> Option<String> {
+    let path_key = path.to_string_lossy().into_owned();
+    let cache_key = (path_key.clone(), mtime, size);
+    let cache = PERSONA_METADATA_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Ok(mut cache) = cache.lock() {
+        if let Some(persona) = cache.get(&cache_key) {
+            return (!persona.is_empty()).then(|| persona.clone());
+        }
+        cache.retain(|(cached_path, _, _), _| cached_path != &path_key);
+    }
+
+    let persona =
+        frontmatter_persona(bytes).filter(|persona| valid_persona_names().contains(persona));
+
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(cache_key, persona.clone().unwrap_or_default());
+    }
+
+    persona
+}
+
+fn frontmatter_persona(bytes: &[u8]) -> Option<String> {
+    let prefix_len = bytes.len().min(4096);
+    let source = String::from_utf8_lossy(&bytes[..prefix_len]);
+    let mut lines = source.lines();
+    if lines.next()?.trim_end_matches('\r') != "---" {
+        return None;
+    }
+
+    let mut persona = None;
+    let mut author = None;
+    let mut agent = None;
+    let mut closed = false;
+
+    for line in lines {
+        let line = line.trim_end_matches('\r');
+        if line == "---" {
+            closed = true;
+            break;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').trim().to_owned();
+        if value.is_empty() {
+            continue;
+        }
+        match key.trim() {
+            "persona" if persona.is_none() => persona = Some(value),
+            "author" if author.is_none() => author = Some(value),
+            "agent" if agent.is_none() => agent = Some(value),
+            _ => {}
+        }
+    }
+
+    closed.then(|| persona.or(author).or(agent)).flatten()
+}
+
+fn valid_persona_names() -> HashSet<String> {
+    let mut names: HashSet<String> = builtin_persona_colors()
+        .iter()
+        .map(|(name, _)| (*name).to_owned())
+        .collect();
+    if let Some(registry_root) = default_persona_registry_root() {
+        names.extend(
+            discover_personas(&registry_root)
+                .into_iter()
+                .map(|persona| persona.name),
+        );
+    }
+    names
+}
+
+fn default_persona_registry_root() -> Option<PathBuf> {
+    std::env::var_os("AGENTCANVAS_PERSONA_REGISTRY")
+        .map(PathBuf::from)
+        .or_else(|| {
+            home_dir().ok().map(|home| {
+                home.join("code")
+                    .join("_shared")
+                    .join("pike-agents")
+                    .join("plugins")
+            })
+        })
+}
+
 fn infer_persona(path: &Path) -> String {
     let lower = path
         .file_name()
@@ -1172,6 +1312,12 @@ fn infer_persona(path: &Path) -> String {
         .iter()
         .find_map(|(name, _)| lower.contains(name).then(|| (*name).to_owned()))
         .unwrap_or_else(|| "claude".to_owned())
+}
+
+fn builtin_persona_color(name: &str) -> Option<&'static str> {
+    builtin_persona_colors()
+        .iter()
+        .find_map(|(candidate, color)| (*candidate == name).then_some(*color))
 }
 
 fn builtin_personas() -> Vec<Persona> {
@@ -1543,7 +1689,10 @@ mod tests {
         let bounded = path_within_canvas(&canvas_root, &candidate).expect("descendant accepted");
 
         // On macOS, tempdirs canonicalize through /private. Compare canonicalized expectation.
-        let expected = inbox.canonicalize().expect("canonicalize inbox").join("x.md");
+        let expected = inbox
+            .canonicalize()
+            .expect("canonicalize inbox")
+            .join("x.md");
         assert_eq!(bounded, expected);
     }
 

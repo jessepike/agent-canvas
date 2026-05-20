@@ -230,6 +230,10 @@ export default function App() {
     () => sessions.find((session) => session.id === defaultAgentId) ?? null,
     [defaultAgentId, sessions]
   );
+  const personaColors = useMemo(
+    () => new Map((personas?.personas ?? []).map((persona) => [persona.name, persona.color])),
+    [personas]
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -999,7 +1003,12 @@ export default function App() {
                       {file.pinned ? <span className="pin-star" title="Pinned">★ </span> : null}
                       {file.name}
                     </span>
-                    <span className={`badge persona-badge badge-${file.persona}`}>{labelForPersona(file.persona)}</span>
+                    <span
+                      className="badge persona-badge"
+                      style={{ color: personaColors.get(file.persona) ?? fallbackPersonaColor(file.persona) }}
+                    >
+                      {labelForPersona(file.persona)}
+                    </span>
                     <span className="file-time">{formatTime(file.mtime)}</span>
                   </button>
                 ))
@@ -1250,7 +1259,12 @@ export default function App() {
                     }}
                   >
                     <div className="agent-card-top">
-                      <span className={`badge persona-badge badge-${session.persona}`}>{labelForPersona(session.persona)}</span>
+                      <span
+                        className="badge persona-badge"
+                        style={{ color: personaColors.get(session.persona) ?? fallbackPersonaColor(session.persona) }}
+                      >
+                        {labelForPersona(session.persona)}
+                      </span>
                       <span className="backbone-tag">{session.backbone}</span>
                     </div>
                     <div className="agent-context">[{session.context || "current"}]</div>
@@ -1696,6 +1710,16 @@ function labelForPersona(persona: string): string {
     return "AGF";
   }
   return persona;
+}
+
+function fallbackPersonaColor(persona: string): string {
+  if (persona === "claude") {
+    return "var(--persona-claude)";
+  }
+  if (persona === "codex") {
+    return "var(--persona-codex)";
+  }
+  return "var(--text-secondary)";
 }
 
 function sendLabelForSessions(sessions: AgentSession[], defaultSessionId: string | null): string {
