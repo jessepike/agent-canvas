@@ -27,6 +27,7 @@ import {
   moveFileToProject,
   openDocument,
   parseDocument,
+  readBinaryArtifact,
   renameFile,
   revealInFinder,
   reloadPersonaRegistry,
@@ -53,8 +54,14 @@ type OpenArtifact = {
   baseHash: number[];
   blocks: Block[];
   dirty: boolean;
-  kind: "md" | "html" | "unsupported";
+  kind: ArtifactKind;
+  dataUrl?: string;
+  size?: number;
+  mime?: string;
 };
+
+type ArtifactKind = "md" | "html" | "png" | "json" | "txt" | "pdf" | "unsupported";
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 type FsEventPayload = {
   kind: string;
@@ -112,6 +119,7 @@ export default function App() {
   const [artifact, setArtifact] = useState<OpenArtifact | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [sourceMode, setSourceMode] = useState(false);
+  const [jsonViewMode, setJsonViewMode] = useState<"source" | "tree">("source");
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -251,6 +259,16 @@ export default function App() {
     () => new Map((personas?.personas ?? []).map((persona) => [persona.name, persona.color])),
     [personas]
   );
+  const parsedJson = useMemo(() => {
+    if (artifact?.kind !== "json") {
+      return null;
+    }
+    try {
+      return JSON.parse(artifact.source) as JsonValue;
+    } catch {
+      return null;
+    }
+  }, [artifact]);
 
   useEffect(() => {
     let disposed = false;
@@ -275,9 +293,31 @@ export default function App() {
     setSavedAt(null);
 
     try {
-      // Detect binary / unsupported extensions BEFORE attempting to read as UTF-8.
-      // openDocument expects text content; PDFs, images, etc. will throw on read.
-      if (isBinaryExtension(file.extension) || (!markdownExtension(file.extension) && !htmlExtension(file.extension))) {
+      if (pngExtension(file.extension) || pdfExtension(file.extension)) {
+        const opened = await readBinaryArtifact(file.path);
+        setArtifact({
+          path: file.path,
+          source: "",
+          baseHash: [],
+          blocks: [],
+          dirty: false,
+          kind: opened.kind,
+          dataUrl: opened.data_url,
+          size: opened.size,
+          mime: opened.mime
+        });
+        setEditMode(false);
+        setSourceMode(false);
+        setJsonViewMode("source");
+        return;
+      }
+
+      if (
+        !markdownExtension(file.extension) &&
+        !htmlExtension(file.extension) &&
+        !jsonExtension(file.extension) &&
+        !txtExtension(file.extension)
+      ) {
         setArtifact({
           path: file.path,
           source: "",
@@ -288,11 +328,18 @@ export default function App() {
         });
         setEditMode(false);
         setSourceMode(false);
+        setJsonViewMode("source");
         return;
       }
 
       const opened = await openDocument(file.path);
-      const kind = markdownExtension(file.extension) ? "md" : "html";
+      const kind: ArtifactKind = markdownExtension(file.extension)
+        ? "md"
+        : htmlExtension(file.extension)
+          ? "html"
+          : jsonExtension(file.extension)
+            ? "json"
+            : "txt";
       const blocks = kind === "md" ? await parseDocument(opened.source) : [];
       setArtifact({
         path: opened.path,
@@ -304,6 +351,11 @@ export default function App() {
       });
       setEditMode(false);
       setSourceMode(false);
+      if (kind === "json") {
+        setJsonViewMode(jsonParses(opened.source) ? "tree" : "source");
+      } else {
+        setJsonViewMode("source");
+      }
     } catch (caught) {
       // Even with extension check, openDocument can fail. Clear stale artifact so the
       // viewer doesn't continue showing the previously-opened file.
@@ -430,6 +482,19 @@ export default function App() {
     }
 
     try {
+      if (artifact.kind === "png" || artifact.kind === "pdf") {
+        const opened = await readBinaryArtifact(artifact.path);
+        setArtifact({
+          ...artifact,
+          kind: opened.kind,
+          dataUrl: opened.data_url,
+          size: opened.size,
+          mime: opened.mime,
+          dirty: false
+        });
+        return;
+      }
+
       const opened = await openDocument(artifact.path);
       const blocks = artifact.kind === "md" ? await parseDocument(opened.source) : [];
       setArtifact({
@@ -439,6 +504,9 @@ export default function App() {
         blocks,
         dirty: false
       });
+      if (artifact.kind === "json") {
+        setJsonViewMode(jsonParses(opened.source) ? "tree" : "source");
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
@@ -503,6 +571,9 @@ export default function App() {
     setConflict(false);
     setError(null);
     try {
+      if (!isEditableArtifact(artifact.kind)) {
+        return;
+      }
       const result = await writeDocument(artifact.path, artifact.source, artifact.baseHash);
       const blocks = artifact.kind === "md" ? await parseDocument(artifact.source) : [];
       setArtifact({ ...artifact, baseHash: result.new_hash, blocks, dirty: false });
@@ -1292,23 +1363,42 @@ export default function App() {
                 <span>/</span> <strong>{selectedFile?.name ?? "Select a file"}</strong>
               </div>
               <div className="toolbar-actions">
-                <button
-                  type="button"
-                  onClick={() =>
-                    artifact?.kind === "html"
-                      ? setSourceMode((current) => !current)
-                      : setEditMode((current) => !current)
-                  }
-                  disabled={!artifact}
-                >
-                  {artifact?.kind === "html" ? (sourceMode ? "Render" : "View Source") : editMode ? "Preview" : "Edit"}
-                </button>
+                {artifact && isEditableArtifact(artifact.kind) ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      artifact.kind === "html" || artifact.kind === "json"
+                        ? setSourceMode((current) => !current)
+                        : setEditMode((current) => !current)
+                    }
+                  >
+                    {artifact.kind === "html" || artifact.kind === "json"
+                      ? sourceMode
+                        ? "Render"
+                        : "View Source"
+                      : editMode
+                        ? "Preview"
+                        : "Edit"}
+                  </button>
+                ) : null}
+                {artifact?.kind === "json" ? (
+                  <div className="segmented-control" aria-label="JSON view mode">
+                    <button type="button" className={jsonViewMode === "tree" ? "active" : ""} onClick={() => setJsonViewMode("tree")} disabled={!parsedJson}>
+                      Tree
+                    </button>
+                    <button type="button" className={jsonViewMode === "source" ? "active" : ""} onClick={() => setJsonViewMode("source")}>
+                      Source
+                    </button>
+                  </div>
+                ) : null}
                 <button className="primary" type="button" onClick={() => openSendPopover()} disabled={!artifact && !multiSelectActive}>
                   {sendButtonLabel}
                 </button>
-                <button type="button" onClick={() => void saveArtifact()} disabled={!artifact?.dirty || isSaving}>
-                  {isSaving ? "Saving" : "Save"}
-                </button>
+                {artifact && isEditableArtifact(artifact.kind) ? (
+                  <button type="button" onClick={() => void saveArtifact()} disabled={!artifact.dirty || isSaving}>
+                    {isSaving ? "Saving" : "Save"}
+                  </button>
+                ) : null}
               </div>
             </div>
             {conflict ? (
@@ -1329,9 +1419,15 @@ export default function App() {
                 onClear={() => setSelectedPaths(selectedPath ? new Set([selectedPath]) : new Set())}
               />
             ) : artifact ? (
-              editMode || sourceMode ? (
+              editMode || sourceMode || (artifact.kind === "json" && (jsonViewMode === "source" || !parsedJson)) ? (
                 <section className="source-panel" aria-label="Source editor">
-                  <SourceView value={artifact.source} onChange={updateSource} onSave={saveArtifact} />
+                  <SourceView
+                    key={artifact.kind}
+                    language={sourceLanguageForArtifact(artifact.kind)}
+                    value={artifact.source}
+                    onChange={updateSource}
+                    onSave={saveArtifact}
+                  />
                 </section>
               ) : artifact.kind === "md" ? (
                 <section className="rendered-panel" aria-label="Rendered Markdown">
@@ -1341,11 +1437,36 @@ export default function App() {
                 <section className="html-panel" aria-label="Rendered HTML">
                   <iframe title={fileName(artifact.path)} sandbox="allow-same-origin" srcDoc={artifact.source} />
                 </section>
+              ) : artifact.kind === "json" && parsedJson ? (
+                <section className="json-panel" aria-label="JSON tree">
+                  <JsonTree value={parsedJson} name={fileName(artifact.path)} />
+                </section>
+              ) : artifact.kind === "txt" ? (
+                <section className="source-panel" aria-label="Text source">
+                  <SourceView
+                    key={artifact.kind}
+                    language="plaintext"
+                    value={artifact.source}
+                    onChange={updateSource}
+                    onSave={saveArtifact}
+                  />
+                </section>
+              ) : artifact.kind === "png" ? (
+                <section className="image-panel" aria-label="PNG image">
+                  <div className="image-frame">
+                    <img src={artifact.dataUrl} alt={fileName(artifact.path)} />
+                    <p>{formatBytes(artifact.size ?? 0)}</p>
+                  </div>
+                </section>
+              ) : artifact.kind === "pdf" ? (
+                <section className="pdf-panel" aria-label="PDF document">
+                  <iframe title={fileName(artifact.path)} sandbox="allow-same-origin" src={artifact.dataUrl} />
+                </section>
               ) : (
                 <article className="document placeholder-document">
                   <p className="eyebrow">Unsupported artifact</p>
                   <h1>{fileName(artifact.path)}</h1>
-                  <p>This v0 viewer supports Markdown and HTML only.</p>
+                  <p>This viewer supports Markdown, HTML, PNG, JSON, TXT, and PDF artifacts.</p>
                 </article>
               )
             ) : (
@@ -2078,33 +2199,117 @@ function ProjectDeleteDialog({ project, onCancel, onDelete }: ProjectDeleteDialo
   );
 }
 
+function JsonTree({ value, name }: { value: JsonValue; name: string }) {
+  return (
+    <div className="json-tree">
+      <JsonNode name={name} value={value} defaultOpen />
+    </div>
+  );
+}
+
+function JsonNode({ name, value, defaultOpen = false }: { name: string; value: JsonValue; defaultOpen?: boolean }) {
+  if (Array.isArray(value)) {
+    return (
+      <details open={defaultOpen}>
+        <summary>
+          <span>{name}</span>
+          <code>[{value.length}]</code>
+        </summary>
+        <div className="json-children">
+          {value.map((item, index) => (
+            <JsonNode key={index} name={String(index)} value={item} />
+          ))}
+        </div>
+      </details>
+    );
+  }
+
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value);
+    return (
+      <details open={defaultOpen}>
+        <summary>
+          <span>{name}</span>
+          <code>{`{${entries.length}}`}</code>
+        </summary>
+        <div className="json-children">
+          {entries.map(([key, item]) => (
+            <JsonNode key={key} name={key} value={item} />
+          ))}
+        </div>
+      </details>
+    );
+  }
+
+  return (
+    <div className="json-leaf">
+      <span>{name}</span>
+      <code>{JSON.stringify(value)}</code>
+    </div>
+  );
+}
+
 function markdownExtension(extension: string): boolean {
-  return extension === "md" || extension === "markdown";
+  const ext = extension.toLowerCase();
+  return ext === "md" || ext === "markdown";
 }
 
 function htmlExtension(extension: string): boolean {
-  return extension === "html" || extension === "htm";
+  const ext = extension.toLowerCase();
+  return ext === "html" || ext === "htm";
 }
 
-function isBinaryExtension(extension: string): boolean {
-  const ext = extension.toLowerCase();
-  return (
-    ext === "pdf" ||
-    ext === "png" ||
-    ext === "jpg" ||
-    ext === "jpeg" ||
-    ext === "gif" ||
-    ext === "webp" ||
-    ext === "svg" ||
-    ext === "ico" ||
-    ext === "zip" ||
-    ext === "tar" ||
-    ext === "gz" ||
-    ext === "mp3" ||
-    ext === "mp4" ||
-    ext === "mov" ||
-    ext === "wav"
-  );
+function pngExtension(extension: string): boolean {
+  return extension.toLowerCase() === "png";
+}
+
+function pdfExtension(extension: string): boolean {
+  return extension.toLowerCase() === "pdf";
+}
+
+function jsonExtension(extension: string): boolean {
+  return extension.toLowerCase() === "json";
+}
+
+function txtExtension(extension: string): boolean {
+  return extension.toLowerCase() === "txt";
+}
+
+function jsonParses(source: string): boolean {
+  try {
+    JSON.parse(source);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isEditableArtifact(kind: ArtifactKind): boolean {
+  return kind === "md" || kind === "html" || kind === "json" || kind === "txt";
+}
+
+function sourceLanguageForArtifact(kind: ArtifactKind): "markdown" | "json" | "plaintext" {
+  if (kind === "json") {
+    return "json";
+  }
+  if (kind === "md") {
+    return "markdown";
+  }
+  return "plaintext";
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KB", "MB", "GB"];
+  let size = bytes / 1024;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size.toFixed(size >= 10 ? 1 : 2)} ${units[unitIndex]}`;
 }
 
 function labelForPersona(persona: string): string {

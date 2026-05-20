@@ -1,10 +1,29 @@
 ---
 project: agent-canvas
-updated: 2026-05-19
-stage: v0.2-finish Slice 4 deferred items implemented
+updated: 2026-05-20
+stage: v0.2-finish Slice 5a-d viewers implemented
 ---
 
 # AgentCanvas — Status
+
+## v0.2-finish Slice 5a-d Summary
+
+Viewer-only Slice 5a-d items from `docs/BUILD-SPEC-v0.2-finish.md` were implemented on 2026-05-20.
+
+- Added path-bounded `read_binary_artifact` for PNG/PDF data URLs.
+- Added PNG image viewer, JSON source/tree viewer, TXT plaintext viewer, and PDF iframe viewer.
+- Added JSON CodeMirror language support through `@codemirror/lang-json`.
+- Updated supported artifact detection for Markdown, HTML, PNG, JSON, TXT, and PDF.
+- Wrote the implementation report to `docs/active/codex-slice5a-report-2026-05-20.md`.
+
+Verification:
+
+- `orb run -m dev bash -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/vellum/ui && pnpm install --no-frozen-lockfile'` passes.
+- `orb run -m dev bash -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/vellum/ui && pnpm build'` passes. Vite reports the known large-chunk warning.
+- `orb run -m dev bash -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/vellum/crates/agent-canvas-app && cargo check'` passes.
+- `orb run -m dev bash -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/vellum && cargo test --bin agent-canvas-app 2>&1 | tail -5'` passes: 6 tests.
+
+No commit was made; orchestrator commits from host.
 
 ## v0.2-finish Slice 4 Extension Summary
 

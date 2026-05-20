@@ -56,6 +56,16 @@ export const SendPayload = z
   .strict();
 export type SendPayload = z.infer<typeof SendPayload>;
 
+export const BinaryArtifact = z
+  .object({
+    kind: z.enum(["png", "pdf"]),
+    data_url: z.string(),
+    size: z.number(),
+    mime: z.string()
+  })
+  .strict();
+export type BinaryArtifact = z.infer<typeof BinaryArtifact>;
+
 export const AgentSession = z
   .object({
     id: z.string(),
@@ -395,6 +405,15 @@ export async function openDocument(path: string): Promise<OpenDocumentType> {
     return OpenDocument.parse(result);
   } catch (caught) {
     throw ipcError("open_document", caught);
+  }
+}
+
+export async function readBinaryArtifact(path: string): Promise<BinaryArtifact> {
+  try {
+    const result = await invoke<unknown>("read_binary_artifact", { docPath: path });
+    return BinaryArtifact.parse(result);
+  } catch (caught) {
+    throw ipcError("read_binary_artifact", caught);
   }
 }
 

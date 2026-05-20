@@ -14,6 +14,7 @@ use std::{
     process::{Command, Stdio},
 };
 
+use base64::{Engine as _, engine::general_purpose};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
@@ -95,6 +96,14 @@ struct Persona {
 struct PersonaRegistry {
     personas: Vec<Persona>,
     warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BinaryArtifact {
+    kind: String,
+    data_url: String,
+    size: u64,
+    mime: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -792,6 +801,46 @@ fn open_document(state: tauri::State<AppState>, doc_path: String) -> Result<Open
 }
 
 #[tauri::command]
+fn read_binary_artifact(
+    state: tauri::State<AppState>,
+    doc_path: String,
+) -> Result<BinaryArtifact, String> {
+    let paths = state.paths()?;
+    let doc_path = path_within_canvas(&paths.canvas_root, Path::new(&doc_path))?;
+    ensure_regular_file(&doc_path)?;
+
+    let extension = normalized_extension(&doc_path);
+    let (kind, mime) = match extension.as_str() {
+        "png" => ("png", "image/png"),
+        "pdf" => ("pdf", "application/pdf"),
+        _ => return Err("unsupported binary artifact".to_owned()),
+    };
+
+    let bytes = fs::read(&doc_path).map_err(|error| error.to_string())?;
+    let data_url = format!(
+        "data:{mime};base64,{}",
+        general_purpose::STANDARD.encode(&bytes)
+    );
+    let path_string = doc_path.to_string_lossy().into_owned();
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute(
+        "UPDATE files SET last_read_at = strftime('%s','now') WHERE path = ?1",
+        params![path_string],
+    )
+    .map_err(|error| error.to_string())?;
+
+    Ok(BinaryArtifact {
+        kind: kind.to_owned(),
+        data_url,
+        size: bytes.len() as u64,
+        mime: mime.to_owned(),
+    })
+}
+
+#[tauri::command]
 fn write_document(
     state: tauri::State<AppState>,
     doc_path: String,
@@ -1190,14 +1239,30 @@ fn upsert_file_state(conn: &Connection, file: &FileMetadata) -> Result<(), Strin
 }
 
 fn is_supported_artifact(path: &Path) -> bool {
-    path.file_name()
+    let visible = path
+        .file_name()
         .and_then(|name| name.to_str())
         .map(|name| !name.starts_with('.'))
-        .unwrap_or(false)
+        .unwrap_or(false);
+    if !visible {
+        return false;
+    }
+
+    matches!(
+        normalized_extension(path).as_str(),
+        "md" | "markdown" | "html" | "htm" | "png" | "json" | "txt" | "pdf"
+    )
 }
 
 fn markdown_extension(extension: &str) -> bool {
     extension == "md" || extension == "markdown"
+}
+
+fn normalized_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .unwrap_or_default()
 }
 
 fn resolve_personas(
@@ -1771,6 +1836,7 @@ fn main() {
             parse_document,
             save_document,
             open_document,
+            read_binary_artifact,
             write_document,
             load_sidecar,
             save_sidecar

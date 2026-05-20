@@ -889,7 +889,10 @@ button:hover {
 
 .source-panel,
 .rendered-panel,
-.html-panel {
+.html-panel,
+.json-panel,
+.image-panel,
+.pdf-panel {
   display: flex;
   min-height: 0;
   flex: 1;
@@ -1017,6 +1020,105 @@ button:hover {
   height: 100%;
   border: 0;
   background: var(--bg-doc);
+}
+
+.pdf-panel iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg-doc);
+}
+
+.image-panel {
+  align-items: center;
+  justify-content: center;
+  padding: 34px;
+  background: var(--bg-doc);
+}
+
+.image-frame {
+  display: grid;
+  max-width: 100%;
+  max-height: 100%;
+  gap: 14px;
+  justify-items: center;
+}
+
+.image-frame img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 210px);
+  object-fit: contain;
+}
+
+.image-frame p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.segmented-control {
+  display: inline-flex;
+  overflow: hidden;
+  border: 0.5px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--bg-sidebar);
+}
+
+.segmented-control button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.segmented-control button.active {
+  color: var(--accent-deep);
+  background: var(--accent-soft);
+}
+
+.json-panel {
+  overflow: auto;
+  padding: 28px 42px 48px;
+  background: var(--bg-doc);
+}
+
+.json-tree {
+  width: min(900px, 100%);
+  margin: 0 auto;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.json-tree details {
+  margin: 4px 0;
+}
+
+.json-tree summary,
+.json-leaf {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 24px;
+}
+
+.json-tree summary {
+  cursor: pointer;
+}
+
+.json-tree code,
+.json-leaf code {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.json-children {
+  margin-left: 18px;
+  border-left: 0.5px solid var(--border-soft);
+  padding-left: 12px;
 }
 
 .placeholder-document {

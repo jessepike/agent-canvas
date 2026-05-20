@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+base64.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 tauri = { workspace = true, default-features = false, features = ["wry"] }

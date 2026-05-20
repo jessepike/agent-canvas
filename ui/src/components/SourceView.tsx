@@ -1,3 +1,4 @@
+import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
@@ -6,12 +7,13 @@ import { useEffect, useRef } from "react";
 
 type SourceViewProps = {
   value: string;
+  language?: "markdown" | "json" | "plaintext";
   onChange: (next: string) => void;
   onOpen?: () => void;
   onSave?: () => void;
 };
 
-export function SourceView({ value, onChange, onOpen, onSave }: SourceViewProps) {
+export function SourceView({ value, language = "markdown", onChange, onOpen, onSave }: SourceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
@@ -42,6 +44,7 @@ export function SourceView({ value, onChange, onOpen, onSave }: SourceViewProps)
       return;
     }
 
+    const languageExtension = language === "json" ? json() : language === "markdown" ? markdown() : [];
     const view = new EditorView({
       parent,
       state: EditorState.create({
@@ -66,7 +69,7 @@ export function SourceView({ value, onChange, onOpen, onSave }: SourceViewProps)
             ])
           ),
           basicSetup,
-          markdown(),
+          languageExtension,
           EditorView.lineWrapping,
           EditorView.updateListener.of((update) => {
             if (!update.docChanged) {
@@ -90,7 +93,7 @@ export function SourceView({ value, onChange, onOpen, onSave }: SourceViewProps)
       view.destroy();
       viewRef.current = null;
     };
-  }, []);
+  }, [language]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -110,5 +113,5 @@ export function SourceView({ value, onChange, onOpen, onSave }: SourceViewProps)
     isApplyingExternalValueRef.current = false;
   }, [value]);
 
-  return <div ref={containerRef} className="source-view" aria-label="Markdown source" />;
+  return <div ref={containerRef} className="source-view" aria-label={`${language} source`} />;
 }

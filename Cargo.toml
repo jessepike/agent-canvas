@@ -12,6 +12,7 @@ license = "Apache-2.0"
 authors = ["Jesse Pike"]
 
 [workspace.dependencies]
+base64 = { version = "0.22" }
 blake3 = { version = "1" }
 libc = { version = "0.2" }
 notify = { version = "6" }
