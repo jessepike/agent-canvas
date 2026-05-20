@@ -26,9 +26,11 @@ import {
   moveFileToProject,
   openDocument,
   parseDocument,
+  renameFile,
   revealInFinder,
   reloadPersonaRegistry,
   renameProject,
+  sendMultiToClipboard,
   sendToClipboard,
   setDefaultActionVerb,
   setProjectDefaultAgent,
@@ -129,6 +131,12 @@ export default function App() {
   const [projectMenu, setProjectMenu] = useState<ProjectMenu>(null);
   const [renamingProject, setRenamingProject] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState<string | null>(null);
+  const [renamingFile, setRenamingFile] = useState<FileMetadata | null>(null);
+  const [conflictDialog, setConflictDialog] = useState<{
+    filename: string;
+    target: string;
+    resolve: (strategy: ConflictStrategy) => void;
+  } | null>(null);
   const [pendingSendPath, setPendingSendPath] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const currentProjectKey = currentProject ?? "Inbox";
@@ -549,6 +557,38 @@ export default function App() {
     }
   }, [currentProjectKey, sessions, setDefaultAgentForProject]);
 
+  const openConflictDialog = useCallback(
+    (filename: string, target: string): Promise<ConflictStrategy> => {
+      return new Promise((resolve) => {
+        setConflictDialog({ filename, target, resolve });
+      });
+    },
+    []
+  );
+
+  const renameSelectedFile = useCallback(
+    async (newName: string) => {
+      if (!renamingFile) return;
+      try {
+        const updated = await renameFile(renamingFile.path, newName);
+        setRenamingFile(null);
+        if (artifact?.path === renamingFile.path) {
+          setArtifact((current) => (current ? { ...current, path: updated.path } : current));
+        }
+        if (selectedPath === renamingFile.path) {
+          setSelectedPath(updated.path);
+        }
+        const message = `Renamed → ${updated.name}`;
+        setHandoffToast(message);
+        window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+        await refresh();
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [artifact, refresh, renamingFile, selectedPath]
+  );
+
   const toggleCurrentPin = useCallback(async () => {
     if (!artifact) {
       return;
@@ -606,7 +646,7 @@ export default function App() {
         return;
       }
       try {
-        const strategy = await conflictStrategyForTarget("project", file.name, project);
+        const strategy = await conflictStrategyForTarget("project", file.name, project, openConflictDialog);
         if (strategy === "cancel") {
           return;
         }
@@ -630,7 +670,7 @@ export default function App() {
   const moveKnownFileToProject = useCallback(
     async (file: FileMetadata, project: string) => {
       try {
-        const strategy = await conflictStrategyForTarget("project", file.name, project);
+        const strategy = await conflictStrategyForTarget("project", file.name, project, openConflictDialog);
         if (strategy === "cancel") {
           return;
         }
@@ -661,7 +701,7 @@ export default function App() {
         return;
       }
       try {
-        const strategy = await conflictStrategyForTarget("archive", file.name);
+        const strategy = await conflictStrategyForTarget("archive", file.name, undefined, openConflictDialog);
         if (strategy === "cancel") {
           return;
         }
@@ -682,7 +722,7 @@ export default function App() {
   const moveKnownFileToArchive = useCallback(
     async (file: FileMetadata) => {
       try {
-        const strategy = await conflictStrategyForTarget("archive", file.name);
+        const strategy = await conflictStrategyForTarget("archive", file.name, undefined, openConflictDialog);
         if (strategy === "cancel") {
           return;
         }
@@ -911,6 +951,10 @@ export default function App() {
       if (event.key === "/") {
         event.preventDefault();
         searchRef.current?.focus();
+      }
+      if (event.key === "F2" && selectedFile) {
+        event.preventDefault();
+        setRenamingFile(selectedFile);
       }
       if (event.key === "?") {
         event.preventDefault();
@@ -1370,6 +1414,9 @@ export default function App() {
               <button type="button" onClick={() => { setFileMenu(null); void togglePin(fileMenu.file.path).then(refresh); }}>
                 Toggle Pin (⌘P)
               </button>
+              <button type="button" onClick={() => { setRenamingFile(fileMenu.file); setFileMenu(null); }}>
+                Rename... (F2)
+              </button>
               <div className="context-menu-label">File to Project</div>
               {projects.map((project) => (
                 <button key={project} type="button" onClick={() => void moveKnownFileToProject(fileMenu.file, project)}>
@@ -1450,7 +1497,122 @@ export default function App() {
             onDelete={() => void confirmProjectDelete(deletingProject)}
           />
         ) : null}
+        {renamingFile ? (
+          <RenameFileDialog
+            file={renamingFile}
+            onCancel={() => setRenamingFile(null)}
+            onRename={(nextName) => void renameSelectedFile(nextName)}
+          />
+        ) : null}
+        {conflictDialog ? (
+          <ConflictDialog
+            filename={conflictDialog.filename}
+            target={conflictDialog.target}
+            onResolve={(strategy) => {
+              conflictDialog.resolve(strategy);
+              setConflictDialog(null);
+            }}
+          />
+        ) : null}
     </main>
+  );
+}
+
+type RenameFileDialogProps = {
+  file: FileMetadata;
+  onCancel: () => void;
+  onRename: (newName: string) => void;
+};
+
+function RenameFileDialog({ file, onCancel, onRename }: RenameFileDialogProps) {
+  const [value, setValue] = useState(file.name);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    const lastDot = file.name.lastIndexOf(".");
+    if (lastDot > 0) {
+      inputRef.current?.setSelectionRange(0, lastDot);
+    } else {
+      inputRef.current?.select();
+    }
+  }, [file.name]);
+
+  const submit = () => {
+    const trimmed = value.trim();
+    if (trimmed && trimmed !== file.name) {
+      onRename(trimmed);
+    } else {
+      onCancel();
+    }
+  };
+
+  return (
+    <div className="palette-backdrop" onMouseDown={onCancel}>
+      <div className="rename-dialog" onMouseDown={(event) => event.stopPropagation()}>
+        <header>Rename {file.name}</header>
+        <input
+          ref={inputRef}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              submit();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              onCancel();
+            }
+          }}
+        />
+        <footer>
+          <button type="button" onClick={onCancel}>Cancel</button>
+          <button type="button" className="primary" onClick={submit}>Rename</button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+type ConflictDialogProps = {
+  filename: string;
+  target: string;
+  onResolve: (strategy: ConflictStrategy) => void;
+};
+
+function ConflictDialog({ filename, target, onResolve }: ConflictDialogProps) {
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onResolve("cancel");
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        onResolve("keep_both");
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onResolve]);
+
+  return (
+    <div className="palette-backdrop" onMouseDown={() => onResolve("cancel")}>
+      <div className="rename-dialog" onMouseDown={(event) => event.stopPropagation()}>
+        <header>Replace {filename}?</header>
+        <p style={{ margin: "0 0 4px", color: "var(--text-secondary)", fontSize: 13 }}>
+          A file with this name already exists in {target}.
+        </p>
+        <footer style={{ flexWrap: "wrap", gap: 8 }}>
+          <button type="button" onClick={() => onResolve("cancel")}>Cancel</button>
+          <button type="button" onClick={() => onResolve("replace")} style={{ borderColor: "var(--diff-rem-strong)", color: "var(--diff-rem-strong)" }}>
+            Replace
+          </button>
+          <button type="button" className="primary" onClick={() => onResolve("keep_both")}>
+            Keep Both
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }
 
@@ -1749,20 +1911,15 @@ function pathsFromDataTransfer(dataTransfer: DataTransfer | null): string[] {
 async function conflictStrategyForTarget(
   target: "project" | "archive",
   filename: string,
-  project?: string
+  project: string | undefined,
+  openConflictDialog: (filename: string, target: string) => Promise<ConflictStrategy>
 ): Promise<ConflictStrategy> {
   const exists = await targetFileExists(target, filename, project);
   if (!exists) {
     return "keep_both";
   }
-  const answer = window.prompt(`Replace ${filename}? Type "replace", "keep", or "cancel".`, "keep");
-  if (answer?.toLowerCase() === "replace") {
-    return "replace";
-  }
-  if (answer?.toLowerCase() === "keep") {
-    return "keep_both";
-  }
-  return "cancel";
+  const targetLabel = target === "archive" ? "Archive" : (project ?? "the project");
+  return openConflictDialog(filename, targetLabel);
 }
 
 function moveSelection(

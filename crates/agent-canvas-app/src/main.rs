@@ -575,6 +575,55 @@ fn delete_file(state: tauri::State<AppState>, path: String) -> Result<(), String
 }
 
 #[tauri::command]
+fn rename_file(
+    state: tauri::State<AppState>,
+    old_path: String,
+    new_name: String,
+) -> Result<FileMetadata, String> {
+    let paths = state.paths()?;
+    let source = path_within_canvas(&paths.canvas_root, Path::new(&old_path))?;
+    ensure_regular_file(&source)?;
+
+    if new_name.is_empty()
+        || new_name.contains('/')
+        || new_name.contains('\\')
+        || new_name == "."
+        || new_name == ".."
+    {
+        return Err("invalid new name".to_owned());
+    }
+
+    let parent = source
+        .parent()
+        .ok_or_else(|| "source has no parent directory".to_owned())?;
+    let target = parent.join(&new_name);
+
+    if target.exists() {
+        return Err(format!("a file named '{new_name}' already exists here"));
+    }
+
+    let target_bounded = path_within_canvas(&paths.canvas_root, &target)?;
+    fs::rename(&source, &target_bounded).map_err(|error| error.to_string())?;
+
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute(
+        "UPDATE files SET path = ?1 WHERE path = ?2",
+        params![
+            target_bounded.to_string_lossy(),
+            source.to_string_lossy()
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+
+    let mut file = metadata_for_file(&target_bounded, &paths.canvas_root)?;
+    hydrate_file_state(&conn, &mut file)?;
+    Ok(file)
+}
+
+#[tauri::command]
 fn send_to_clipboard(
     state: tauri::State<AppState>,
     payload: SendPayload,
@@ -588,6 +637,30 @@ fn send_to_clipboard(
         action_verb: payload.action_verb,
     };
     let formatted = format_send_payload(&payload, &paths.canvas_root)?;
+    write_clipboard(&formatted)?;
+    Ok(formatted)
+}
+
+#[tauri::command]
+fn send_multi_to_clipboard(
+    state: tauri::State<AppState>,
+    payloads: Vec<SendPayload>,
+) -> Result<String, String> {
+    if payloads.is_empty() {
+        return Err("no files to send".to_owned());
+    }
+    let paths = state.paths()?;
+    let mut bounded: Vec<SendPayload> = Vec::with_capacity(payloads.len());
+    for payload in payloads {
+        let bounded_path = path_within_canvas(&paths.canvas_root, Path::new(&payload.path))?;
+        bounded.push(SendPayload {
+            path: bounded_path.to_string_lossy().into_owned(),
+            contents: payload.contents,
+            note: payload.note,
+            action_verb: payload.action_verb,
+        });
+    }
+    let formatted = format_send_multi_payload(&bounded, &paths.canvas_root)?;
     write_clipboard(&formatted)?;
     Ok(formatted)
 }
@@ -1487,6 +1560,47 @@ fn format_send_payload(payload: &SendPayload, canvas_root: &Path) -> Result<Stri
     ))
 }
 
+fn format_send_multi_payload(
+    payloads: &[SendPayload],
+    canvas_root: &Path,
+) -> Result<String, String> {
+    let count = payloads.len();
+    let first = &payloads[0];
+    let note = first.note.as_deref().unwrap_or("").trim();
+    let note_block = if note.is_empty() {
+        String::new()
+    } else {
+        format!("My note: {note}\n\n")
+    };
+    let action = first.action_verb.trim();
+    let action = if action.is_empty() { "Review" } else { action };
+
+    let mut out = format!(
+        "I'm sending you {count} files from my AgentCanvas.\n\n{note_block}"
+    );
+
+    for (index, payload) in payloads.iter().enumerate() {
+        let relative_path = relative_canvas_path(&payload.path, canvas_root)?;
+        let language = language_from_path(&payload.path);
+        let fence = if language.is_empty() {
+            "```".to_owned()
+        } else {
+            format!("```{language}")
+        };
+        out.push_str(&format!(
+            "---\n\nFile {} of {}: `{}`\n{}\n{}\n```\n\n",
+            index + 1,
+            count,
+            relative_path,
+            fence,
+            payload.contents
+        ));
+    }
+
+    out.push_str(&format!("Action: {action}"));
+    Ok(out)
+}
+
 fn relative_canvas_path(path: &str, canvas_root: &Path) -> Result<String, String> {
     let path = Path::new(path);
     let relative = path
@@ -1625,7 +1739,9 @@ fn main() {
             copy_text_to_clipboard,
             reveal_in_finder,
             delete_file,
+            rename_file,
             send_to_clipboard,
+            send_multi_to_clipboard,
             list_agent_sessions,
             add_agent_session,
             parse_document,

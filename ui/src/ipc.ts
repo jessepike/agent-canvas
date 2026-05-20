@@ -224,6 +224,24 @@ export async function sendToClipboard(payload: SendPayload): Promise<string> {
   }
 }
 
+export async function sendMultiToClipboard(payloads: SendPayload[]): Promise<string> {
+  try {
+    const result = await invoke<unknown>("send_multi_to_clipboard", { payloads });
+    return z.string().parse(result);
+  } catch (caught) {
+    throw ipcError("send_multi_to_clipboard", caught);
+  }
+}
+
+export async function renameFile(oldPath: string, newName: string): Promise<FileMetadata> {
+  try {
+    const result = await invoke<unknown>("rename_file", { oldPath, newName });
+    return FileMetadata.parse(result);
+  } catch (caught) {
+    throw ipcError("rename_file", caught);
+  }
+}
+
 export async function togglePin(path: string): Promise<boolean> {
   try {
     const result = await invoke<unknown>("toggle_pin", { path });
