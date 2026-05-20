@@ -1,10 +1,29 @@
 ---
 project: agent-canvas
 updated: 2026-05-19
-stage: v0.1.1 patch implemented
+stage: v0.2-finish Slice 2 implemented
 ---
 
 # AgentCanvas — Status
+
+## v0.2-finish Slice 2 Summary
+
+Slice 2 of `docs/BUILD-SPEC-v0.2-finish.md` was implemented on 2026-05-19.
+
+- Removed the fake in-app window chrome; `.main-shell` now fills the native Tauri window.
+- Moved Rescan and `+` file ingest actions into the artifact toolbar and kept them visible without requiring an open artifact.
+- Wired search filtering for inbox, project, archive, and pinned views, including Esc clearing and Cmd-F focus.
+- Added real sidebar project counts via `list_project_counts`.
+- Added project row context menu with Open, Rename, and Delete flows; rename/delete are backed by path-bounded Tauri commands and in-app dialogs.
+- Added command-palette persona registry reload via `reload_persona_registry`.
+
+Verification:
+
+- `orb run -m dev sh -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/agent-canvas/ui && pnpm build'` passes. Vite reports the known large-chunk warning.
+- `orb run -m dev sh -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/agent-canvas/crates/agent-canvas-app && cargo check'` passes.
+- `orb run -m dev sh -lc 'cd /mnt/mac/Users/jessepike/code/sandbox/agent-canvas && cargo test --bin agent-canvas-app 2>&1 | tail -10'` passes: 6 tests.
+
+No commit was made; orchestrator commits from host.
 
 ## v0.1.1 Patch Summary
 

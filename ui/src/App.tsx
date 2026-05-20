@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { listen, TauriEvent } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { RenderedView } from "./components/RenderedView";
@@ -9,6 +10,7 @@ import {
   copyPathsToInbox,
   copyTextToClipboard,
   deleteFile,
+  deleteProjectIfEmpty,
   getDefaultActionVerb,
   getBootstrapInfo,
   getProjectDefaultAgent,
@@ -18,12 +20,15 @@ import {
   listPinned,
   listProjectFiles,
   listPersonas,
+  listProjectCounts,
   listProjects,
   moveFileToArchive,
   moveFileToProject,
   openDocument,
   parseDocument,
   revealInFinder,
+  reloadPersonaRegistry,
+  renameProject,
   sendToClipboard,
   setDefaultActionVerb,
   setProjectDefaultAgent,
@@ -69,17 +74,25 @@ type FileMenu = {
   file: FileMetadata;
 } | null;
 
+type ProjectMenu = {
+  x: number;
+  y: number;
+  project: string;
+} | null;
+
 const ACTION_VERBS = ["Review", "Revise", "Expand", "Critique", "Summarize", "Respond to"] as const;
 
 export default function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapInfo | null>(null);
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
+  const [projectCounts, setProjectCounts] = useState<Map<string, number>>(new Map());
   const [mode, setMode] = useState<"inbox" | "project" | "archive" | "pinned">("inbox");
   const [currentProject, setCurrentProject] = useState<string | null>(null);
   const [projectFiles, setProjectFiles] = useState<FileMetadata[]>([]);
   const [archiveFiles, setArchiveFiles] = useState<FileMetadata[]>([]);
   const [pinnedFiles, setPinnedFiles] = useState<FileMetadata[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
   const [personas, setPersonas] = useState<PersonaRegistry | null>(null);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [showSessionForm, setShowSessionForm] = useState(false);
@@ -113,6 +126,9 @@ export default function App() {
   const [arrivedPaths, setArrivedPaths] = useState<Set<string>>(new Set());
   const [agentMenu, setAgentMenu] = useState<AgentMenu>(null);
   const [fileMenu, setFileMenu] = useState<FileMenu>(null);
+  const [projectMenu, setProjectMenu] = useState<ProjectMenu>(null);
+  const [renamingProject, setRenamingProject] = useState<string | null>(null);
+  const [deletingProject, setDeletingProject] = useState<string | null>(null);
   const [pendingSendPath, setPendingSendPath] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const currentProjectKey = currentProject ?? "Inbox";
@@ -121,10 +137,21 @@ export default function App() {
     setIsLoading(true);
     setError(null);
     try {
-      const [nextBootstrap, nextFiles, nextProjects, nextPersonas, nextSessions, nextDefaultVerb, nextPinned, nextArchive] = await Promise.all([
+      const [
+        nextBootstrap,
+        nextFiles,
+        nextProjects,
+        nextProjectCounts,
+        nextPersonas,
+        nextSessions,
+        nextDefaultVerb,
+        nextPinned,
+        nextArchive
+      ] = await Promise.all([
         getBootstrapInfo(),
         listInbox(),
         listProjects(),
+        listProjectCounts(),
         listPersonas(),
         listAgentSessions(),
         getDefaultActionVerb(),
@@ -134,6 +161,7 @@ export default function App() {
       setBootstrap(nextBootstrap);
       setFiles(nextFiles);
       setProjects(nextProjects);
+      setProjectCounts(nextProjectCounts);
       setPersonas(nextPersonas);
       setSessions(nextSessions);
       setDefaultActionVerbState(nextDefaultVerb);
@@ -169,6 +197,31 @@ export default function App() {
     () => [...files, ...projectFiles, ...archiveFiles, ...pinnedFiles].find((file) => file.path === selectedPath) ?? null,
     [archiveFiles, files, pinnedFiles, projectFiles, selectedPath]
   );
+  const filteredFiles = useMemo(() => filterFilesByQuery(files, mode === "inbox" ? searchQuery : ""), [files, mode, searchQuery]);
+  const filteredProjectFiles = useMemo(
+    () => filterFilesByQuery(projectFiles, mode === "project" ? searchQuery : ""),
+    [mode, projectFiles, searchQuery]
+  );
+  const filteredArchiveFiles = useMemo(
+    () => filterFilesByQuery(archiveFiles, mode === "archive" ? searchQuery : ""),
+    [archiveFiles, mode, searchQuery]
+  );
+  const filteredPinnedFiles = useMemo(
+    () => filterFilesByQuery(pinnedFiles, mode === "pinned" ? searchQuery : ""),
+    [mode, pinnedFiles, searchQuery]
+  );
+  const visibleFiles = useMemo(() => {
+    if (mode === "archive") {
+      return filteredArchiveFiles;
+    }
+    if (mode === "pinned") {
+      return filteredPinnedFiles;
+    }
+    if (mode === "project") {
+      return filteredProjectFiles;
+    }
+    return filteredFiles;
+  }, [filteredArchiveFiles, filteredFiles, filteredPinnedFiles, filteredProjectFiles, mode]);
   const sendButtonLabel = useMemo(
     () => sendLabelForSessions(sessions, defaultAgentId),
     [defaultAgentId, sessions]
@@ -252,6 +305,7 @@ export default function App() {
         const nextFiles = await listProjectFiles(project);
         setMode("project");
         setCurrentProject(project);
+        setSearchQuery("");
         setProjectFiles(nextFiles);
         if (nextFiles[0]) {
           await openArtifact(nextFiles[0]);
@@ -271,6 +325,7 @@ export default function App() {
       const nextFiles = await listArchive();
       setMode("archive");
       setCurrentProject(null);
+      setSearchQuery("");
       setArchiveFiles(nextFiles);
       if (nextFiles[0]) {
         await openArtifact(nextFiles[0]);
@@ -288,6 +343,7 @@ export default function App() {
       const nextFiles = await listPinned();
       setMode("pinned");
       setCurrentProject(null);
+      setSearchQuery("");
       setPinnedFiles(nextFiles);
       if (nextFiles[0]) {
         await openArtifact(nextFiles[0]);
@@ -303,6 +359,7 @@ export default function App() {
   const openInbox = useCallback(() => {
     setMode("inbox");
     setCurrentProject(null);
+    setSearchQuery("");
   }, []);
 
   const reloadOpenArtifact = useCallback(async () => {
@@ -660,6 +717,66 @@ export default function App() {
     [artifact?.path, refresh]
   );
 
+  const reloadPersonas = useCallback(async () => {
+    try {
+      const nextPersonas = await reloadPersonaRegistry();
+      setPersonas(nextPersonas);
+      const message = "Persona registry reloaded";
+      setHandoffToast(message);
+      window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, []);
+
+  const submitProjectRename = useCallback(
+    async (oldName: string, newName: string) => {
+      try {
+        await renameProject(oldName, newName);
+        setRenamingProject(null);
+        if (currentProject === oldName) {
+          setCurrentProject(newName);
+          setProjectFiles(await listProjectFiles(newName));
+        }
+        const message = `Renamed ${oldName} to ${newName}`;
+        setHandoffToast(message);
+        window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+        await refresh();
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    },
+    [currentProject, refresh]
+  );
+
+  const confirmProjectDelete = useCallback(
+    async (name: string) => {
+      try {
+        await deleteProjectIfEmpty(name);
+        setDeletingProject(null);
+        if (currentProject === name) {
+          setCurrentProject(null);
+          setMode("inbox");
+          setProjectFiles([]);
+          setArtifact(null);
+          setSelectedPath(null);
+        }
+        const message = `Deleted ${name}`;
+        setHandoffToast(message);
+        window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 2500);
+        await refresh();
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        setError(message);
+        if (message === "Move files out before deleting project") {
+          setHandoffToast(message);
+          window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3000);
+        }
+      }
+    },
+    [currentProject, refresh]
+  );
+
   const sendFileFromMenu = useCallback(
     async (file: FileMetadata) => {
       setFileMenu(null);
@@ -721,6 +838,7 @@ export default function App() {
       { section: "ACTIONS", label: "Toggle Pin", run: toggleCurrentPin },
       { section: "ACTIONS", label: "Archive", run: archiveCurrent },
       { section: "ACTIONS", label: "Switch Agent Default...", run: switchAgentDefault },
+      { section: "COMMANDS", label: "Reload Persona Registry", run: reloadPersonas },
       { section: "COMMANDS", label: "Open Project", run: () => projects[0] && void openProject(projects[0]) }
     ];
     const fileItems = files.map((file) => ({
@@ -731,11 +849,23 @@ export default function App() {
     const allItems = [...actions, ...fileItems];
     const query = paletteQuery.trim().toLowerCase();
     return query ? allItems.filter((item) => item.label.toLowerCase().includes(query)) : allItems;
-  }, [archiveCurrent, files, openArtifact, openProject, openSendPopover, paletteQuery, projects, sendButtonLabel, switchAgentDefault, toggleCurrentPin]);
+  }, [archiveCurrent, files, openArtifact, openProject, openSendPopover, paletteQuery, projects, reloadPersonas, sendButtonLabel, switchAgentDefault, toggleCurrentPin]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+        return;
+      }
       if (isTextInput(event.target)) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSearchQuery("");
+        setSelectedPath(null);
         return;
       }
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -748,11 +878,11 @@ export default function App() {
       }
       if (event.key === "j") {
         event.preventDefault();
-        moveSelection(1, files, selectedPath, setSelectedPath);
+        moveSelection(1, visibleFiles, selectedPath, setSelectedPath);
       }
       if (event.key === "k") {
         event.preventDefault();
-        moveSelection(-1, files, selectedPath, setSelectedPath);
+        moveSelection(-1, visibleFiles, selectedPath, setSelectedPath);
       }
       if (event.key === "Enter" && selectedFile) {
         event.preventDefault();
@@ -788,12 +918,12 @@ export default function App() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [
     archiveCurrent,
-    files,
     openArtifact,
     selectedFile,
     selectedPath,
     openSendPopover,
-    toggleCurrentPin
+    toggleCurrentPin,
+    visibleFiles
   ]);
 
   useEffect(() => {
@@ -803,28 +933,24 @@ export default function App() {
   }, [paletteIndex, paletteItems.length]);
 
   return (
-    <main className="desktop">
-      <section className="window-shell" aria-label="AgentCanvas">
-        <header className="titlebar">
-          <div className="traffic-lights" aria-hidden="true">
-            <span className="tl tl-close" />
-            <span className="tl tl-min" />
-            <span className="tl tl-max" />
-          </div>
-          <div className="titlebar-title">AgentCanvas</div>
-          <button className="titlebar-action" type="button" onClick={refresh} disabled={isLoading}>
-            {isLoading ? "Scanning" : "Rescan"}
-          </button>
-          <button className="titlebar-open" type="button" onClick={() => void openFileDialog()} aria-label="Open file">
-            +
-          </button>
-        </header>
-        <div className="main-shell">
+    <main className="main-shell" aria-label="AgentCanvas">
           <aside className="sidebar">
             <div className="sidebar-header">
               <label className="search">
                 <span>Search</span>
-                <input ref={searchRef} placeholder="Search artifacts" />
+                <input
+                  ref={searchRef}
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setSearchQuery("");
+                      setSelectedPath(null);
+                    }
+                  }}
+                  placeholder="Search artifacts"
+                />
               </label>
             </div>
             <button
@@ -840,13 +966,13 @@ export default function App() {
               onDragEnter={() => setDropTarget("inbox")}
               onDragLeave={() => setDropTarget((current) => (current === "inbox" ? null : current))}
             >
-              {files.length === 0 ? (
+              {filteredFiles.length === 0 ? (
                 <div className="empty-list">
-                  Empty inbox
+                  {searchQuery && mode === "inbox" ? "No matching artifacts" : "Empty inbox"}
                   <span>{bootstrap?.inbox_dir ?? "~/iCloud/AgentCanvas/Inbox"}</span>
                 </div>
               ) : (
-                files.map((file) => (
+                filteredFiles.map((file) => (
                   <button
                     className={`file-row ${file.path === selectedPath ? "selected" : ""} ${
                       arrivedPaths.has(file.path) ? "just-arrived" : ""
@@ -913,10 +1039,14 @@ export default function App() {
                     void moveInboxFileToProject(path, project);
                   }
                 }}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setProjectMenu({ x: event.clientX, y: event.clientY, project });
+                }}
                 onClick={() => void openProject(project)}
               >
                 <span>{project}</span>
-                <span className="file-time">0</span>
+                <span className="file-time">{projectCounts.get(project) ?? 0}</span>
               </button>
             ))}
             <button
@@ -950,11 +1080,11 @@ export default function App() {
                   {mode === "archive" ? "Archive" : mode === "pinned" ? "★ Pinned" : currentProject}
                 </div>
                 <div className="middle-project-meta">
-                  {(mode === "archive" ? archiveFiles : mode === "pinned" ? pinnedFiles : projectFiles).length} artifacts
+                  {visibleFiles.length} artifacts
                 </div>
               </div>
               <div className="middle-list">
-                {(mode === "archive" ? archiveFiles : mode === "pinned" ? pinnedFiles : projectFiles).map((file) => (
+                {visibleFiles.map((file) => (
                   <button
                     className={`middle-file ${file.path === selectedPath ? "selected" : ""} ${file.pinned ? "pinned" : ""}`}
                     key={file.path}
@@ -977,6 +1107,14 @@ export default function App() {
           ) : null}
           <section className="content-pane">
             <div className="toolbar">
+              <div className="toolbar-global-actions">
+                <button type="button" onClick={refresh} disabled={isLoading}>
+                  {isLoading ? "Scanning" : "Rescan"}
+                </button>
+                <button type="button" onClick={() => void openFileDialog()} aria-label="Open file">
+                  +
+                </button>
+              </div>
               <div className="breadcrumb">
                 {mode === "archive" ? "Archive" : mode === "pinned" ? "★ Pinned" : mode === "project" ? (currentProject ?? "Project") : "Inbox"}
                 <span>/</span> <strong>{selectedFile?.name ?? "Select a file"}</strong>
@@ -1122,7 +1260,6 @@ export default function App() {
               </div>
             </aside>
           )}
-        </div>
         {paletteOpen ? (
           <div className="palette-backdrop" onMouseDown={() => setPaletteOpen(false)}>
             <section className="palette" onMouseDown={(event) => event.stopPropagation()}>
@@ -1266,7 +1403,39 @@ export default function App() {
             </div>
           </div>
         ) : null}
-      </section>
+        {projectMenu ? (
+          <div className="context-menu-backdrop" onMouseDown={() => setProjectMenu(null)}>
+            <div
+              className="context-menu"
+              style={{ left: projectMenu.x, top: projectMenu.y }}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <button type="button" onClick={() => { const project = projectMenu.project; setProjectMenu(null); void openProject(project); }}>
+                Open
+              </button>
+              <button type="button" onClick={() => { setRenamingProject(projectMenu.project); setProjectMenu(null); }}>
+                Rename...
+              </button>
+              <button className="danger-item" type="button" onClick={() => { setDeletingProject(projectMenu.project); setProjectMenu(null); }}>
+                Delete...
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {renamingProject ? (
+          <ProjectRenameDialog
+            project={renamingProject}
+            onCancel={() => setRenamingProject(null)}
+            onRename={(nextName) => void submitProjectRename(renamingProject, nextName)}
+          />
+        ) : null}
+        {deletingProject ? (
+          <ProjectDeleteDialog
+            project={deletingProject}
+            onCancel={() => setDeletingProject(null)}
+            onDelete={() => void confirmProjectDelete(deletingProject)}
+          />
+        ) : null}
     </main>
   );
 }
@@ -1394,6 +1563,105 @@ function SendPopover({
   );
 }
 
+type ProjectRenameDialogProps = {
+  project: string;
+  onCancel: () => void;
+  onRename: (name: string) => void;
+};
+
+function ProjectRenameDialog({ project, onCancel, onRename }: ProjectRenameDialogProps) {
+  const [name, setName] = useState(project);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  return (
+    <div className="dialog-backdrop" onMouseDown={onCancel}>
+      <form
+        className="send-popover project-dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          const nextName = name.trim();
+          if (nextName && nextName !== project) {
+            onRename(nextName);
+          } else {
+            onCancel();
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+          }
+          trapFocusWithin(event);
+        }}
+      >
+        <header>Rename Project</header>
+        <label className="send-note">
+          <span>Name</span>
+          <input ref={inputRef} value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <footer>
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="primary" type="submit" disabled={!name.trim() || name.trim() === project}>
+            Rename
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
+type ProjectDeleteDialogProps = {
+  project: string;
+  onCancel: () => void;
+  onDelete: () => void;
+};
+
+function ProjectDeleteDialog({ project, onCancel, onDelete }: ProjectDeleteDialogProps) {
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
+
+  return (
+    <div className="dialog-backdrop" onMouseDown={onCancel}>
+      <section
+        className="send-popover project-dialog"
+        onMouseDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+          }
+          trapFocusWithin(event);
+        }}
+      >
+        <header>Delete Project</header>
+        <div className="dialog-copy">
+          <strong>{project}</strong>
+          <span>Only empty projects can be deleted. Move files out before deleting.</span>
+        </div>
+        <footer>
+          <button ref={cancelRef} type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="danger-item" type="button" onClick={onDelete}>
+            Delete
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 function markdownExtension(extension: string): boolean {
   return extension === "md" || extension === "markdown";
 }
@@ -1485,6 +1753,37 @@ function moveSelection(
   const current = files.findIndex((file) => file.path === selectedPath);
   const next = current === -1 ? 0 : Math.min(files.length - 1, Math.max(0, current + direction));
   setSelectedPath(files[next]?.path ?? null);
+}
+
+function filterFilesByQuery(files: FileMetadata[], query: string): FileMetadata[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return files;
+  }
+  return files.filter((file) => file.name.toLowerCase().includes(normalized));
+}
+
+function trapFocusWithin(event: ReactKeyboardEvent<HTMLElement>) {
+  if (event.key !== "Tab") {
+    return;
+  }
+  const focusable = Array.from(
+    event.currentTarget.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+  );
+  if (focusable.length === 0) {
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 function isTextInput(target: EventTarget | null): boolean {

@@ -137,6 +137,32 @@ export async function listProjects(): Promise<string[]> {
   }
 }
 
+export async function listProjectCounts(): Promise<Map<string, number>> {
+  try {
+    const result = await invoke<unknown>("list_project_counts");
+    const counts = z.record(z.string(), z.number()).parse(result);
+    return new Map(Object.entries(counts));
+  } catch (caught) {
+    throw ipcError("list_project_counts", caught);
+  }
+}
+
+export async function renameProject(oldName: string, newName: string): Promise<void> {
+  try {
+    await invoke<unknown>("rename_project", { old: oldName, new: newName });
+  } catch (caught) {
+    throw ipcError("rename_project", caught);
+  }
+}
+
+export async function deleteProjectIfEmpty(name: string): Promise<void> {
+  try {
+    await invoke<unknown>("delete_project_if_empty", { name });
+  } catch (caught) {
+    throw ipcError("delete_project_if_empty", caught);
+  }
+}
+
 export async function getProjectDefaultAgent(project: string): Promise<string | null> {
   try {
     const result = await invoke<unknown>("get_project_default_agent", { project });
@@ -160,6 +186,15 @@ export async function listPersonas(): Promise<PersonaRegistry> {
     return PersonaRegistry.parse(result);
   } catch (caught) {
     throw ipcError("list_personas", caught);
+  }
+}
+
+export async function reloadPersonaRegistry(): Promise<PersonaRegistry> {
+  try {
+    const result = await invoke<unknown>("reload_persona_registry");
+    return PersonaRegistry.parse(result);
+  } catch (caught) {
+    throw ipcError("reload_persona_registry", caught);
   }
 }
 

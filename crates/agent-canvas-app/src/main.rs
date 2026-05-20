@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -226,6 +227,99 @@ fn list_projects(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+fn list_project_counts(state: tauri::State<AppState>) -> Result<HashMap<String, usize>, String> {
+    let paths = state.paths()?;
+    let mut counts = HashMap::new();
+    for entry in fs::read_dir(&paths.projects_dir).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        if !entry
+            .file_type()
+            .map_err(|error| error.to_string())?
+            .is_dir()
+        {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let project_dir = path_within_canvas(&paths.canvas_root, &entry.path())?;
+        let count = WalkDir::new(project_dir)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file() && is_supported_artifact(entry.path()))
+            .count();
+        counts.insert(name, count);
+    }
+    Ok(counts)
+}
+
+#[tauri::command]
+fn rename_project(state: tauri::State<AppState>, old: String, new: String) -> Result<(), String> {
+    let paths = state.paths()?;
+    let old = safe_project_segment(&old)?;
+    let new = safe_project_segment(&new)?;
+    if new.contains("..") {
+        return Err("invalid project name".to_owned());
+    }
+
+    let old_dir = path_within_canvas(&paths.canvas_root, &paths.projects_dir.join(old))?;
+    if !old_dir.exists() {
+        return Err("project not found".to_owned());
+    }
+    let new_dir = path_within_canvas(&paths.canvas_root, &paths.projects_dir.join(new))?;
+    if new_dir.exists() {
+        return Err("project already exists".to_owned());
+    }
+
+    fs::rename(&old_dir, &new_dir).map_err(|error| error.to_string())?;
+
+    let old_segment = format!("/Projects/{old}/");
+    let new_segment = format!("/Projects/{new}/");
+    let like_pattern = format!("%{old_segment}%");
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute(
+        "UPDATE files SET path = REPLACE(path, ?1, ?2) WHERE path LIKE ?3",
+        params![old_segment, new_segment, like_pattern],
+    )
+    .map_err(|error| error.to_string())?;
+    conn.execute(
+        "UPDATE projects SET name = ?1, updated_at = strftime('%s','now') WHERE name = ?2",
+        params![new, old],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_project_if_empty(state: tauri::State<AppState>, name: String) -> Result<(), String> {
+    let paths = state.paths()?;
+    let name = safe_project_segment(&name)?;
+    let project_dir = path_within_canvas(&paths.canvas_root, &paths.projects_dir.join(name))?;
+    if !project_dir.exists() {
+        return Err("project not found".to_owned());
+    }
+    let has_artifacts = WalkDir::new(&project_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .any(|entry| entry.file_type().is_file() && is_supported_artifact(entry.path()));
+    if has_artifacts {
+        return Err("Move files out before deleting project".to_owned());
+    }
+
+    fs::remove_dir(&project_dir).map_err(|error| error.to_string())?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute("DELETE FROM projects WHERE name = ?1", params![name])
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn get_project_default_agent(
     state: tauri::State<AppState>,
     project: String,
@@ -280,6 +374,12 @@ fn set_project_default_agent(
 
 #[tauri::command]
 fn list_personas(state: tauri::State<AppState>) -> Result<PersonaRegistry, String> {
+    let paths = state.paths()?;
+    resolve_personas(&paths.persona_registry, &state.db)
+}
+
+#[tauri::command]
+fn reload_persona_registry(state: tauri::State<AppState>) -> Result<PersonaRegistry, String> {
     let paths = state.paths()?;
     resolve_personas(&paths.persona_registry, &state.db)
 }
@@ -1358,12 +1458,16 @@ fn main() {
             bootstrap_info,
             list_inbox,
             list_projects,
+            list_project_counts,
+            rename_project,
+            delete_project_if_empty,
             list_project_files,
             list_archive,
             list_pinned,
             get_project_default_agent,
             set_project_default_agent,
             list_personas,
+            reload_persona_registry,
             get_default_action_verb,
             set_default_action_verb,
             toggle_pin,
