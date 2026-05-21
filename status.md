@@ -1,10 +1,32 @@
 ---
 project: agent-canvas
 updated: 2026-05-21
-stage: v0.3 Slice 6 implemented
+stage: v0.3 Slice 7 implemented
 ---
 
 # AgentCanvas — Status
+
+## v0.3 Slice 7 Summary (2026-05-21)
+
+Slice 7 of `docs/BUILD-SPEC-v0.3.md` is implemented.
+
+- Unified the agent panel session model so manual sessions and live MCP sessions share `source`, `persona`, `agent`, `project`, `connected_at`, `last_active`, `is_live`, and `attached_paths`.
+- Added live MCP rows to the agent panel with connected status dots, `persona·agent` labels, project labels, attached artifact sub-items, and a Disconnect action.
+- Added manual session Remove from the same panel while keeping the manual add form.
+- Added `disconnect_mcp_session`, which sends `notifications/shutdown`, removes the MCP session row and attachments, and closes the connection through the session close signal.
+- Added one-click MCP installers for Claude Code, Codex, and Cursor with atomic config writes and idempotent entry replacement.
+- Added MCP-side persona cache reload wiring from `reload_persona_registry`.
+- Added `docs/mcp-clients.md` and `docs/claude-md-template.md`.
+- Wrote the implementation report to `docs/active/codex-slice7-v0.3-report-2026-05-21.md`.
+
+Verification:
+
+- `cd crates/agent-canvas-app && cargo check -q` passes with the pre-existing ts-rs sidecar warning.
+- `cd crates/agent-canvas-app && cargo test --bin agent-canvas-app 2>&1 | tail -25` passes: 47 tests.
+- `cd crates/agent-canvas-mcp && cargo build` passes.
+- `cd ui && ./node_modules/.bin/tsc --noEmit` passes.
+- `cd ui && ./node_modules/.bin/vite build 2>&1 | tail -3` passes with the known chunk-size warning.
+- `grep -rn 'allow-same-origin\|allow-modals' ui/src/ | grep -v '\.test\.' | wc -l` returns `0`.
 
 ## v0.3 Slice 6 Summary (2026-05-21)
 

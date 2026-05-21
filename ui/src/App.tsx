@@ -17,6 +17,9 @@ import {
   getDefaultActionVerb,
   getBootstrapInfo,
   getProjectDefaultAgent,
+  installMcpForClaudeCode,
+  installMcpForCodex,
+  installMcpForCursor,
   listAgentSessions,
   listArchive,
   listInbox,
@@ -32,8 +35,10 @@ import {
   parseDocument,
   readBinaryArtifact,
   renameFile,
+  disconnectMcpSession,
   revealInFinder,
   reloadPersonaRegistry,
+  removeAgentSession,
   renameProject,
   resetActionTemplates,
   sendBackToSession,
@@ -340,6 +345,27 @@ export default function App() {
     }
   }, [sessionBackbone, sessionContext, sessionPersona]);
 
+  const removeManualSession = useCallback(async (sessionId: string) => {
+    try {
+      await removeAgentSession(sessionId);
+      setSessions((current) => current.filter((session) => session.id !== sessionId));
+      if (defaultAgentId === sessionId) {
+        setDefaultAgentId(null);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [defaultAgentId]);
+
+  const disconnectLiveSession = useCallback(async (sessionId: string) => {
+    try {
+      await disconnectMcpSession(sessionId);
+      setSessions((current) => current.filter((session) => session.id !== sessionId));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, []);
+
   const selectedFile = useMemo(
     () => [...files, ...projectFiles, ...archiveFiles, ...pinnedFiles].find((file) => file.path === selectedPath) ?? null,
     [archiveFiles, files, pinnedFiles, projectFiles, selectedPath]
@@ -410,6 +436,10 @@ export default function App() {
   const defaultAgent = useMemo(
     () => sessions.find((session) => session.id === defaultAgentId) ?? null,
     [defaultAgentId, sessions]
+  );
+  const manualSessions = useMemo(
+    () => sessions.filter((session) => session.source === "manual"),
+    [sessions]
   );
   const personaColors = useMemo(
     () => new Map((personas?.personas ?? []).map((persona) => [persona.name, persona.color])),
@@ -1202,12 +1232,32 @@ export default function App() {
   );
 
   const switchAgentDefault = useCallback(async () => {
-    if (sessions.length === 0) {
+    if (manualSessions.length === 0) {
       setShowSessionForm(true);
       return;
     }
     setAgentPickerOpen(true);
-  }, [sessions.length]);
+  }, [manualSessions.length]);
+
+  const installMcpClient = useCallback(async (client: "Claude Code" | "Codex" | "Cursor") => {
+    try {
+      const result = client === "Claude Code"
+        ? await installMcpForClaudeCode()
+        : client === "Codex"
+          ? await installMcpForCodex()
+          : await installMcpForCursor();
+      const action = result.action === "noop" ? "already configured" : result.action;
+      const message = `${client} MCP ${action}`;
+      setHandoffToast(message);
+      setHandoffToastBody(result.config_path);
+      window.setTimeout(() => {
+        setHandoffToast((current) => (current === message ? null : current));
+        setHandoffToastBody((current) => (current === result.config_path ? null : current));
+      }, 3500);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, []);
 
   const openConflictDialog = useCallback(
     (filename: string, target: string): Promise<ConflictStrategy> => {
@@ -1682,6 +1732,9 @@ export default function App() {
       { section: "ACTIONS", label: "Archive", run: archiveCurrent },
       { section: "ACTIONS", label: "Switch Agent Default...", run: switchAgentDefault },
       { section: "COMMANDS", label: "Reload Persona Registry", run: reloadPersonas },
+      { section: "COMMANDS", label: "Install for Claude Code", run: () => void installMcpClient("Claude Code") },
+      { section: "COMMANDS", label: "Install for Codex", run: () => void installMcpClient("Codex") },
+      { section: "COMMANDS", label: "Install for Cursor", run: () => void installMcpClient("Cursor") },
       { section: "COMMANDS", label: "Edit Action Templates...", run: () => setActionTemplatesOpen(true) },
       {
         section: "COMMANDS",
@@ -1704,7 +1757,7 @@ export default function App() {
     const allItems = [...actions, ...projectItems, ...fileItems];
     const query = paletteQuery.trim().toLowerCase();
     return query ? allItems.filter((item) => item.label.toLowerCase().includes(query)) : allItems;
-  }, [archiveCurrent, confirmBeforeRemove, files, openArtifact, openProject, openSendPopover, paletteQuery, projects, reloadPersonas, sendButtonLabel, switchAgentDefault, toggleConfirmBeforeRemove, toggleCurrentPin]);
+  }, [archiveCurrent, confirmBeforeRemove, files, installMcpClient, openArtifact, openProject, openSendPopover, paletteQuery, projects, reloadPersonas, sendButtonLabel, switchAgentDefault, toggleConfirmBeforeRemove, toggleCurrentPin]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -2361,22 +2414,45 @@ export default function App() {
                 {sessions.map((session) => (
                   <article
                     className={`agent-card ${session.id === defaultAgentId ? "default-agent" : ""}`}
+                    data-source={session.source}
                     key={session.id}
                     onContextMenu={(event) => {
                       event.preventDefault();
-                      setAgentMenu({ x: event.clientX, y: event.clientY, session });
+                      if (session.source === "manual") {
+                        setAgentMenu({ x: event.clientX, y: event.clientY, session });
+                      }
                     }}
                   >
                     <div className="agent-card-top">
+                      <span className={`status-dot ${session.is_live ? "connected" : "offline"}`} aria-label={session.is_live ? "Connected" : "Offline"} />
                       <span
-                        className="badge persona-badge"
+                        className="persona-chip"
                         style={{ color: personaColors.get(session.persona) ?? fallbackPersonaColor(session.persona) }}
                       >
-                        {labelForPersona(session.persona)}
+                        {session.persona}·{session.agent}
                       </span>
-                      <span className="backbone-tag">{session.backbone}</span>
+                      <button
+                        className="agent-session-action"
+                        type="button"
+                        onClick={() => {
+                          if (session.source === "mcp") {
+                            void disconnectLiveSession(session.id);
+                          } else {
+                            void removeManualSession(session.id);
+                          }
+                        }}
+                      >
+                        {session.source === "mcp" ? "Disconnect" : "Remove"}
+                      </button>
                     </div>
-                    <div className="agent-context">[{session.context || "current"}]</div>
+                    <div className="agent-context">{session.project || "current"}</div>
+                    {session.attached_paths.length > 0 ? (
+                      <ul className="attached-list">
+                        {session.attached_paths.map((path) => (
+                          <li key={path}>{fileName(path)}</li>
+                        ))}
+                      </ul>
+                    ) : null}
                     {session.id === defaultAgentId ? <div className="agent-default">default for {currentProjectKey}</div> : null}
                   </article>
                 ))}
@@ -2613,7 +2689,7 @@ export default function App() {
         {agentPickerOpen ? (
           <AgentPickerDialog
             project={currentProjectKey}
-            sessions={sessions}
+            sessions={manualSessions}
             defaultAgentId={defaultAgentId}
             onCancel={() => setAgentPickerOpen(false)}
             onConfirm={(session) => {
@@ -2997,7 +3073,7 @@ function AgentPickerDialog({ project, sessions, defaultAgentId, onCancel, onConf
                 onChange={() => setSelected(session.id)}
               />
               <span>{agentSessionLabel(session)}</span>
-              <small>[{session.context || "current"}]</small>
+              <small>{session.project || "current"}</small>
             </label>
           ))}
         </fieldset>
@@ -3565,17 +3641,20 @@ function sendLabelForSessions(
 }
 
 function agentSessionLabel(session: AgentSession): string {
-  return `${session.persona}·${session.backbone}`;
+  return `${session.persona}·${session.agent}`;
 }
 
 function attachmentToAgentSession(attachment: SessionAttachment): AgentSession {
   return {
     id: attachment.session_id,
+    source: "mcp",
     persona: attachment.persona,
-    backbone: attachment.agent,
-    context: attachment.project,
+    agent: attachment.agent,
+    project: attachment.project,
     connected_at: attachment.attached_at,
-    last_active: attachment.attached_at
+    last_active: attachment.attached_at,
+    is_live: true,
+    attached_paths: []
   };
 }
 

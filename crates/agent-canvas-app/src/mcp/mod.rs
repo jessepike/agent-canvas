@@ -3,10 +3,12 @@ pub mod sessions;
 pub mod tools;
 
 use std::{
+    collections::HashSet,
     fs,
     path::PathBuf,
     sync::{Arc, OnceLock},
     thread,
+    time::Duration,
 };
 
 use notifications::JsonRpcNotification;
@@ -15,16 +17,17 @@ use tauri::{AppHandle, Manager};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter},
     net::{UnixListener, UnixStream},
-    sync::{mpsc, watch},
+    sync::{RwLock, mpsc, watch},
 };
 
-use crate::{AppState, home_dir, unix_now, valid_persona_names};
+use crate::{AppState, home_dir, persona_names_from_registry_root, unix_now, valid_persona_names};
 use sessions::{McpSession, SubscriptionRegistry};
 
 struct McpControl {
     socket_path: PathBuf,
     shutdown: watch::Sender<bool>,
     subscriptions: SubscriptionRegistry,
+    personas: Arc<RwLock<HashSet<String>>>,
 }
 
 static MCP_CONTROL: OnceLock<Arc<McpControl>> = OnceLock::new();
@@ -37,10 +40,16 @@ pub fn init_mcp_server(app_handle: AppHandle) -> Result<(), String> {
     let _ = fs::remove_file(&socket_path);
 
     let (shutdown, shutdown_rx) = watch::channel(false);
+    let personas = app_handle
+        .state::<AppState>()
+        .paths()
+        .map(|paths| persona_names_from_registry_root(&paths.persona_registry))
+        .unwrap_or_else(|_| valid_persona_names());
     let control = Arc::new(McpControl {
         socket_path: socket_path.clone(),
         shutdown,
         subscriptions: SubscriptionRegistry::default(),
+        personas: Arc::new(RwLock::new(personas)),
     });
     let _ = MCP_CONTROL.set(Arc::clone(&control));
 
@@ -101,6 +110,23 @@ pub fn emit_artifact_focused(path: String) -> usize {
     notifications::dispatch_artifact_focused(&control.subscriptions, path)
 }
 
+pub fn disconnect_session(session_id: &str) -> bool {
+    let Some(control) = MCP_CONTROL.get() else {
+        return false;
+    };
+    control
+        .subscriptions
+        .disconnect_session(session_id, JsonRpcNotification::shutdown())
+}
+
+pub async fn reload_personas(registry_root: PathBuf) {
+    let Some(control) = MCP_CONTROL.get() else {
+        return;
+    };
+    let mut personas = control.personas.write().await;
+    *personas = persona_names_from_registry_root(&registry_root);
+}
+
 fn mcp_socket_path() -> Result<PathBuf, String> {
     Ok(home_dir()?
         .join("Library")
@@ -137,6 +163,7 @@ async fn handle_connection(app_handle: AppHandle, control: Arc<McpControl>, stre
     let mut writer = BufWriter::new(write_half);
     let (response_tx, mut response_rx) = mpsc::unbounded_channel::<Value>();
     let (notification_tx, mut notification_rx) = mpsc::unbounded_channel::<JsonRpcNotification>();
+    let (disconnect_tx, disconnect_rx) = watch::channel(false);
 
     let mut active_session: Option<McpSession> = None;
 
@@ -160,23 +187,30 @@ async fn handle_connection(app_handle: AppHandle, control: Arc<McpControl>, stre
     });
 
     loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => {
+        if *disconnect_rx.borrow() {
+            break;
+        }
+        match tokio::time::timeout(Duration::from_millis(200), lines.next_line()).await {
+            Ok(Ok(Some(line))) => {
                 if let Some(response) = dispatch_line(
                     &app_handle,
                     &control,
                     &line,
                     &notification_tx,
+                    &disconnect_tx,
                     &mut active_session,
                 ) && response_tx.send(response).is_err()
                 {
                     break;
                 }
             }
-            Ok(None) => break,
-            Err(error) => {
+            Ok(Ok(None)) => break,
+            Ok(Err(error)) => {
                 eprintln!("AgentCanvas MCP connection read error: {error}");
                 break;
+            }
+            Err(_) => {
+                let _ = disconnect_rx.has_changed();
             }
         }
     }
@@ -217,6 +251,7 @@ fn dispatch_line(
     control: &McpControl,
     line: &str,
     notification_tx: &mpsc::UnboundedSender<JsonRpcNotification>,
+    disconnect_tx: &watch::Sender<bool>,
     active_session: &mut Option<McpSession>,
 ) -> Option<Value> {
     let parsed: Value = match serde_json::from_str(line) {
@@ -232,6 +267,7 @@ fn dispatch_line(
             app_handle,
             control,
             notification_tx.clone(),
+            disconnect_tx.clone(),
             id,
             params,
             active_session,
@@ -260,6 +296,7 @@ fn handle_initialize(
     app_handle: &AppHandle,
     control: &McpControl,
     notification_tx: mpsc::UnboundedSender<JsonRpcNotification>,
+    disconnect_tx: watch::Sender<bool>,
     id: Value,
     params: Value,
     active_session: &mut Option<McpSession>,
@@ -267,13 +304,16 @@ fn handle_initialize(
     let state = app_handle.state::<AppState>();
     match state.db.lock() {
         Ok(conn) => {
-            let response = handle_initialize_with_conn(id, params, &conn, active_session);
+            let response =
+                handle_initialize_with_conn(id, params, &conn, &control.personas, active_session);
             if response.get("result").is_some()
                 && let Some(session) = active_session.as_ref()
             {
-                control
-                    .subscriptions
-                    .register_default(session.session_id.clone(), notification_tx);
+                control.subscriptions.register_default(
+                    session.session_id.clone(),
+                    notification_tx,
+                    disconnect_tx,
+                );
             }
             response
         }
@@ -285,6 +325,7 @@ fn handle_initialize_with_conn(
     id: Value,
     params: Value,
     conn: &rusqlite::Connection,
+    personas: &Arc<RwLock<HashSet<String>>>,
     active_session: &mut Option<McpSession>,
 ) -> Value {
     let protocol_version = params
@@ -300,7 +341,11 @@ fn handle_initialize_with_conn(
         .get("persona")
         .and_then(Value::as_str)
         .unwrap_or("default");
-    if !valid_persona_names().contains(persona) {
+    let persona_known = personas
+        .try_read()
+        .map(|personas| personas.contains(persona))
+        .unwrap_or_else(|_| valid_persona_names().contains(persona));
+    if !persona_known {
         eprintln!("AgentCanvas MCP initialize used unknown persona: {persona}");
     }
     let agent = agent_canvas
@@ -502,10 +547,12 @@ mod tests {
     fn initialize_with_valid_clientinfo_returns_serverinfo() {
         let (conn, _, _temp) = test_state();
         let mut active = None;
+        let personas = Arc::new(RwLock::new(valid_persona_names()));
         let response = handle_initialize_with_conn(
             json!(1),
             json!({"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"manual-test","version":"0.0.1","agentCanvas":{"persona":"cpo","agent":"claude","project":"agent-canvas","session_id":"manual-test-1"}}}),
             &conn,
+            &personas,
             &mut active,
         );
 
@@ -518,10 +565,12 @@ mod tests {
     fn initialize_with_unknown_persona_accepts_with_warning() {
         let (conn, _, _temp) = test_state();
         let mut active = None;
+        let personas = Arc::new(RwLock::new(valid_persona_names()));
         let response = handle_initialize_with_conn(
             json!(2),
             json!({"clientInfo":{"agentCanvas":{"persona":"unknown-persona","agent":"codex","project":"agent-canvas","session_id":"unknown-1"}}}),
             &conn,
+            &personas,
             &mut active,
         );
 
@@ -584,7 +633,8 @@ mod tests {
     fn subscribe_updates_session_mask() {
         let registry = SubscriptionRegistry::default();
         let (tx, _rx) = mpsc::unbounded_channel();
-        registry.register_default("s1".to_owned(), tx);
+        let (close_tx, _) = tokio::sync::watch::channel(false);
+        registry.register_default("s1".to_owned(), tx, close_tx);
 
         registry.subscribe("s1", true, true);
 
@@ -597,7 +647,8 @@ mod tests {
     fn default_subscription_includes_artifact_updated() {
         let registry = SubscriptionRegistry::default();
         let (tx, _rx) = mpsc::unbounded_channel();
-        registry.register_default("s1".to_owned(), tx);
+        let (close_tx, _) = tokio::sync::watch::channel(false);
+        registry.register_default("s1".to_owned(), tx, close_tx);
 
         assert!(registry.get("s1").expect("subscription").artifact_updated);
     }
@@ -606,7 +657,8 @@ mod tests {
     fn default_subscription_excludes_artifact_focused() {
         let registry = SubscriptionRegistry::default();
         let (tx, _rx) = mpsc::unbounded_channel();
-        registry.register_default("s1".to_owned(), tx);
+        let (close_tx, _) = tokio::sync::watch::channel(false);
+        registry.register_default("s1".to_owned(), tx, close_tx);
 
         assert!(!registry.get("s1").expect("subscription").artifact_focused);
     }
@@ -619,7 +671,8 @@ mod tests {
 
         let registry = SubscriptionRegistry::default();
         let (tx, mut rx) = mpsc::unbounded_channel();
-        registry.register_default("s1".to_owned(), tx);
+        let (close_tx, _) = tokio::sync::watch::channel(false);
+        registry.register_default("s1".to_owned(), tx, close_tx);
         registry.subscribe("s1", true, false);
         let watcher_registry = registry.clone();
         let watch = watch::start(move |event| {
@@ -659,8 +712,10 @@ mod tests {
         let registry = SubscriptionRegistry::default();
         let (tx1, mut rx1) = mpsc::unbounded_channel();
         let (tx2, mut rx2) = mpsc::unbounded_channel();
-        registry.register_default("s1".to_owned(), tx1);
-        registry.register_default("s2".to_owned(), tx2);
+        let (close_tx1, _) = tokio::sync::watch::channel(false);
+        let (close_tx2, _) = tokio::sync::watch::channel(false);
+        registry.register_default("s1".to_owned(), tx1, close_tx1);
+        registry.register_default("s2".to_owned(), tx2, close_tx2);
         registry.subscribe("s1", false, true);
 
         let sent = notifications::dispatch_artifact_focused(&registry, "/x.md".to_owned());
@@ -1083,7 +1138,8 @@ mod tests {
         .expect("message");
         let registry = SubscriptionRegistry::default();
         let (tx, mut rx) = mpsc::unbounded_channel();
-        registry.register_default("s1".to_owned(), tx);
+        let (close_tx, _) = tokio::sync::watch::channel(false);
+        registry.register_default("s1".to_owned(), tx, close_tx);
 
         let delivered = registry.dispatch_to_session(
             "s1",
@@ -1125,6 +1181,186 @@ mod tests {
             )
             .expect("attached_at");
         assert_eq!(attached_at, 2);
+    }
+
+    #[test]
+    fn list_agent_sessions_returns_mcp_and_manual_union() {
+        let (conn, _, _temp) = test_state();
+        conn.execute(
+            "INSERT INTO manual_agent_sessions(id, persona, backbone, context, connected_at, last_active) VALUES ('m1', 'cpo', 'claude', 'Inbox', 1, 2)",
+            [],
+        )
+        .expect("manual");
+        sessions::insert_agent_session(&conn, "s1", "cto", "codex", "vellum", 3).expect("mcp");
+
+        let listed = sessions::list_agent_sessions(&conn).expect("sessions");
+
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().any(|session| session.id == "m1"
+            && session.source == "manual"
+            && session.agent == "claude"
+            && session.project == "Inbox"));
+        assert!(listed.iter().any(|session| session.id == "s1"
+            && session.source == "mcp"
+            && session.agent == "codex"
+            && session.project == "vellum"));
+    }
+
+    #[test]
+    fn list_agent_sessions_includes_attached_paths() {
+        let (conn, _, _temp) = test_state();
+        sessions::insert_agent_session(&conn, "s1", "cto", "codex", "vellum", 3).expect("mcp");
+        sessions::attach_artifact(&conn, "s1", "/tmp/a.md", 4).expect("attach a");
+        sessions::attach_artifact(&conn, "s1", "/tmp/b.html", 5).expect("attach b");
+
+        let listed = sessions::list_agent_sessions(&conn).expect("sessions");
+        let session = listed
+            .iter()
+            .find(|session| session.id == "s1")
+            .expect("s1");
+
+        assert_eq!(session.attached_paths, vec!["/tmp/b.html", "/tmp/a.md"]);
+    }
+
+    #[test]
+    fn list_agent_sessions_excludes_disconnected_mcp_sessions() {
+        let (conn, _, _temp) = test_state();
+        sessions::insert_agent_session(&conn, "s1", "cto", "codex", "vellum", 3).expect("mcp");
+        sessions::disconnect_agent_session(&conn, "s1", 3, 4).expect("disconnect");
+
+        let listed = sessions::list_agent_sessions(&conn).expect("sessions");
+
+        assert!(listed.iter().all(|session| session.id != "s1"));
+    }
+
+    #[test]
+    fn disconnect_mcp_session_emits_shutdown_and_removes_session() {
+        let (conn, _, _temp) = test_state();
+        sessions::insert_agent_session(&conn, "s1", "cto", "codex", "vellum", 3).expect("mcp");
+        let registry = SubscriptionRegistry::default();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (close_tx, mut close_rx) = tokio::sync::watch::channel(false);
+        registry.register_default("s1".to_owned(), tx, close_tx);
+
+        let disconnected = registry.disconnect_session("s1", JsonRpcNotification::shutdown());
+        sessions::delete_agent_session(&conn, "s1").expect("delete");
+
+        assert!(disconnected);
+        assert_eq!(
+            rx.try_recv().expect("shutdown").method,
+            "notifications/shutdown"
+        );
+        assert!(*close_rx.borrow_and_update());
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_sessions WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn install_for_claude_code_creates_config_when_missing() {
+        let temp = tempfile::tempdir_in(std::env::current_dir().expect("cwd")).expect("tempdir");
+        let config = temp.path().join(".claude.json");
+        let shim = temp.path().join("agent-canvas-mcp");
+
+        let result =
+            crate::install_mcp_for_claude_code_at(config.clone(), shim.clone()).expect("install");
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(config).expect("read")).expect("json");
+
+        assert_eq!(result.action, crate::InstallAction::Created);
+        assert_eq!(
+            json["mcpServers"]["agent-canvas"]["command"].as_str(),
+            Some(shim.to_str().unwrap())
+        );
+        assert_eq!(json["mcpServers"]["agent-canvas"]["args"], json!([]));
+    }
+
+    #[test]
+    fn install_for_claude_code_replaces_existing_entry_preserving_others() {
+        let temp = tempfile::tempdir_in(std::env::current_dir().expect("cwd")).expect("tempdir");
+        let config = temp.path().join(".claude.json");
+        fs::write(
+            &config,
+            r#"{"mcpServers":{"agent-canvas":{"command":"/old"},"other":{"command":"/keep"}}}"#,
+        )
+        .expect("seed");
+        let shim = temp.path().join("agent-canvas-mcp");
+
+        let result =
+            crate::install_mcp_for_claude_code_at(config.clone(), shim.clone()).expect("install");
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(config).expect("read")).expect("json");
+
+        assert_eq!(result.action, crate::InstallAction::Updated);
+        assert_eq!(
+            json["mcpServers"]["agent-canvas"]["command"].as_str(),
+            Some(shim.to_str().unwrap())
+        );
+        assert_eq!(json["mcpServers"]["other"]["command"], "/keep");
+    }
+
+    #[test]
+    fn install_for_codex_writes_correct_toml_shape() {
+        let temp = tempfile::tempdir_in(std::env::current_dir().expect("cwd")).expect("tempdir");
+        let config = temp.path().join("config.toml");
+        fs::write(&config, "[other]\nvalue = 1\n").expect("seed");
+        let shim = temp.path().join("agent-canvas-mcp");
+
+        crate::install_mcp_for_codex_at(config.clone(), shim.clone()).expect("install");
+        let toml: toml::Value = fs::read_to_string(config)
+            .expect("read")
+            .parse()
+            .expect("toml");
+
+        assert_eq!(
+            toml["mcp_servers"]["agent-canvas"]["command"].as_str(),
+            Some(shim.to_str().unwrap())
+        );
+        assert_eq!(
+            toml["mcp_servers"]["agent-canvas"]["args"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(toml["other"]["value"].as_integer(), Some(1));
+    }
+
+    #[test]
+    fn install_for_cursor_idempotent() {
+        let temp = tempfile::tempdir_in(std::env::current_dir().expect("cwd")).expect("tempdir");
+        let config = temp.path().join("mcp.json");
+        let shim = temp.path().join("agent-canvas-mcp");
+
+        let first = crate::install_mcp_for_cursor_at(config.clone(), shim.clone()).expect("first");
+        let second = crate::install_mcp_for_cursor_at(config, shim).expect("second");
+
+        assert_eq!(first.action, crate::InstallAction::Created);
+        assert_eq!(second.action, crate::InstallAction::Noop);
+    }
+
+    #[test]
+    fn reload_persona_registry_invalidates_mcp_cache() {
+        let temp = tempfile::tempdir_in(std::env::current_dir().expect("cwd")).expect("tempdir");
+        let registry_root = temp.path().join("plugins");
+        let agent_dir = registry_root.join("reviewer").join("agents");
+        fs::create_dir_all(&agent_dir).expect("agent dir");
+        fs::write(
+            agent_dir.join("reviewer.md"),
+            "---\nname: reviewer\ncolor: teal\n---\n# Reviewer\n",
+        )
+        .expect("persona");
+
+        let mut cache = valid_persona_names();
+        assert!(!cache.contains("reviewer"));
+        cache = crate::persona_names_from_registry_root(&registry_root);
+
+        assert!(cache.contains("reviewer"));
     }
 
     fn test_comment(id: &str, created_at: i64) -> Comment {

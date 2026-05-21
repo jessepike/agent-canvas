@@ -1652,24 +1652,69 @@ button:hover {
 .agent-card-top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
 }
 
-.backbone-tag {
-  border: 0.5px solid var(--border-strong);
-  border-radius: 4px;
-  padding: 1px 6px;
-  color: var(--text-secondary);
-  background: var(--bg-sidebar);
+.status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--text-tertiary);
+}
+
+.status-dot.connected {
+  background: var(--accent);
+}
+
+.status-dot.offline {
+  background: var(--border-strong);
+}
+
+.persona-chip {
+  min-width: 0;
+  flex: 1;
   font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-session-action {
+  flex: 0 0 auto;
+  padding: 3px 6px;
   font-size: 10px;
+}
+
+.agent-card[data-source="mcp"] {
+  border-color: var(--border-strong);
 }
 
 .agent-context {
   margin-top: 8px;
   color: var(--text-secondary);
   font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.attached-list {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.attached-list li {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 7px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-default {

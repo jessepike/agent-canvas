@@ -3,16 +3,14 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    io::Write,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(target_os = "macos")]
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
+use std::process::{Command, Stdio};
 
 use base64::{Engine as _, engine::general_purpose};
 use rusqlite::{Connection, params};
@@ -125,16 +123,6 @@ struct ActionTemplate {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct AgentSession {
-    id: String,
-    persona: String,
-    backbone: String,
-    context: String,
-    connected_at: i64,
-    last_active: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
 struct SessionAttachmentInfo {
     session_id: String,
     persona: String,
@@ -160,6 +148,20 @@ struct AddAgentSessionInput {
     persona: String,
     backbone: String,
     context: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum InstallAction {
+    Created,
+    Updated,
+    Noop,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct InstallResult {
+    config_path: String,
+    action: InstallAction,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -384,9 +386,13 @@ fn list_personas(state: tauri::State<AppState>) -> Result<PersonaRegistry, Strin
 }
 
 #[tauri::command]
-fn reload_persona_registry(state: tauri::State<AppState>) -> Result<PersonaRegistry, String> {
+async fn reload_persona_registry(
+    state: tauri::State<'_, AppState>,
+) -> Result<PersonaRegistry, String> {
     let paths = state.paths()?;
-    resolve_personas(&paths.persona_registry, &state.db)
+    let registry = resolve_personas(&paths.persona_registry, &state.db)?;
+    mcp::reload_personas(paths.persona_registry.clone()).await;
+    Ok(registry)
 }
 
 #[tauri::command]
@@ -851,47 +857,32 @@ fn reset_action_templates(state: tauri::State<AppState>) -> Result<Vec<ActionTem
 }
 
 #[tauri::command]
-fn list_agent_sessions(state: tauri::State<AppState>) -> Result<Vec<AgentSession>, String> {
+fn list_agent_sessions(
+    state: tauri::State<AppState>,
+) -> Result<Vec<mcp::sessions::AgentSession>, String> {
     let conn = state
         .db
         .lock()
         .map_err(|_| "state db lock poisoned".to_owned())?;
-    let mut statement = conn
-        .prepare(
-            "SELECT id, persona, backbone, COALESCE(context, ''), connected_at, last_active
-             FROM manual_agent_sessions ORDER BY last_active DESC",
-        )
-        .map_err(|error| error.to_string())?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok(AgentSession {
-                id: row.get(0)?,
-                persona: row.get(1)?,
-                backbone: row.get(2)?,
-                context: row.get(3)?,
-                connected_at: row.get(4)?,
-                last_active: row.get(5)?,
-            })
-        })
-        .map_err(|error| error.to_string())?;
-
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+    mcp::sessions::list_agent_sessions(&conn)
 }
 
 #[tauri::command]
 fn add_agent_session(
     state: tauri::State<AppState>,
     input: AddAgentSessionInput,
-) -> Result<AgentSession, String> {
+) -> Result<mcp::sessions::AgentSession, String> {
     let now = unix_now();
-    let session = AgentSession {
+    let session = mcp::sessions::AgentSession {
         id: uuid::Uuid::new_v4().to_string(),
+        source: "manual".to_owned(),
         persona: input.persona,
-        backbone: input.backbone,
-        context: input.context,
+        agent: input.backbone,
+        project: input.context,
         connected_at: now,
-        last_active: now,
+        last_active: Some(now),
+        is_live: false,
+        attached_paths: Vec::new(),
     };
     let conn = state
         .db
@@ -903,14 +894,217 @@ fn add_agent_session(
         params![
             session.id,
             session.persona,
-            session.backbone,
-            session.context,
+            session.agent,
+            session.project,
             session.connected_at,
-            session.last_active
+            session.last_active.unwrap_or(now)
         ],
     )
     .map_err(|error| error.to_string())?;
     Ok(session)
+}
+
+#[tauri::command]
+fn remove_agent_session(state: tauri::State<AppState>, session_id: String) -> Result<(), String> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute(
+        "DELETE FROM manual_agent_sessions WHERE id = ?1",
+        params![session_id],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn disconnect_mcp_session(state: tauri::State<AppState>, session_id: String) -> Result<(), String> {
+    let _ = mcp::disconnect_session(&session_id);
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    mcp::sessions::delete_agent_session(&conn, &session_id)
+}
+
+#[tauri::command]
+fn install_mcp_for_claude_code() -> Result<InstallResult, String> {
+    let config_path = home_dir()?.join(".claude.json");
+    install_mcp_for_claude_code_at(config_path, resolve_mcp_shim_path()?)
+}
+
+#[tauri::command]
+fn install_mcp_for_codex() -> Result<InstallResult, String> {
+    let config_path = home_dir()?.join(".codex").join("config.toml");
+    install_mcp_for_codex_at(config_path, resolve_mcp_shim_path()?)
+}
+
+#[tauri::command]
+fn install_mcp_for_cursor() -> Result<InstallResult, String> {
+    let config_path = home_dir()?.join(".cursor").join("mcp.json");
+    install_mcp_for_cursor_at(config_path, resolve_mcp_shim_path()?)
+}
+
+fn resolve_mcp_shim_path() -> Result<PathBuf, String> {
+    let current_exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    let Some(parent) = current_exe.parent() else {
+        return Err("cannot resolve AgentCanvas executable directory".to_owned());
+    };
+    let sibling = parent.join("agent-canvas-mcp");
+    if sibling.exists() {
+        return Ok(sibling);
+    }
+    let workspace_debug = std::env::current_dir()
+        .map_err(|error| error.to_string())?
+        .ancestors()
+        .find_map(|ancestor| {
+            let candidate = ancestor
+                .join("target")
+                .join("debug")
+                .join("agent-canvas-mcp");
+            candidate.exists().then_some(candidate)
+        });
+    workspace_debug.ok_or_else(|| {
+        format!(
+            "agent-canvas-mcp binary not found next to {} or in target/debug",
+            current_exe.display()
+        )
+    })
+}
+
+pub(crate) fn install_mcp_for_claude_code_at(
+    config_path: PathBuf,
+    shim_path: PathBuf,
+) -> Result<InstallResult, String> {
+    let existed = config_path.exists();
+    let mut root = read_json_config(&config_path)?;
+    let servers = root
+        .as_object_mut()
+        .ok_or_else(|| "Claude Code config root must be a JSON object".to_owned())?
+        .entry("mcpServers".to_owned())
+        .or_insert_with(|| serde_json::json!({}));
+    let servers = servers
+        .as_object_mut()
+        .ok_or_else(|| "mcpServers must be a JSON object".to_owned())?;
+    let entry = serde_json::json!({
+        "command": shim_path.to_string_lossy(),
+        "args": [],
+        "env": {}
+    });
+    let action = install_action(existed, servers.get("agent-canvas"), &entry);
+    servers.insert("agent-canvas".to_owned(), entry);
+    write_json_config(&config_path, &root)?;
+    Ok(InstallResult {
+        config_path: config_path.to_string_lossy().into_owned(),
+        action,
+    })
+}
+
+pub(crate) fn install_mcp_for_cursor_at(
+    config_path: PathBuf,
+    shim_path: PathBuf,
+) -> Result<InstallResult, String> {
+    let existed = config_path.exists();
+    let mut root = read_json_config(&config_path)?;
+    let servers = root
+        .as_object_mut()
+        .ok_or_else(|| "Cursor MCP config root must be a JSON object".to_owned())?
+        .entry("mcpServers".to_owned())
+        .or_insert_with(|| serde_json::json!({}));
+    let servers = servers
+        .as_object_mut()
+        .ok_or_else(|| "mcpServers must be a JSON object".to_owned())?;
+    let entry = serde_json::json!({
+        "command": shim_path.to_string_lossy()
+    });
+    let action = install_action(existed, servers.get("agent-canvas"), &entry);
+    servers.insert("agent-canvas".to_owned(), entry);
+    write_json_config(&config_path, &root)?;
+    Ok(InstallResult {
+        config_path: config_path.to_string_lossy().into_owned(),
+        action,
+    })
+}
+
+pub(crate) fn install_mcp_for_codex_at(
+    config_path: PathBuf,
+    shim_path: PathBuf,
+) -> Result<InstallResult, String> {
+    let existed = config_path.exists();
+    let original = fs::read_to_string(&config_path).unwrap_or_default();
+    let mut root = if original.trim().is_empty() {
+        toml::Value::Table(toml::map::Map::new())
+    } else {
+        original
+            .parse::<toml::Value>()
+            .map_err(|error| error.to_string())?
+    };
+    let root_table = root
+        .as_table_mut()
+        .ok_or_else(|| "Codex config root must be a TOML table".to_owned())?;
+    let mcp_servers = root_table
+        .entry("mcp_servers".to_owned())
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .ok_or_else(|| "mcp_servers must be a TOML table".to_owned())?;
+    let mut entry_table = toml::map::Map::new();
+    entry_table.insert(
+        "command".to_owned(),
+        toml::Value::String(shim_path.to_string_lossy().into_owned()),
+    );
+    entry_table.insert("args".to_owned(), toml::Value::Array(Vec::new()));
+    let entry = toml::Value::Table(entry_table);
+    let action = install_action(existed, mcp_servers.get("agent-canvas"), &entry);
+    mcp_servers.insert("agent-canvas".to_owned(), entry);
+    let rendered = toml::to_string_pretty(&root).map_err(|error| error.to_string())?;
+    atomic_write_config(&config_path, rendered.as_bytes())?;
+    Ok(InstallResult {
+        config_path: config_path.to_string_lossy().into_owned(),
+        action,
+    })
+}
+
+fn install_action<T: PartialEq>(existed: bool, existing: Option<&T>, next: &T) -> InstallAction {
+    match existing {
+        None if existed => InstallAction::Updated,
+        None => InstallAction::Created,
+        Some(existing) if existing == next => InstallAction::Noop,
+        Some(_) => InstallAction::Updated,
+    }
+}
+
+fn read_json_config(config_path: &Path) -> Result<serde_json::Value, String> {
+    if !config_path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let source = fs::read_to_string(config_path).map_err(|error| error.to_string())?;
+    if source.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(&source).map_err(|error| error.to_string())
+}
+
+fn write_json_config(config_path: &Path, value: &serde_json::Value) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    atomic_write_config(config_path, &bytes)
+}
+
+fn atomic_write_config(config_path: &Path, bytes: &[u8]) -> Result<(), String> {
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let tmp_path = config_path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    {
+        let mut file = fs::File::create(&tmp_path).map_err(|error| error.to_string())?;
+        file.write_all(bytes).map_err(|error| error.to_string())?;
+        file.write_all(b"\n").map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+    }
+    fs::rename(&tmp_path, config_path).map_err(|error| {
+        let _ = fs::remove_file(&tmp_path);
+        error.to_string()
+    })
 }
 
 #[tauri::command]
@@ -1838,19 +2032,27 @@ fn frontmatter_persona(bytes: &[u8]) -> Option<String> {
     closed.then(|| persona.or(author).or(agent)).flatten()
 }
 
-fn valid_persona_names() -> HashSet<String> {
+pub(crate) fn persona_names_from_registry_root(registry_root: &Path) -> HashSet<String> {
     let mut names: HashSet<String> = builtin_persona_colors()
         .iter()
         .map(|(name, _)| (*name).to_owned())
         .collect();
-    if let Some(registry_root) = default_persona_registry_root() {
-        names.extend(
-            discover_personas(&registry_root)
-                .into_iter()
-                .map(|persona| persona.name),
-        );
-    }
+    names.extend(
+        discover_personas(registry_root)
+            .into_iter()
+            .map(|persona| persona.name),
+    );
     names
+}
+
+fn valid_persona_names() -> HashSet<String> {
+    if let Some(registry_root) = default_persona_registry_root() {
+        return persona_names_from_registry_root(&registry_root);
+    }
+    builtin_persona_colors()
+        .iter()
+        .map(|(name, _)| (*name).to_owned())
+        .collect()
 }
 
 fn default_persona_registry_root() -> Option<PathBuf> {
@@ -2283,6 +2485,11 @@ fn main() {
             send_back_to_session,
             list_agent_sessions,
             add_agent_session,
+            remove_agent_session,
+            disconnect_mcp_session,
+            install_mcp_for_claude_code,
+            install_mcp_for_codex,
+            install_mcp_for_cursor,
             parse_document,
             save_document,
             open_document,

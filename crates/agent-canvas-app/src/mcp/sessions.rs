@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use parking_lot::Mutex;
 use rusqlite::{Connection, params};
 use serde::Serialize;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use super::notifications::JsonRpcNotification;
@@ -22,6 +22,7 @@ pub struct Subscription {
     pub artifact_updated: bool,
     pub artifact_focused: bool,
     pub tx: mpsc::UnboundedSender<JsonRpcNotification>,
+    pub disconnect_tx: watch::Sender<bool>,
 }
 
 #[derive(Clone, Default)]
@@ -34,6 +35,7 @@ impl SubscriptionRegistry {
         &self,
         session_id: String,
         tx: mpsc::UnboundedSender<JsonRpcNotification>,
+        disconnect_tx: watch::Sender<bool>,
     ) {
         self.inner.lock().insert(
             session_id,
@@ -41,6 +43,7 @@ impl SubscriptionRegistry {
                 artifact_updated: true,
                 artifact_focused: false,
                 tx,
+                disconnect_tx,
             },
         );
     }
@@ -83,6 +86,15 @@ impl SubscriptionRegistry {
             return false;
         };
         tx.send(notification).is_ok()
+    }
+
+    pub fn disconnect_session(&self, session_id: &str, notification: JsonRpcNotification) -> bool {
+        let Some(subscription) = self.inner.lock().remove(session_id) else {
+            return false;
+        };
+        let _ = subscription.tx.send(notification);
+        let _ = subscription.disconnect_tx.send(true);
+        true
     }
 
     fn dispatch(
@@ -161,6 +173,19 @@ pub struct SessionAttachment {
     pub agent: String,
     pub project: String,
     pub attached_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentSession {
+    pub id: String,
+    pub source: String,
+    pub persona: String,
+    pub agent: String,
+    pub project: String,
+    pub connected_at: i64,
+    pub last_active: Option<i64>,
+    pub is_live: bool,
+    pub attached_paths: Vec<String>,
 }
 
 pub fn migrate_manual_agent_sessions_if_needed(conn: &Connection) -> Result<(), String> {
@@ -276,6 +301,104 @@ pub fn cleanup_session_attachments(conn: &Connection, session_id: &str) -> Resul
     )
     .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+pub fn delete_agent_session(conn: &Connection, session_id: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM agent_sessions WHERE session_id = ?1 AND disconnected_at IS NULL",
+        params![session_id],
+    )
+    .map_err(|error| error.to_string())?;
+    cleanup_session_attachments(conn, session_id)?;
+    Ok(())
+}
+
+pub fn list_agent_sessions(conn: &Connection) -> Result<Vec<AgentSession>, String> {
+    let mut sessions = Vec::new();
+    let mut manual = conn
+        .prepare(
+            r#"
+            SELECT id, persona, backbone, COALESCE(context, ''), connected_at, last_active
+            FROM manual_agent_sessions
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let manual_rows = manual
+        .query_map([], |row| {
+            Ok(AgentSession {
+                id: row.get(0)?,
+                source: "manual".to_owned(),
+                persona: row.get(1)?,
+                agent: row.get(2)?,
+                project: row.get(3)?,
+                connected_at: row.get(4)?,
+                last_active: Some(row.get(5)?),
+                is_live: false,
+                attached_paths: Vec::new(),
+            })
+        })
+        .map_err(|error| error.to_string())?;
+    for row in manual_rows {
+        sessions.push(row.map_err(|error| error.to_string())?);
+    }
+
+    let mut mcp = conn
+        .prepare(
+            r#"
+            SELECT session_id, source, persona, agent, project, connected_at
+            FROM agent_sessions
+            WHERE disconnected_at IS NULL
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let mcp_rows = mcp
+        .query_map([], |row| {
+            Ok(AgentSession {
+                id: row.get(0)?,
+                source: row.get(1)?,
+                persona: row.get(2)?,
+                agent: row.get(3)?,
+                project: row.get(4)?,
+                connected_at: row.get(5)?,
+                last_active: None,
+                is_live: true,
+                attached_paths: Vec::new(),
+            })
+        })
+        .map_err(|error| error.to_string())?;
+    for row in mcp_rows {
+        let mut session = row.map_err(|error| error.to_string())?;
+        session.attached_paths = attached_paths_for_session(conn, &session.id)?;
+        sessions.push(session);
+    }
+
+    sessions.sort_by(|left, right| {
+        let left_time = left.last_active.unwrap_or(left.connected_at);
+        let right_time = right.last_active.unwrap_or(right.connected_at);
+        right_time
+            .cmp(&left_time)
+            .then_with(|| left.source.cmp(&right.source))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(sessions)
+}
+
+fn attached_paths_for_session(conn: &Connection, session_id: &str) -> Result<Vec<String>, String> {
+    let mut statement = conn
+        .prepare(
+            r#"
+            SELECT path
+            FROM session_attachments
+            WHERE session_id = ?1
+            ORDER BY attached_at DESC, path ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    statement
+        .query_map(params![session_id], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
 }
 
 pub fn attachments_for_path(

@@ -80,14 +80,25 @@ export type BinaryArtifact = z.infer<typeof BinaryArtifact>;
 export const AgentSession = z
   .object({
     id: z.string(),
+    source: z.enum(["mcp", "manual"]),
     persona: z.string(),
-    backbone: z.string(),
-    context: z.string(),
+    agent: z.string(),
+    project: z.string(),
     connected_at: z.number(),
-    last_active: z.number()
+    last_active: z.number().nullable(),
+    is_live: z.boolean(),
+    attached_paths: z.array(z.string())
   })
   .strict();
 export type AgentSession = z.infer<typeof AgentSession>;
+
+export const InstallResult = z
+  .object({
+    config_path: z.string(),
+    action: z.enum(["created", "updated", "noop"])
+  })
+  .strict();
+export type InstallResult = z.infer<typeof InstallResult>;
 
 export const SessionAttachment = z
   .object({
@@ -454,6 +465,49 @@ export async function addAgentSession(input: AddAgentSessionInput): Promise<Agen
     return AgentSession.parse(result);
   } catch (caught) {
     throw ipcError("add_agent_session", caught);
+  }
+}
+
+export async function removeAgentSession(sessionId: string): Promise<void> {
+  try {
+    await invoke<unknown>("remove_agent_session", { sessionId });
+  } catch (caught) {
+    throw ipcError("remove_agent_session", caught);
+  }
+}
+
+export async function disconnectMcpSession(sessionId: string): Promise<void> {
+  try {
+    await invoke<unknown>("disconnect_mcp_session", { sessionId });
+  } catch (caught) {
+    throw ipcError("disconnect_mcp_session", caught);
+  }
+}
+
+export async function installMcpForClaudeCode(): Promise<InstallResult> {
+  try {
+    const result = await invoke<unknown>("install_mcp_for_claude_code");
+    return InstallResult.parse(result);
+  } catch (caught) {
+    throw ipcError("install_mcp_for_claude_code", caught);
+  }
+}
+
+export async function installMcpForCodex(): Promise<InstallResult> {
+  try {
+    const result = await invoke<unknown>("install_mcp_for_codex");
+    return InstallResult.parse(result);
+  } catch (caught) {
+    throw ipcError("install_mcp_for_codex", caught);
+  }
+}
+
+export async function installMcpForCursor(): Promise<InstallResult> {
+  try {
+    const result = await invoke<unknown>("install_mcp_for_cursor");
+    return InstallResult.parse(result);
+  } catch (caught) {
+    throw ipcError("install_mcp_for_cursor", caught);
   }
 }
 

@@ -24,6 +24,7 @@ dependencies = [
  "tauri-plugin-persisted-scope",
  "tempfile",
  "tokio",
+ "toml 0.8.23",
  "tracing",
  "ts-rs",
  "uuid",
