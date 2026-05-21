@@ -13,6 +13,7 @@ Status: `todo` / `in-progress` / `blocked` / `done` / `cut`.
 | 5 | done | MCP read tools and push notification channel |
 | 6 | done | MCP coordination tools and Send-back routing |
 | 7 | done | Agent panel MCP integration, one-click MCP install, CLAUDE.md template |
+| 8 | done | Release v0.3.0 — version bumps, README + v0 spec refresh, user-guide.md, install-release.sh, paper+ink icon, tag |
 
 ## v0.3 Critical fixes
 

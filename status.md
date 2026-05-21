@@ -1,10 +1,33 @@
 ---
 project: agent-canvas
 updated: 2026-05-21
-stage: v0.3 Slice 7 implemented
+stage: v0.3.0 released
 ---
 
 # AgentCanvas — Status
+
+## v0.3.0 Release (2026-05-21)
+
+v0.3 shipped end-to-end. All 8 slices in `docs/BUILD-SPEC-v0.3.md` are complete; release tagged `v0.3.0`.
+
+**Slice 8 wrap:**
+- Version bumped 0.2.2 → 0.3.0 in `crates/agent-canvas-app/Cargo.toml`, `tauri.conf.json`, `ui/package.json`, Cargo.lock.
+- `@tauri-apps/cli@^2` added as a ui/ devDep (project-local; host stays clean per host-protection).
+- `scripts/install-release.sh` companion to `launch-dev.sh` — builds, installs to `/Applications`, strips quarantine, registers with LaunchServices, launches.
+- App icon regenerated from a paper+ink design (`.private/icon-candidates/candidate-a-folded-paper-rgba.png` → `crates/agent-canvas-app/icons/`). RGBA-fixed after initial sips output failed Tauri's `generate_context!` macro.
+- `README.md` refreshed for v0.3 surface. `BUILD-SPEC-v0.md` "Out of Scope" updated (live MCP struck through; v0.4 candidates added).
+- New `docs/user-guide.md` (~290 lines) — consolidated agent-loop walkthrough + full reference.
+- Real `.app` installed to `/Applications/AgentCanvas.app` and verified running.
+
+**Smoke audit (2026-05-21):**
+- A22 forbidden sandbox flags (`allow-same-origin`, `allow-modals`): **0 hits** ✓
+- A15 raw hex outside token definitions: **0 violations** ✓
+- `cargo check -q --workspace`: passes (existing non-fatal ts-rs warning).
+- `cargo test --bin agent-canvas-app`: **47 passed, 0 failed**.
+- `tsc --noEmit`: clean.
+- `vite build`: clean (known large-chunk warning only).
+- `crates/agent-canvas-mcp` builds.
+- Release `.app` runs as standalone (Mach-O arm64), MCP socket binds, agent panel shows live sessions.
 
 ## v0.3 Slice 7 Summary (2026-05-21)
 
