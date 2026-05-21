@@ -40,6 +40,7 @@ import {
   sendToClipboard,
   setActionTemplates,
   setDefaultActionVerb,
+  setCurrentFocus,
   setProjectDefaultAgent,
   setReviewState,
   targetFileExists,
@@ -297,6 +298,15 @@ export default function App() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!selectedPath) {
+      return;
+    }
+    void setCurrentFocus(selectedPath).catch((caught) => {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    });
+  }, [selectedPath]);
 
   const addSession = useCallback(async () => {
     try {

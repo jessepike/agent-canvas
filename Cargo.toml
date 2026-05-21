@@ -17,6 +17,7 @@ base64 = { version = "0.22" }
 blake3 = { version = "1" }
 libc = { version = "0.2" }
 notify = { version = "6" }
+parking_lot = { version = "0.12" }
 pulldown-cmark = { version = "0.13" }
 rmcp = { version = "1.6" }
 rusqlite = { version = "0.32", features = ["bundled"] }

@@ -1,10 +1,32 @@
 ---
 project: agent-canvas
-updated: 2026-05-20
-stage: v0.3 Slice 4 implemented
+updated: 2026-05-21
+stage: v0.3 Slice 5 implemented
 ---
 
 # AgentCanvas — Status
+
+## v0.3 Slice 5 Summary (2026-05-21)
+
+Slice 5 of `docs/BUILD-SPEC-v0.3.md` was implemented.
+
+- Implemented real MCP read tools: `list_artifacts`, `get_artifact`, `get_current_focus`, `get_comments`, and `get_user_messages`.
+- Added idempotent `user_messages` migration and session-scoped read filtering.
+- Added per-session notification subscriptions with default `artifact_updated = true` and opt-in `artifact_focused`.
+- Added server-pushed `notifications/artifact_updated`, `notifications/artifact_focused`, and shutdown delivery through the socket writer path.
+- Wired focus updates from the UI through `set_current_focus`.
+- Wired watcher/save paths to emit `artifact_updated` for tracked files; added a Tauri test command for manual Slice 6 send-back notification testing.
+- Wrote the implementation report to `docs/active/codex-slice5-v0.3-report-2026-05-21.md`.
+
+Verification:
+
+- `cd crates/agent-canvas-app && cargo check -q` passes with the pre-existing ts-rs sidecar warning.
+- `cd crates/agent-canvas-app && cargo test --bin agent-canvas-app 2>&1 | tail -25` passes: 26 tests.
+- `cd crates/agent-canvas-mcp && cargo build` passes.
+- `cd ui && ./node_modules/.bin/tsc --noEmit` passes.
+- `cd ui && ./node_modules/.bin/vite build 2>&1 | tail -3` passes with the known chunk-size warning.
+- `grep -rn 'allow-same-origin\|allow-modals' ui/src/ | grep -v '\.test\.' | wc -l` returns `0`.
+- CLI initialize through the shim returned the expected JSON-RPC initialize response against the existing socket; full watcher-to-stdout smoke should be rerun with the freshly built GUI app running.
 
 ## v0.3 Slice 4 Summary (2026-05-20)
 

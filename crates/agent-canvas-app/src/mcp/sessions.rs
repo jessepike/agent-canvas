@@ -1,4 +1,10 @@
+use std::{collections::HashMap, sync::Arc};
+
+use parking_lot::Mutex;
 use rusqlite::{Connection, params};
+use tokio::sync::mpsc;
+
+use super::notifications::JsonRpcNotification;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpSession {
@@ -7,6 +13,95 @@ pub struct McpSession {
     pub agent: String,
     pub project: String,
     pub connected_at: i64,
+}
+
+#[derive(Clone)]
+pub struct Subscription {
+    pub artifact_updated: bool,
+    pub artifact_focused: bool,
+    pub tx: mpsc::UnboundedSender<JsonRpcNotification>,
+}
+
+#[derive(Clone, Default)]
+pub struct SubscriptionRegistry {
+    inner: Arc<Mutex<HashMap<String, Subscription>>>,
+}
+
+impl SubscriptionRegistry {
+    pub fn register_default(
+        &self,
+        session_id: String,
+        tx: mpsc::UnboundedSender<JsonRpcNotification>,
+    ) {
+        self.inner.lock().insert(
+            session_id,
+            Subscription {
+                artifact_updated: true,
+                artifact_focused: false,
+                tx,
+            },
+        );
+    }
+
+    pub fn remove(&self, session_id: &str) {
+        self.inner.lock().remove(session_id);
+    }
+
+    pub fn subscribe(&self, session_id: &str, artifact_updated: bool, artifact_focused: bool) {
+        if let Some(subscription) = self.inner.lock().get_mut(session_id) {
+            subscription.artifact_updated = artifact_updated;
+            subscription.artifact_focused = artifact_focused;
+        }
+    }
+
+    #[cfg(test)]
+    pub fn get(&self, session_id: &str) -> Option<Subscription> {
+        self.inner.lock().get(session_id).cloned()
+    }
+
+    pub fn dispatch_artifact_updated(&self, notification: JsonRpcNotification) -> usize {
+        self.dispatch(notification, |subscription| subscription.artifact_updated)
+    }
+
+    pub fn dispatch_artifact_focused(&self, notification: JsonRpcNotification) -> usize {
+        self.dispatch(notification, |subscription| subscription.artifact_focused)
+    }
+
+    pub fn dispatch_all(&self, notification: JsonRpcNotification) -> usize {
+        self.dispatch(notification, |_| true)
+    }
+
+    fn dispatch(
+        &self,
+        notification: JsonRpcNotification,
+        predicate: impl Fn(&Subscription) -> bool,
+    ) -> usize {
+        let targets = self
+            .inner
+            .lock()
+            .iter()
+            .filter_map(|(session_id, subscription)| {
+                predicate(subscription).then(|| (session_id.clone(), subscription.tx.clone()))
+            })
+            .collect::<Vec<_>>();
+
+        let mut sent = 0;
+        let mut stale = Vec::new();
+        for (session_id, tx) in targets {
+            if tx.send(notification.clone()).is_ok() {
+                sent += 1;
+            } else {
+                stale.push(session_id);
+            }
+        }
+        if !stale.is_empty() {
+            let mut subscriptions = self.inner.lock();
+            for session_id in stale {
+                subscriptions.remove(&session_id);
+            }
+        }
+        sent
+    }
 }
 
 pub const AGENT_SESSIONS_MIGRATION_SQL: &str = r#"
@@ -20,6 +115,19 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   disconnected_at INTEGER,
   PRIMARY KEY (session_id, connected_at)
 );
+"#;
+
+pub const USER_MESSAGES_MIGRATION_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS user_messages (
+  id           TEXT PRIMARY KEY,
+  session_id   TEXT NOT NULL,
+  path         TEXT NOT NULL,
+  note         TEXT,
+  action_verb  TEXT,
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_user_messages_session ON user_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_user_messages_created ON user_messages(created_at);
 "#;
 
 pub fn migrate_manual_agent_sessions_if_needed(conn: &Connection) -> Result<(), String> {
@@ -53,6 +161,11 @@ pub fn migrate_manual_agent_sessions_if_needed(conn: &Connection) -> Result<(), 
 pub fn migrate_agent_sessions(conn: &Connection) -> Result<(), String> {
     migrate_manual_agent_sessions_if_needed(conn)?;
     conn.execute_batch(AGENT_SESSIONS_MIGRATION_SQL)
+        .map_err(|error| error.to_string())
+}
+
+pub fn migrate_user_messages(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(USER_MESSAGES_MIGRATION_SQL)
         .map_err(|error| error.to_string())
 }
 

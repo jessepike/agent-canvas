@@ -507,6 +507,14 @@ export async function updateSidecarComments(docPath: string, comments: CommentTy
   }
 }
 
+export async function setCurrentFocus(path: string): Promise<void> {
+  try {
+    await invoke<unknown>("set_current_focus", { path });
+  } catch (caught) {
+    throw ipcError("set_current_focus", caught);
+  }
+}
+
 export async function setReviewState(path: string, reviewState: FileMetadata["review_state"]): Promise<void> {
   try {
     await invoke<unknown>("set_review_state", { path, reviewState });

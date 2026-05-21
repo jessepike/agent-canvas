@@ -37,6 +37,7 @@ struct AppState {
     paths: Result<AgentCanvasPaths, String>,
     db: Mutex<Connection>,
     watcher: Mutex<Option<WatchHandle>>,
+    current_focus: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -916,6 +917,12 @@ fn write_document(
     match atomic_write(&doc_path, source.as_bytes(), Some(&base_hash)) {
         Ok(new_hash) => {
             update_base_snapshot(&doc_path, &source, new_hash)?;
+            mcp::emit_artifact_updated(
+                doc_path.to_string_lossy().into_owned(),
+                "watcher",
+                None,
+                None,
+            );
             Ok(WriteResult { new_hash })
         }
         Err(AtomicWriteError::ConflictDetected { .. }) => {
@@ -978,6 +985,41 @@ fn update_sidecar_comments(
     sidecar::save(vault_root, &doc_path, &identity).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn set_current_focus(state: tauri::State<AppState>, path: String) -> Result<(), String> {
+    let _ = state.paths()?;
+    let path = path_safe_for_canvas(Path::new(&path))?;
+    let path_string = path.to_string_lossy().into_owned();
+    *state
+        .current_focus
+        .lock()
+        .map_err(|_| "current focus lock poisoned".to_owned())? = Some(path_string.clone());
+    mcp::emit_artifact_focused(path_string);
+    Ok(())
+}
+
+#[tauri::command]
+fn emit_artifact_updated(
+    state: tauri::State<AppState>,
+    path: String,
+    by: String,
+    note: Option<String>,
+    action_verb: Option<String>,
+) -> Result<usize, String> {
+    let _ = state.paths()?;
+    let path = path_safe_for_canvas(Path::new(&path))?;
+    let by = match by.as_str() {
+        "user" | "watcher" => by,
+        _ => return Err("by must be 'user' or 'watcher'".to_owned()),
+    };
+    Ok(mcp::emit_artifact_updated(
+        path.to_string_lossy().into_owned(),
+        &by,
+        note,
+        action_verb,
+    ))
+}
+
 fn update_base_snapshot(doc_path: &Path, source: &str, hash: [u8; 32]) -> Result<(), String> {
     let vault_root = vault_root_for_absolute_doc(doc_path)?;
     let mut identity = sidecar::load_or_migrate(vault_root, doc_path, source.as_bytes())
@@ -1004,6 +1046,7 @@ fn bootstrap() -> Result<AppState, String> {
         paths: Ok(paths),
         db: Mutex::new(db),
         watcher: Mutex::new(None),
+        current_focus: Mutex::new(None),
     })
 }
 
@@ -1022,6 +1065,7 @@ fn bootstrap_or_error_state() -> AppState {
                 paths: Err(error),
                 db: Mutex::new(db),
                 watcher: Mutex::new(None),
+                current_focus: Mutex::new(None),
             }
         }
     }
@@ -1148,6 +1192,7 @@ fn initialize_state_db(db: &Connection, legacy_canvas_root: &Path) -> Result<(),
     )
     .map_err(|error| error.to_string())?;
     mcp::sessions::migrate_agent_sessions(db)?;
+    mcp::sessions::migrate_user_messages(db)?;
     add_column_if_missing(
         db,
         "files",
@@ -1205,13 +1250,7 @@ fn legacy_icloud_canvas_root() -> Result<PathBuf, String> {
 }
 
 fn backfill_file_tags_from_legacy_paths(db: &Connection, canvas_root: &Path) -> Result<(), String> {
-    let canvas_root = if canvas_root.exists() {
-        canvas_root
-            .canonicalize()
-            .map_err(|error| format!("could not resolve legacy AgentCanvas root: {error}"))?
-    } else {
-        canvas_root.to_path_buf()
-    };
+    let canvas_root = canvas_root.to_path_buf();
     let inbox_prefix = canvas_root.join("Inbox");
     let projects_prefix = canvas_root.join("Projects");
     let archive_prefix = canvas_root.join("Archive");
@@ -2059,6 +2098,11 @@ fn main() {
                 let app_handle = app.handle().clone();
                 let watcher = watch::watch_vault(&canvas_root, move |event| {
                     let payload = fs_event_payload(event);
+                    if let Some(path) = payload.path.as_ref()
+                        && tracked_file_exists(&app_handle, path)
+                    {
+                        mcp::emit_artifact_updated(path.clone(), "watcher", None, None);
+                    }
                     let _ = app_handle.emit("agentcanvas://fs-event", payload);
                 })?;
                 *state.watcher.lock().map_err(|_| "watcher lock poisoned")? = Some(watcher);
@@ -2116,6 +2160,8 @@ fn main() {
             load_sidecar,
             save_sidecar,
             update_sidecar_comments,
+            set_current_focus,
+            emit_artifact_updated,
             set_review_state
         ])
         .plugin(tauri_plugin_dialog::init())
@@ -2148,6 +2194,19 @@ fn fs_event_payload(event: WatchEvent) -> FsEventPayload {
     }
 }
 
+fn tracked_file_exists(app_handle: &tauri::AppHandle, path: &str) -> bool {
+    let state = app_handle.state::<AppState>();
+    let Ok(conn) = state.db.lock() else {
+        return false;
+    };
+    conn.query_row(
+        "SELECT 1 FROM files WHERE path = ?1 LIMIT 1",
+        params![path],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2166,7 +2225,7 @@ mod tests {
 
     #[test]
     fn test_path_within_canvas_shim_accepts_safe_path() {
-        let temp = tempfile::tempdir().expect("tempdir");
+        let temp = tempfile::tempdir_in(std::env::current_dir().expect("cwd")).expect("tempdir");
         let canvas_root = temp.path().join("AgentCanvas");
         let inbox = canvas_root.join("Inbox");
         fs::create_dir_all(&inbox).expect("inbox");
@@ -2182,7 +2241,7 @@ mod tests {
 
     #[test]
     fn test_path_within_canvas_resolves_symlinks() {
-        let temp = tempfile::tempdir().expect("tempdir");
+        let temp = tempfile::tempdir_in(std::env::current_dir().expect("cwd")).expect("tempdir");
         let canvas_root = temp.path().join("AgentCanvas");
         fs::create_dir_all(&canvas_root).expect("canvas root");
         let inside = canvas_root.join("x.md");
