@@ -3,14 +3,17 @@ use std::{fs, path::Path};
 use base64::{Engine as _, engine::general_purpose};
 use rusqlite::{Connection, params, params_from_iter};
 use serde_json::{Value, json};
-use vellum_core::sidecar;
+use tauri::{AppHandle, Emitter, Manager};
+use uuid::Uuid;
+use vellum_core::sidecar::{self, Comment, CommentAnchor, IdentityMap};
 
 use crate::{
-    AgentCanvasPaths, hydrate_file_state, metadata_for_file, path_safe_for_canvas,
+    AgentCanvasPaths, AppState, ensure_regular_file, hydrate_file_state, metadata_for_file,
+    path_safe_for_canvas, resync_watcher_from_db, unix_now, upsert_file_state,
     vault_root_for_absolute_doc,
 };
 
-pub const UNIMPLEMENTED_TOOL_MESSAGE: &str = "tool not yet implemented in skeleton (Slice 4)";
+use super::sessions::{self, McpSession};
 
 const TOOL_NAMES: [&str; 9] = [
     "list_artifacts",
@@ -37,12 +40,13 @@ pub fn call_tool(
     conn: &Connection,
     paths: &AgentCanvasPaths,
     current_focus: Option<String>,
-    session_id: Option<&str>,
+    session: Option<&McpSession>,
+    app_handle: Option<&AppHandle>,
     name: &str,
     arguments: Value,
 ) -> Result<Value, Value> {
     match name {
-        "list_artifacts" => list_artifacts(conn, paths, arguments),
+        "list_artifacts" => list_artifacts(conn, paths, session, arguments),
         "get_artifact" => get_artifact(arguments),
         "get_current_focus" => Ok(tool_result(
             current_focus
@@ -50,11 +54,15 @@ pub fn call_tool(
                 .unwrap_or(Value::Null),
         )),
         "get_comments" => get_comments(arguments),
-        "get_user_messages" => get_user_messages(conn, session_id, arguments),
-        known if TOOL_NAMES.contains(&known) => Err(json!({
-            "code": -32601,
-            "message": UNIMPLEMENTED_TOOL_MESSAGE
-        })),
+        "get_user_messages" => get_user_messages(
+            conn,
+            session.map(|session| session.session_id.as_str()),
+            arguments,
+        ),
+        "open_artifact" => open_artifact(conn, paths, app_handle, arguments),
+        "notify_user" => notify_user(app_handle, arguments),
+        "attach_artifact" => attach_artifact(conn, paths, session, app_handle, arguments),
+        "add_comment" => add_comment(conn, session, app_handle, arguments),
         _ => Err(json!({
             "code": -32601,
             "message": "unknown tool"
@@ -65,8 +73,10 @@ pub fn call_tool(
 fn list_artifacts(
     conn: &Connection,
     paths: &AgentCanvasPaths,
+    session: Option<&McpSession>,
     arguments: Value,
 ) -> Result<Value, Value> {
+    let filter_provided = arguments.get("filter").is_some();
     let filter = arguments
         .get("filter")
         .cloned()
@@ -77,6 +87,7 @@ fn list_artifacts(
     let project = filter.get("project").and_then(Value::as_str);
 
     let mut clauses = Vec::new();
+    let mut values = Vec::new();
     if let Some(inbox) = inbox {
         clauses.push(format!("in_inbox = {}", if inbox { 1 } else { 0 }));
     }
@@ -86,8 +97,25 @@ fn list_artifacts(
     if let Some(archived) = archived {
         clauses.push(format!("archived = {}", if archived { 1 } else { 0 }));
     }
-    if project.is_some() {
-        clauses.push("project_tag = ?1".to_owned());
+    if let Some(project) = project {
+        values.push(project.to_owned());
+        clauses.push(format!("project_tag = ?{}", values.len()));
+    }
+
+    if !filter_provided {
+        let mut default_clauses = vec!["in_inbox = 1".to_owned(), "pinned = 1".to_owned()];
+        if let Some(session) = session {
+            if !session.project.is_empty() && session.project != "default" {
+                values.push(session.project.clone());
+                default_clauses.push(format!("project_tag = ?{}", values.len()));
+            }
+            values.push(session.session_id.clone());
+            default_clauses.push(format!(
+                "path IN (SELECT path FROM session_attachments WHERE session_id = ?{})",
+                values.len()
+            ));
+        }
+        clauses.push(format!("({})", default_clauses.join(" OR ")));
     }
 
     let where_clause = if clauses.is_empty() {
@@ -99,18 +127,11 @@ fn list_artifacts(
     let mut statement = conn
         .prepare(&sql)
         .map_err(|error| rpc_error(-32603, error.to_string()))?;
-    let artifact_paths = if let Some(project) = project {
-        statement
-            .query_map(params![project], |row| row.get::<_, String>(0))
-            .map_err(|error| rpc_error(-32603, error.to_string()))?
-            .collect::<Result<Vec<_>, _>>()
-    } else {
-        statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| rpc_error(-32603, error.to_string()))?
-            .collect::<Result<Vec<_>, _>>()
-    }
-    .map_err(|error| rpc_error(-32603, error.to_string()))?;
+    let artifact_paths = statement
+        .query_map(params_from_iter(values), |row| row.get::<_, String>(0))
+        .map_err(|error| rpc_error(-32603, error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| rpc_error(-32603, error.to_string()))?;
 
     let mut artifacts = Vec::new();
     for path in artifact_paths {
@@ -132,6 +153,187 @@ fn list_artifacts(
     }
 
     Ok(tool_result(json!(artifacts)))
+}
+
+fn open_artifact(
+    conn: &Connection,
+    paths: &AgentCanvasPaths,
+    app_handle: Option<&AppHandle>,
+    arguments: Value,
+) -> Result<Value, Value> {
+    let path = required_path(&arguments)?;
+    ensure_regular_file(&path).map_err(|error| rpc_error(-32602, error))?;
+    let path_string = path.to_string_lossy().into_owned();
+    let was_already_known = file_is_tracked(conn, &path_string)?;
+    if !was_already_known {
+        let file = metadata_for_file(&path, &paths.canvas_root)
+            .map_err(|error| rpc_error(-32603, error))?;
+        upsert_file_state(conn, &file).map_err(|error| rpc_error(-32603, error))?;
+        conn.execute(
+            "UPDATE files SET in_inbox = 1, archived = 0 WHERE path = ?1",
+            params![path_string],
+        )
+        .map_err(|error| rpc_error(-32603, error.to_string()))?;
+    }
+
+    if let Some(app_handle) = app_handle {
+        if let Some(window) = app_handle.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.set_focus();
+            let _ = window.emit(
+                "agentcanvas://focus-and-open",
+                json!({ "path": path_string }),
+            );
+        }
+        let state = app_handle.state::<AppState>();
+        if let Ok(mut current_focus) = state.current_focus.lock() {
+            *current_focus = Some(path_string.clone());
+        }
+        let _ = resync_watcher_from_db(&state);
+    }
+
+    Ok(tool_result(json!({
+        "tracked": true,
+        "was_already_known": was_already_known
+    })))
+}
+
+fn attach_artifact(
+    conn: &Connection,
+    paths: &AgentCanvasPaths,
+    session: Option<&McpSession>,
+    app_handle: Option<&AppHandle>,
+    arguments: Value,
+) -> Result<Value, Value> {
+    let session = session.ok_or_else(|| rpc_error(-32600, "initialize required".to_owned()))?;
+    let path = required_path(&arguments)?;
+    ensure_regular_file(&path).map_err(|error| rpc_error(-32602, error))?;
+    let path_string = path.to_string_lossy().into_owned();
+    let also_pin = arguments
+        .get("also_pin")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if also_pin || !file_is_tracked(conn, &path_string)? {
+        let file = metadata_for_file(&path, &paths.canvas_root)
+            .map_err(|error| rpc_error(-32603, error))?;
+        upsert_file_state(conn, &file).map_err(|error| rpc_error(-32603, error))?;
+    }
+    sessions::attach_artifact(conn, &session.session_id, &path_string, unix_now())
+        .map_err(|error| rpc_error(-32603, error))?;
+    if also_pin {
+        conn.execute(
+            "UPDATE files SET pinned = 1 WHERE path = ?1",
+            params![path_string],
+        )
+        .map_err(|error| rpc_error(-32603, error.to_string()))?;
+    }
+    if let Some(app_handle) = app_handle {
+        let state = app_handle.state::<AppState>();
+        let _ = resync_watcher_from_db(&state);
+    }
+    Ok(tool_result(json!({ "attached": true })))
+}
+
+fn notify_user(app_handle: Option<&AppHandle>, arguments: Value) -> Result<Value, Value> {
+    let severity = arguments
+        .get("severity")
+        .and_then(Value::as_str)
+        .ok_or_else(|| rpc_error(-32602, "severity is required".to_owned()))?;
+    if !matches!(severity, "info" | "warn" | "error") {
+        return Err(rpc_error(
+            -32602,
+            "severity must be info, warn, or error".to_owned(),
+        ));
+    }
+    let message = arguments
+        .get("message")
+        .and_then(Value::as_str)
+        .ok_or_else(|| rpc_error(-32602, "message is required".to_owned()))?;
+    let action = arguments.get("action").cloned();
+    if let Some(action) = action.as_ref() {
+        let action_path = action
+            .get("artifact_path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| rpc_error(-32602, "action.artifact_path is required".to_owned()))?;
+        let _ = action
+            .get("label")
+            .and_then(Value::as_str)
+            .ok_or_else(|| rpc_error(-32602, "action.label is required".to_owned()))?;
+        path_safe_for_canvas(Path::new(action_path)).map_err(|error| rpc_error(-32602, error))?;
+    }
+    if let Some(app_handle) = app_handle
+        && let Some(window) = app_handle.get_webview_window("main")
+    {
+        window
+            .emit(
+                "agentcanvas://notify-user",
+                json!({
+                    "severity": severity,
+                    "message": message,
+                    "action": action
+                }),
+            )
+            .map_err(|error| rpc_error(-32603, error.to_string()))?;
+    }
+    Ok(tool_result(json!({ "delivered": true })))
+}
+
+fn add_comment(
+    conn: &Connection,
+    session: Option<&McpSession>,
+    app_handle: Option<&AppHandle>,
+    arguments: Value,
+) -> Result<Value, Value> {
+    let session = session.ok_or_else(|| rpc_error(-32600, "initialize required".to_owned()))?;
+    let path = required_path(&arguments)?;
+    ensure_regular_file(&path).map_err(|error| rpc_error(-32602, error))?;
+    let path_string = path.to_string_lossy().into_owned();
+    if !file_is_tracked(conn, &path_string)? {
+        return Err(rpc_error(-32602, "artifact is not tracked".to_owned()));
+    }
+    let anchor = arguments
+        .get("anchor")
+        .cloned()
+        .ok_or_else(|| rpc_error(-32602, "anchor is required".to_owned()))
+        .and_then(parse_comment_anchor)?;
+    let body = arguments
+        .get("body")
+        .and_then(Value::as_str)
+        .ok_or_else(|| rpc_error(-32602, "body is required".to_owned()))?
+        .to_owned();
+    let bytes = fs::read(&path).map_err(|error| rpc_error(-32603, error.to_string()))?;
+    let vault_root =
+        vault_root_for_absolute_doc(&path).map_err(|error| rpc_error(-32603, error))?;
+    let mut identity = sidecar::load_or_migrate(vault_root, &path, &bytes)
+        .map_err(|error| rpc_error(-32603, error.to_string()))?
+        .unwrap_or_else(|| IdentityMap {
+            source_hash: *blake3::hash(&bytes).as_bytes(),
+            block_ids: Vec::new(),
+            base_snapshot: None,
+            comments: None,
+        });
+    let comment_id = Uuid::new_v4().to_string();
+    let mut comments = identity.comments.unwrap_or_default();
+    comments.push(Comment {
+        id: comment_id.clone(),
+        author: format!("{}·{}", session.persona, session.agent),
+        created_at: unix_now(),
+        anchor,
+        body,
+        resolved: false,
+    });
+    identity.comments = Some(comments);
+    sidecar::save(vault_root, &path, &identity)
+        .map_err(|error| rpc_error(-32603, error.to_string()))?;
+    if let Some(app_handle) = app_handle
+        && let Some(window) = app_handle.get_webview_window("main")
+    {
+        let _ = window.emit(
+            "agentcanvas://comments-changed",
+            json!({ "path": path_string }),
+        );
+    }
+    Ok(tool_result(json!({ "comment_id": comment_id })))
 }
 
 fn get_artifact(arguments: Value) -> Result<Value, Value> {
@@ -216,6 +418,45 @@ fn get_user_messages(
 
 fn rpc_error(code: i64, message: String) -> Value {
     json!({ "code": code, "message": message })
+}
+
+fn file_is_tracked(conn: &Connection, path: &str) -> Result<bool, Value> {
+    conn.query_row("SELECT 1 FROM files WHERE path = ?1", params![path], |_| {
+        Ok(())
+    })
+    .map(|_| true)
+    .or_else(|error| {
+        if matches!(error, rusqlite::Error::QueryReturnedNoRows) {
+            Ok(false)
+        } else {
+            Err(rpc_error(-32603, error.to_string()))
+        }
+    })
+}
+
+fn parse_comment_anchor(value: Value) -> Result<CommentAnchor, Value> {
+    let anchor = serde_json::from_value::<CommentAnchor>(value)
+        .map_err(|error| rpc_error(-32602, format!("invalid anchor: {error}")))?;
+    match &anchor {
+        CommentAnchor::TextSelection(anchor) => {
+            if anchor.start_offset > anchor.end_offset {
+                return Err(rpc_error(
+                    -32602,
+                    "anchor start_offset must be <= end_offset".to_owned(),
+                ));
+            }
+        }
+        CommentAnchor::HtmlSelection(anchor) => {
+            if anchor.start_offset > anchor.end_offset || anchor.snapshot_text.is_empty() {
+                return Err(rpc_error(
+                    -32602,
+                    "html anchor must include ordered offsets and snapshot_text".to_owned(),
+                ));
+            }
+        }
+        CommentAnchor::FileLevel(_) => {}
+    }
+    Ok(anchor)
 }
 
 fn required_path(arguments: &Value) -> Result<std::path::PathBuf, Value> {

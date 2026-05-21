@@ -11,6 +11,7 @@ Status: `todo` / `in-progress` / `blocked` / `done` / `cut`.
 | 3 | done | File-level comments and grouped comments panel |
 | 4 | done | MCP server skeleton, stdio shim, initialize, tools/list |
 | 5 | done | MCP read tools and push notification channel |
+| 6 | done | MCP coordination tools and Send-back routing |
 
 ## v0.3 Critical fixes
 

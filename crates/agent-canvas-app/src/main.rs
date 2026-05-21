@@ -134,6 +134,27 @@ struct AgentSession {
     last_active: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct SessionAttachmentInfo {
+    session_id: String,
+    persona: String,
+    agent: String,
+    project: String,
+    attached_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SendBackRoute {
+    Mcp,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SendBackResult {
+    route: SendBackRoute,
+    delivered: usize,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct AddAgentSessionInput {
     persona: String,
@@ -734,6 +755,80 @@ fn send_multi_to_clipboard(
 }
 
 #[tauri::command]
+fn session_attachments_for_path(
+    state: tauri::State<AppState>,
+    path: String,
+) -> Result<Vec<SessionAttachmentInfo>, String> {
+    let _ = state.paths()?;
+    let path = path_safe_for_canvas(Path::new(&path))?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    mcp::sessions::attachments_for_path(&conn, &path.to_string_lossy()).map(|attachments| {
+        attachments
+            .into_iter()
+            .map(|attachment| SessionAttachmentInfo {
+                session_id: attachment.session_id,
+                persona: attachment.persona,
+                agent: attachment.agent,
+                project: attachment.project,
+                attached_at: attachment.attached_at,
+            })
+            .collect()
+    })
+}
+
+#[tauri::command]
+fn send_back_to_session(
+    state: tauri::State<AppState>,
+    path: String,
+    session_id: String,
+    note: Option<String>,
+    action_verb: Option<String>,
+) -> Result<SendBackResult, String> {
+    let _ = state.paths()?;
+    let path = path_safe_for_canvas(Path::new(&path))?;
+    let path_string = path.to_string_lossy().into_owned();
+    let created_at = unix_now();
+    {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        let attached: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_attachments WHERE session_id = ?1 AND path = ?2",
+                params![session_id, path_string],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if attached == 0 {
+            return Err("session is not attached to this artifact".to_owned());
+        }
+        mcp::sessions::insert_user_message(
+            &conn,
+            &session_id,
+            &path_string,
+            note.as_deref(),
+            action_verb.as_deref(),
+            created_at,
+        )?;
+    }
+    let delivered = usize::from(mcp::emit_artifact_updated_to_session(
+        &session_id,
+        path_string,
+        "user",
+        note,
+        action_verb,
+    ));
+    Ok(SendBackResult {
+        route: SendBackRoute::Mcp,
+        delivered,
+    })
+}
+
+#[tauri::command]
 fn get_action_templates(state: tauri::State<AppState>) -> Result<Vec<ActionTemplate>, String> {
     action_templates_from_db(&state.db)
 }
@@ -1215,6 +1310,7 @@ fn initialize_state_db(db: &Connection, legacy_canvas_root: &Path) -> Result<(),
     .map_err(|error| error.to_string())?;
     mcp::sessions::migrate_agent_sessions(db)?;
     mcp::sessions::migrate_user_messages(db)?;
+    mcp::sessions::migrate_session_attachments(db)?;
     add_column_if_missing(
         db,
         "files",
@@ -2183,6 +2279,8 @@ fn main() {
             export_file_to,
             send_to_clipboard,
             send_multi_to_clipboard,
+            session_attachments_for_path,
+            send_back_to_session,
             list_agent_sessions,
             add_agent_session,
             parse_document,

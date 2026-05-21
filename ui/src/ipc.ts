@@ -89,6 +89,25 @@ export const AgentSession = z
   .strict();
 export type AgentSession = z.infer<typeof AgentSession>;
 
+export const SessionAttachment = z
+  .object({
+    session_id: z.string(),
+    persona: z.string(),
+    agent: z.string(),
+    project: z.string(),
+    attached_at: z.number()
+  })
+  .strict();
+export type SessionAttachment = z.infer<typeof SessionAttachment>;
+
+export const SendBackResult = z
+  .object({
+    route: z.literal("mcp"),
+    delivered: z.number()
+  })
+  .strict();
+export type SendBackResult = z.infer<typeof SendBackResult>;
+
 export const AddAgentSessionInput = z
   .object({
     persona: z.string(),
@@ -277,6 +296,34 @@ export async function sendMultiToClipboard(payloads: SendPayload[]): Promise<str
     return z.string().parse(result);
   } catch (caught) {
     throw ipcError("send_multi_to_clipboard", caught);
+  }
+}
+
+export async function sessionAttachmentsForPath(path: string): Promise<SessionAttachment[]> {
+  try {
+    const result = await invoke<unknown>("session_attachments_for_path", { path });
+    return z.array(SessionAttachment).parse(result);
+  } catch (caught) {
+    throw ipcError("session_attachments_for_path", caught);
+  }
+}
+
+export async function sendBackToSession(
+  path: string,
+  sessionId: string,
+  note: string | null,
+  actionVerb: string | null
+): Promise<SendBackResult> {
+  try {
+    const result = await invoke<unknown>("send_back_to_session", {
+      path,
+      sessionId,
+      note,
+      actionVerb
+    });
+    return SendBackResult.parse(result);
+  } catch (caught) {
+    throw ipcError("send_back_to_session", caught);
   }
 }
 

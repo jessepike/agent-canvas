@@ -36,8 +36,10 @@ import {
   reloadPersonaRegistry,
   renameProject,
   resetActionTemplates,
+  sendBackToSession,
   sendMultiToClipboard,
   sendToClipboard,
+  sessionAttachmentsForPath,
   setActionTemplates,
   setDefaultActionVerb,
   setCurrentFocus,
@@ -54,7 +56,8 @@ import {
   type AgentSession,
   type ConflictStrategy,
   type FileMetadata,
-  type PersonaRegistry
+  type PersonaRegistry,
+  type SessionAttachment
 } from "./ipc";
 import type { BaseSnapshot, Block, Comment, CommentAnchor } from "./types/blocks";
 import "./styles.css";
@@ -77,6 +80,19 @@ type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string
 type FsEventPayload = {
   kind: string;
   path: string | null;
+};
+
+type FocusAndOpenPayload = {
+  path: string;
+};
+
+type NotifyUserPayload = {
+  severity: "info" | "warn" | "error";
+  message: string;
+  action?: {
+    label: string;
+    artifact_path: string;
+  } | null;
 };
 
 type TauriDragDropPayload = {
@@ -213,10 +229,12 @@ export default function App() {
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [handoffToast, setHandoffToast] = useState<string | null>(null);
   const [handoffToastBody, setHandoffToastBody] = useState<string | null>(null);
+  const [handoffToastAction, setHandoffToastAction] = useState<NotifyUserPayload["action"]>(null);
   const [sendPopoverOpen, setSendPopoverOpen] = useState(false);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [attachedSessions, setAttachedSessions] = useState<SessionAttachment[]>([]);
   const [defaultAgentId, setDefaultAgentId] = useState<string | null>(null);
   const [defaultActionVerb, setDefaultActionVerbState] = useState("Review");
   const [sendActionVerb, setSendActionVerb] = useState("Review");
@@ -331,6 +349,23 @@ export default function App() {
     return [...selectedPaths].map((path) => byPath.get(path)).filter((file): file is FileMetadata => Boolean(file));
   }, [archiveFiles, files, pinnedFiles, projectFiles, selectedPaths]);
   const multiSelectActive = selectedPaths.size > 1;
+  useEffect(() => {
+    let disposed = false;
+    if (!artifact || multiSelectActive) {
+      setAttachedSessions([]);
+      return;
+    }
+    void sessionAttachmentsForPath(artifact.path)
+      .then((attachments) => {
+        if (!disposed) {
+          setAttachedSessions(attachments);
+        }
+      })
+      .catch((caught) => setError(caught instanceof Error ? caught.message : String(caught)));
+    return () => {
+      disposed = true;
+    };
+  }, [artifact?.path, multiSelectActive]);
   const filteredFiles = useMemo(() => filterFilesByQuery(files, mode === "inbox" ? searchQuery : ""), [files, mode, searchQuery]);
   const filteredProjectFiles = useMemo(
     () => filterFilesByQuery(projectFiles, mode === "project" ? searchQuery : ""),
@@ -356,9 +391,21 @@ export default function App() {
     }
     return filteredFiles;
   }, [filteredArchiveFiles, filteredFiles, filteredPinnedFiles, filteredProjectFiles, mode]);
+  const attachedAgentOptions = useMemo(
+    () => attachedSessions.map(attachmentToAgentSession),
+    [attachedSessions]
+  );
+  const sendRouteSessions = artifact && !multiSelectActive && attachedAgentOptions.length > 0
+    ? attachedAgentOptions
+    : sessions;
   const sendButtonLabel = useMemo(
-    () => sendLabelForSessions(sessions, defaultAgentId, multiSelectActive ? selectedPaths.size : undefined),
-    [defaultAgentId, multiSelectActive, selectedPaths.size, sessions]
+    () => sendLabelForSessions(
+      sendRouteSessions,
+      attachedAgentOptions[0]?.id ?? defaultAgentId,
+      multiSelectActive ? selectedPaths.size : undefined,
+      Boolean(artifact && !multiSelectActive && attachedAgentOptions.length > 0)
+    ),
+    [artifact, attachedAgentOptions, defaultAgentId, multiSelectActive, selectedPaths.size, sendRouteSessions]
   );
   const defaultAgent = useMemo(
     () => sessions.find((session) => session.id === defaultAgentId) ?? null,
@@ -660,6 +707,91 @@ export default function App() {
       void unlisten.then((dispose) => dispose());
     };
   }, [refresh, reloadOpenArtifact]);
+
+  useEffect(() => {
+    let disposed = false;
+    const unlistenFocus = listen<FocusAndOpenPayload>("agentcanvas://focus-and-open", async (event) => {
+      if (disposed) {
+        return;
+      }
+      const path = event.payload.path;
+      setArrivedPaths((current) => new Set([...current, path]));
+      window.setTimeout(() => {
+        setArrivedPaths((current) => {
+          const next = new Set(current);
+          next.delete(path);
+          return next;
+        });
+      }, 2500);
+      const [nextFiles, nextPinned, nextArchive, nextProjects] = await Promise.all([
+        listInbox(),
+        listPinned(),
+        listArchive(),
+        listProjects()
+      ]);
+      const nextProjectEntries = await Promise.all(
+        nextProjects.map(async (project) => [project, await listProjectFiles(project)] as const)
+      );
+      if (disposed) {
+        return;
+      }
+      setFiles(nextFiles);
+      setPinnedFiles(nextPinned);
+      setArchiveFiles(nextArchive);
+      const projectEntry = nextProjectEntries.find(([, projectFiles]) =>
+        projectFiles.some((candidate) => candidate.path === path)
+      );
+      const file =
+        nextFiles.find((candidate) => candidate.path === path) ??
+        projectEntry?.[1].find((candidate) => candidate.path === path) ??
+        nextPinned.find((candidate) => candidate.path === path) ??
+        nextArchive.find((candidate) => candidate.path === path);
+      if (projectEntry) {
+        setMode("project");
+        setCurrentProject(projectEntry[0]);
+        setProjectFiles(projectEntry[1]);
+      } else if (nextPinned.some((candidate) => candidate.path === path)) {
+        setMode("pinned");
+        setCurrentProject(null);
+      } else if (nextArchive.some((candidate) => candidate.path === path)) {
+        setMode("archive");
+        setCurrentProject(null);
+      } else {
+        setMode("inbox");
+        setCurrentProject(null);
+      }
+      if (file) {
+        await openArtifact(file);
+      }
+      window.focus();
+    });
+    const unlistenNotify = listen<NotifyUserPayload>("agentcanvas://notify-user", (event) => {
+      if (disposed) {
+        return;
+      }
+      setHandoffToast(event.payload.message);
+      setHandoffToastBody(event.payload.severity === "info" ? null : event.payload.severity.toUpperCase());
+      setHandoffToastAction(event.payload.action ?? null);
+      window.setTimeout(() => {
+        setHandoffToast((current) => (current === event.payload.message ? null : current));
+        setHandoffToastBody(null);
+        setHandoffToastAction(null);
+      }, 4500);
+    });
+    const unlistenComments = listen<FocusAndOpenPayload>("agentcanvas://comments-changed", (event) => {
+      if (disposed || artifact?.path !== event.payload.path) {
+        return;
+      }
+      void loadCommentsForPath(event.payload.path, setComments);
+      setCommentsOpen(true);
+    });
+    return () => {
+      disposed = true;
+      void unlistenFocus.then((dispose) => dispose());
+      void unlistenNotify.then((dispose) => dispose());
+      void unlistenComments.then((dispose) => dispose());
+    };
+  }, [artifact?.path, openArtifact]);
 
   useEffect(() => {
     function handleFocus() {
@@ -972,18 +1104,19 @@ export default function App() {
     if (!artifact && selectedPaths.size <= 1) {
       return;
     }
-    // Pasteboard handoff works regardless of declared agent sessions. The agent
-    // panel is metadata for routing convenience, not a gate on copy-to-clipboard.
     const defaultIsPreset = ACTION_VERBS.includes(defaultActionVerb as (typeof ACTION_VERBS)[number]);
-    const defaultSession = sessions.find((session) => session.id === defaultAgentId) ?? null;
-    const nextSelectedAgent = defaultSession?.id ?? (sessions.length === 1 ? sessions[0]?.id ?? null : null);
+    const routeSessions = artifact && selectedPaths.size <= 1 && attachedAgentOptions.length > 0
+      ? attachedAgentOptions
+      : sessions;
+    const defaultSession = routeSessions.find((session) => session.id === defaultAgentId) ?? routeSessions[0] ?? null;
+    const nextSelectedAgent = defaultSession?.id ?? (routeSessions.length === 1 ? routeSessions[0]?.id ?? null : null);
     setSelectedAgentId(nextSelectedAgent);
-    setShowAgentPicker(sessions.length > 0 && (forceAgentPicker || (sessions.length > 1 && !defaultSession)));
+    setShowAgentPicker(routeSessions.length > 0 && (forceAgentPicker || routeSessions.length > 1));
     setSendActionVerb(defaultIsPreset ? defaultActionVerb : "Custom");
     setCustomActionVerb(defaultIsPreset ? "" : defaultActionVerb);
     setSendNote("");
     setSendPopoverOpen(true);
-  }, [artifact, defaultActionVerb, defaultAgentId, selectedPaths.size, sessions]);
+  }, [artifact, attachedAgentOptions, defaultActionVerb, defaultAgentId, selectedPaths.size, sessions]);
 
   const sendCurrentArtifact = useCallback(async (actionVerb: string, note: string) => {
     if (!artifact && selectedPaths.size <= 1) {
@@ -991,16 +1124,18 @@ export default function App() {
     }
     const verb = actionVerb.trim() || "Review";
     try {
-      // Only require agent picker when multiple sessions exist and none is targeted.
-      // Zero sessions = pasteboard payload uses generic "Agent" framing; still copies.
-      if (sessions.length > 1) {
-        const targetAgent = sessions.find((session) => session.id === selectedAgentId) ?? defaultAgent;
+      const routeSessions = artifact && selectedPaths.size <= 1 && attachedAgentOptions.length > 0
+        ? attachedAgentOptions
+        : sessions;
+      const routeDefaultAgent = routeSessions.find((session) => session.id === selectedAgentId) ?? routeSessions[0] ?? defaultAgent;
+      if (routeSessions.length > 1) {
+        const targetAgent = routeSessions.find((session) => session.id === selectedAgentId) ?? routeDefaultAgent;
         if (!targetAgent) {
           setShowAgentPicker(true);
           return;
         }
       }
-      const agent = sessions.find((session) => session.id === selectedAgentId) ?? defaultAgent;
+      const agent = routeSessions.find((session) => session.id === selectedAgentId) ?? routeDefaultAgent;
       if (selectedPaths.size > 1) {
         const payloads = await Promise.all(
           [...selectedPaths].map(async (path) => {
@@ -1019,13 +1154,19 @@ export default function App() {
         setHandoffToast(message);
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3500);
       } else if (artifact) {
-        await sendToClipboard({
-          path: artifact.path,
-          contents: artifact.source,
-          note: note.trim() ? note : null,
-          action_verb: verb
-        });
-        const message = "Copied to clipboard — paste into your Claude / Codex session";
+        if (attachedAgentOptions.length > 0 && agent) {
+          await sendBackToSession(artifact.path, agent.id, note.trim() ? note : null, verb);
+        } else {
+          await sendToClipboard({
+            path: artifact.path,
+            contents: artifact.source,
+            note: note.trim() ? note : null,
+            action_verb: verb
+          });
+        }
+        const message = attachedAgentOptions.length > 0 && agent
+          ? `Sent back to ${agentSessionLabel(agent)}`
+          : "Copied to clipboard — paste into your Claude / Codex session";
         setHandoffToast(message);
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3500);
       }
@@ -1042,7 +1183,7 @@ export default function App() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
-  }, [artifact, defaultAgent, selectedAgentId, selectedPath, selectedPaths, sessions]);
+  }, [artifact, attachedAgentOptions, defaultAgent, selectedAgentId, selectedPath, selectedPaths, sessions]);
 
   const setDefaultAgentForProject = useCallback(
     async (session: AgentSession) => {
@@ -1961,6 +2102,46 @@ export default function App() {
               <div className="handoff-toast">
                 <strong>{handoffToast}</strong>
                 {handoffToastBody ? <span>{handoffToastBody}</span> : null}
+                {handoffToastAction ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const [nextFiles, nextPinned, nextArchive, nextProjects] = await Promise.all([
+                        listInbox(),
+                        listPinned(),
+                        listArchive(),
+                        listProjects()
+                      ]);
+                      const nextProjectEntries = await Promise.all(
+                        nextProjects.map(async (project) => [project, await listProjectFiles(project)] as const)
+                      );
+                      setFiles(nextFiles);
+                      setPinnedFiles(nextPinned);
+                      setArchiveFiles(nextArchive);
+                      const projectEntry = nextProjectEntries.find(([, projectFiles]) =>
+                        projectFiles.some((candidate) => candidate.path === handoffToastAction.artifact_path)
+                      );
+                      const file =
+                        nextFiles.find((candidate) => candidate.path === handoffToastAction.artifact_path) ??
+                        projectEntry?.[1].find((candidate) => candidate.path === handoffToastAction.artifact_path) ??
+                        nextPinned.find((candidate) => candidate.path === handoffToastAction.artifact_path) ??
+                        nextArchive.find((candidate) => candidate.path === handoffToastAction.artifact_path);
+                      if (projectEntry) {
+                        setMode("project");
+                        setCurrentProject(projectEntry[0]);
+                        setProjectFiles(projectEntry[1]);
+                      }
+                      if (file) {
+                        await openArtifact(file);
+                      }
+                      setHandoffToast(null);
+                      setHandoffToastBody(null);
+                      setHandoffToastAction(null);
+                    }}
+                  >
+                    {handoffToastAction.label}
+                  </button>
+                ) : null}
               </div>
             ) : null}
             {multiSelectActive ? (
@@ -2110,7 +2291,7 @@ export default function App() {
                   setSendActionVerb("Custom");
                 }}
                 onNoteChange={setSendNote}
-                sessions={sessions}
+                sessions={sendRouteSessions}
                 showAgentPicker={showAgentPicker}
                 selectedAgentId={selectedAgentId}
                 onSelectedAgentChange={setSelectedAgentId}
@@ -3366,8 +3547,13 @@ function fallbackPersonaColor(persona: string): string {
   return "var(--text-secondary)";
 }
 
-function sendLabelForSessions(sessions: AgentSession[], defaultSessionId: string | null, fileCount?: number): string {
-  const prefix = fileCount && fileCount > 1 ? `Send ${fileCount} files to` : "Send to";
+function sendLabelForSessions(
+  sessions: AgentSession[],
+  defaultSessionId: string | null,
+  fileCount?: number,
+  isMcpSendBack = false
+): string {
+  const prefix = fileCount && fileCount > 1 ? `Send ${fileCount} files to` : isMcpSendBack ? "Send back to" : "Send to";
   if (sessions.length === 0) {
     return `${prefix} Agent`;
   }
@@ -3375,11 +3561,22 @@ function sendLabelForSessions(sessions: AgentSession[], defaultSessionId: string
     return `${prefix} ${agentSessionLabel(sessions[0])}`;
   }
   const defaultSession = sessions.find((session) => session.id === defaultSessionId);
-  return defaultSession ? `${prefix} ${agentSessionLabel(defaultSession)}` : `${prefix} Agent`;
+  return defaultSession ? `${prefix} ${agentSessionLabel(defaultSession)}` : `${prefix}...`;
 }
 
 function agentSessionLabel(session: AgentSession): string {
   return `${session.persona}·${session.backbone}`;
+}
+
+function attachmentToAgentSession(attachment: SessionAttachment): AgentSession {
+  return {
+    id: attachment.session_id,
+    persona: attachment.persona,
+    backbone: attachment.agent,
+    context: attachment.project,
+    connected_at: attachment.attached_at,
+    last_active: attachment.attached_at
+  };
 }
 
 function pathsFromDataTransfer(dataTransfer: DataTransfer | null): string[] {

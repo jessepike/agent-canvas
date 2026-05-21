@@ -2,7 +2,9 @@ use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::Mutex;
 use rusqlite::{Connection, params};
+use serde::Serialize;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use super::notifications::JsonRpcNotification;
 
@@ -71,6 +73,18 @@ impl SubscriptionRegistry {
         self.dispatch(notification, |_| true)
     }
 
+    pub fn dispatch_to_session(&self, session_id: &str, notification: JsonRpcNotification) -> bool {
+        let Some(tx) = self
+            .inner
+            .lock()
+            .get(session_id)
+            .map(|subscription| subscription.tx.clone())
+        else {
+            return false;
+        };
+        tx.send(notification).is_ok()
+    }
+
     fn dispatch(
         &self,
         notification: JsonRpcNotification,
@@ -130,6 +144,25 @@ CREATE INDEX IF NOT EXISTS idx_user_messages_session ON user_messages(session_id
 CREATE INDEX IF NOT EXISTS idx_user_messages_created ON user_messages(created_at);
 "#;
 
+pub const SESSION_ATTACHMENTS_MIGRATION_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS session_attachments (
+  session_id  TEXT NOT NULL,
+  path        TEXT NOT NULL,
+  attached_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, path)
+);
+CREATE INDEX IF NOT EXISTS idx_session_attachments_path ON session_attachments(path);
+"#;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionAttachment {
+    pub session_id: String,
+    pub persona: String,
+    pub agent: String,
+    pub project: String,
+    pub attached_at: i64,
+}
+
 pub fn migrate_manual_agent_sessions_if_needed(conn: &Connection) -> Result<(), String> {
     let columns = table_columns(conn, "agent_sessions")?;
     if columns.iter().any(|column| column == "backbone") {
@@ -166,6 +199,11 @@ pub fn migrate_agent_sessions(conn: &Connection) -> Result<(), String> {
 
 pub fn migrate_user_messages(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(USER_MESSAGES_MIGRATION_SQL)
+        .map_err(|error| error.to_string())
+}
+
+pub fn migrate_session_attachments(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(SESSION_ATTACHMENTS_MIGRATION_SQL)
         .map_err(|error| error.to_string())
 }
 
@@ -211,6 +249,88 @@ pub fn disconnect_agent_session(
     )
     .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+pub fn attach_artifact(
+    conn: &Connection,
+    session_id: &str,
+    path: &str,
+    attached_at: i64,
+) -> Result<(), String> {
+    conn.execute(
+        r#"
+        INSERT INTO session_attachments(session_id, path, attached_at)
+        VALUES (?1, ?2, ?3)
+        ON CONFLICT(session_id, path) DO UPDATE SET attached_at = excluded.attached_at
+        "#,
+        params![session_id, path, attached_at],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub fn cleanup_session_attachments(conn: &Connection, session_id: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM session_attachments WHERE session_id = ?1",
+        params![session_id],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub fn attachments_for_path(
+    conn: &Connection,
+    path: &str,
+) -> Result<Vec<SessionAttachment>, String> {
+    let mut statement = conn
+        .prepare(
+            r#"
+            SELECT a.session_id, s.persona, s.agent, s.project, a.attached_at
+            FROM session_attachments a
+            JOIN agent_sessions s ON s.session_id = a.session_id
+            WHERE a.path = ?1
+              AND s.connected_at = (
+                SELECT MAX(s2.connected_at)
+                FROM agent_sessions s2
+                WHERE s2.session_id = a.session_id
+              )
+            ORDER BY a.attached_at DESC, a.session_id ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    statement
+        .query_map(params![path], |row| {
+            Ok(SessionAttachment {
+                session_id: row.get(0)?,
+                persona: row.get(1)?,
+                agent: row.get(2)?,
+                project: row.get(3)?,
+                attached_at: row.get(4)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+pub fn insert_user_message(
+    conn: &Connection,
+    session_id: &str,
+    path: &str,
+    note: Option<&str>,
+    action_verb: Option<&str>,
+    created_at: i64,
+) -> Result<String, String> {
+    let id = Uuid::new_v4().to_string();
+    conn.execute(
+        r#"
+        INSERT INTO user_messages(id, session_id, path, note, action_verb, created_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "#,
+        params![id, session_id, path, note, action_verb, created_at],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(id)
 }
 
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {

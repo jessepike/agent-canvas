@@ -1,10 +1,33 @@
 ---
 project: agent-canvas
 updated: 2026-05-21
-stage: v0.3 watcher critical fix implemented
+stage: v0.3 Slice 6 implemented
 ---
 
 # AgentCanvas — Status
+
+## v0.3 Slice 6 Summary (2026-05-21)
+
+Slice 6 of `docs/BUILD-SPEC-v0.3.md` is implemented.
+
+- Implemented MCP coordination tools: `open_artifact`, `attach_artifact`, `notify_user`, and `add_comment`.
+- Added `session_attachments` with idempotent migration, per-session attachment upsert, path lookup, and cleanup on MCP connection close.
+- Applied default session scoping to `list_artifacts`: Inbox, session project, session attachments, and pinned files.
+- Wired `open_artifact` to auto-track unknown files into Inbox, focus the app window, emit a frontend focus/open event, set current focus, and pulse the just-arrived row highlight.
+- Wired `notify_user` to frontend toast events with optional artifact action buttons.
+- Wired `add_comment` to append sidecar comments with `Comment.author = "{persona}·{agent}"`.
+- Added Send-back routing: the UI queries attached MCP sessions for the current file, labels one-session sends as `Send back to {persona}·{agent}`, shows a picker for multiple sessions, and falls back to clipboard when no MCP session is attached.
+- Wrote the implementation report to `docs/active/codex-slice6-v0.3-report-2026-05-21.md`.
+
+Verification:
+
+- `cd crates/agent-canvas-app && cargo check -q` passes with the pre-existing ts-rs sidecar warning.
+- `cd crates/agent-canvas-app && cargo test --bin agent-canvas-app 2>&1 | tail -25` passes: 38 tests.
+- `cd crates/vellum-core && cargo test sidecar 2>&1 | tail -5` passes: 0 matched tests, 12 filtered.
+- `cd crates/agent-canvas-mcp && cargo build` passes.
+- `cd ui && ./node_modules/.bin/tsc --noEmit` passes.
+- `cd ui && ./node_modules/.bin/vite build 2>&1 | tail -3` passes with the known chunk-size warning.
+- `grep -rn 'allow-same-origin\|allow-modals' ui/src/ | grep -v '\.test\.' | wc -l` returns `0`.
 
 ## v0.3 Watcher Critical Fix Summary (2026-05-21)
 

@@ -78,6 +78,22 @@ pub fn emit_artifact_updated(
     notifications::dispatch_artifact_updated(&control.subscriptions, path, by, note, action_verb)
 }
 
+pub fn emit_artifact_updated_to_session(
+    session_id: &str,
+    path: String,
+    by: &str,
+    note: Option<String>,
+    action_verb: Option<String>,
+) -> bool {
+    let Some(control) = MCP_CONTROL.get() else {
+        return false;
+    };
+    control.subscriptions.dispatch_to_session(
+        session_id,
+        JsonRpcNotification::artifact_updated(path, by, note, action_verb),
+    )
+}
+
 pub fn emit_artifact_focused(path: String) -> usize {
     let Some(control) = MCP_CONTROL.get() else {
         return 0;
@@ -172,6 +188,7 @@ async fn handle_connection(app_handle: AppHandle, control: Arc<McpControl>, stre
         control.subscriptions.remove(&session.session_id);
         let state = app_handle.state::<AppState>();
         if let Ok(conn) = state.db.lock() {
+            let _ = sessions::cleanup_session_attachments(&conn, &session.session_id);
             let _ = sessions::disconnect_agent_session(
                 &conn,
                 &session.session_id,
@@ -350,7 +367,8 @@ fn handle_tools_call(
             &conn,
             &paths,
             current_focus,
-            active_session.map(|session| session.session_id.as_str()),
+            active_session,
+            Some(app_handle),
         ),
         Err(_) => rpc_error(id, -32603, "state db lock poisoned"),
     }
@@ -362,7 +380,8 @@ fn handle_tools_call_with_conn(
     conn: &rusqlite::Connection,
     paths: &crate::AgentCanvasPaths,
     current_focus: Option<String>,
-    session_id: Option<&str>,
+    session: Option<&McpSession>,
+    app_handle: Option<&AppHandle>,
 ) -> Value {
     let name = params
         .get("name")
@@ -372,7 +391,15 @@ fn handle_tools_call_with_conn(
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let result = tools::call_tool(conn, paths, current_focus, session_id, name, arguments);
+    let result = tools::call_tool(
+        conn,
+        paths,
+        current_focus,
+        session,
+        app_handle,
+        name,
+        arguments,
+    );
 
     match result {
         Ok(value) => rpc_result(id, value),
@@ -461,6 +488,16 @@ mod tests {
         (conn, paths, temp)
     }
 
+    fn test_session(session_id: &str) -> McpSession {
+        McpSession {
+            session_id: session_id.to_owned(),
+            persona: "cpo".to_owned(),
+            agent: "claude".to_owned(),
+            project: "agent-canvas".to_owned(),
+            connected_at: 1,
+        }
+    }
+
     #[test]
     fn initialize_with_valid_clientinfo_returns_serverinfo() {
         let (conn, _, _temp) = test_state();
@@ -510,22 +547,20 @@ mod tests {
     }
 
     #[test]
-    fn tools_call_stub_returns_method_not_found_for_unimplemented() {
+    fn tools_call_unknown_returns_method_not_found() {
         let (conn, paths, _temp) = test_state();
         let response = handle_tools_call_with_conn(
             json!(4),
-            json!({"name":"open_artifact","arguments":{"path":"/tmp/x.md"}}),
+            json!({"name":"unknown_tool","arguments":{}}),
             &conn,
             &paths,
             None,
-            Some("s1"),
+            Some(&test_session("s1")),
+            None,
         );
 
         assert_eq!(response["error"]["code"], -32601);
-        assert_eq!(
-            response["error"]["message"],
-            tools::UNIMPLEMENTED_TOOL_MESSAGE
-        );
+        assert_eq!(response["error"]["message"], "unknown tool");
     }
 
     #[test]
@@ -649,7 +684,8 @@ mod tests {
             &conn,
             &paths,
             None,
-            Some("s1"),
+            Some(&test_session("s1")),
+            None,
         );
 
         let artifact = &response["result"]["structuredContent"];
@@ -671,7 +707,8 @@ mod tests {
             &conn,
             &paths,
             None,
-            Some("s1"),
+            Some(&test_session("s1")),
+            None,
         );
 
         let artifact = &response["result"]["structuredContent"];
@@ -701,7 +738,8 @@ mod tests {
             &conn,
             &paths,
             None,
-            Some("s1"),
+            Some(&test_session("s1")),
+            None,
         );
 
         let comments = response["result"]["structuredContent"]
@@ -731,7 +769,8 @@ mod tests {
             &conn,
             &paths,
             None,
-            Some("s1"),
+            Some(&test_session("s1")),
+            None,
         );
 
         let messages = response["result"]["structuredContent"]
@@ -750,7 +789,8 @@ mod tests {
             &conn,
             &paths,
             Some("/abs/path.md".to_owned()),
-            Some("s1"),
+            Some(&test_session("s1")),
+            None,
         );
 
         assert_eq!(
@@ -776,6 +816,317 @@ mod tests {
         assert_eq!(count, 1);
     }
 
+    #[test]
+    fn open_artifact_inserts_unknown_path_with_inbox_tag() {
+        let (conn, paths, _temp) = test_state();
+        fs::create_dir_all(&paths.canvas_root).expect("canvas");
+        let markdown = paths.canvas_root.join("new.md");
+        fs::write(&markdown, "# New\n").expect("markdown");
+
+        let response = handle_tools_call_with_conn(
+            json!(20),
+            json!({"name":"open_artifact","arguments":{"path":markdown.to_string_lossy()}}),
+            &conn,
+            &paths,
+            None,
+            Some(&test_session("s1")),
+            None,
+        );
+
+        assert_eq!(response["result"]["structuredContent"]["tracked"], true);
+        assert_eq!(
+            response["result"]["structuredContent"]["was_already_known"],
+            false
+        );
+        let in_inbox: i64 = conn
+            .query_row(
+                "SELECT in_inbox FROM files WHERE path = ?1",
+                rusqlite::params![markdown.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .expect("file row");
+        assert_eq!(in_inbox, 1);
+    }
+
+    #[test]
+    fn open_artifact_returns_was_already_known_for_tracked_path() {
+        let (conn, paths, _temp) = test_state();
+        fs::create_dir_all(&paths.canvas_root).expect("canvas");
+        let markdown = paths.canvas_root.join("known.md");
+        fs::write(&markdown, "# Known\n").expect("markdown");
+        insert_test_file(&conn, &paths, &markdown, 1, None, 0);
+
+        let response = handle_tools_call_with_conn(
+            json!(21),
+            json!({"name":"open_artifact","arguments":{"path":markdown.to_string_lossy()}}),
+            &conn,
+            &paths,
+            None,
+            Some(&test_session("s1")),
+            None,
+        );
+
+        assert_eq!(
+            response["result"]["structuredContent"]["was_already_known"],
+            true
+        );
+    }
+
+    #[test]
+    fn attach_artifact_inserts_session_attachment_row() {
+        let (conn, paths, _temp) = test_state();
+        fs::create_dir_all(&paths.canvas_root).expect("canvas");
+        let markdown = paths.canvas_root.join("attach.md");
+        fs::write(&markdown, "# Attach\n").expect("markdown");
+        let session = test_session("s1");
+
+        let response = handle_tools_call_with_conn(
+            json!(22),
+            json!({"name":"attach_artifact","arguments":{"path":markdown.to_string_lossy()}}),
+            &conn,
+            &paths,
+            None,
+            Some(&session),
+            None,
+        );
+
+        assert_eq!(response["result"]["structuredContent"]["attached"], true);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_attachments WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn attach_artifact_with_also_pin_pins_file() {
+        let (conn, paths, _temp) = test_state();
+        fs::create_dir_all(&paths.canvas_root).expect("canvas");
+        let markdown = paths.canvas_root.join("pin.md");
+        fs::write(&markdown, "# Pin\n").expect("markdown");
+
+        let response = handle_tools_call_with_conn(
+            json!(23),
+            json!({"name":"attach_artifact","arguments":{"path":markdown.to_string_lossy(),"also_pin":true}}),
+            &conn,
+            &paths,
+            None,
+            Some(&test_session("s1")),
+            None,
+        );
+
+        assert_eq!(response["result"]["structuredContent"]["attached"], true);
+        let pinned: i64 = conn
+            .query_row(
+                "SELECT pinned FROM files WHERE path = ?1",
+                rusqlite::params![markdown.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .expect("pinned");
+        assert_eq!(pinned, 1);
+    }
+
+    #[test]
+    fn attach_artifact_cleanup_on_connection_close_removes_rows() {
+        let (conn, paths, _temp) = test_state();
+        fs::create_dir_all(&paths.canvas_root).expect("canvas");
+        let markdown = paths.canvas_root.join("cleanup.md");
+        fs::write(&markdown, "# Cleanup\n").expect("markdown");
+        sessions::attach_artifact(&conn, "s1", &markdown.to_string_lossy(), 1).expect("attach");
+
+        sessions::cleanup_session_attachments(&conn, "s1").expect("cleanup");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session_attachments", [], |row| {
+                row.get(0)
+            })
+            .expect("count");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn add_comment_appends_with_persona_agent_author() {
+        let (conn, paths, _temp) = test_state();
+        fs::create_dir_all(&paths.canvas_root).expect("canvas");
+        let markdown = paths.canvas_root.join("comment.md");
+        fs::write(&markdown, "# Comment\n").expect("markdown");
+        insert_test_file(&conn, &paths, &markdown, 1, None, 0);
+
+        let response = handle_tools_call_with_conn(
+            json!(24),
+            json!({"name":"add_comment","arguments":{"path":markdown.to_string_lossy(),"anchor":{"kind":"file_level"},"body":"Looks good"}}),
+            &conn,
+            &paths,
+            None,
+            Some(&test_session("s1")),
+            None,
+        );
+
+        assert!(response["result"]["structuredContent"]["comment_id"].is_string());
+        let sidecar = load_identity_for_test(&paths, &markdown);
+        assert_eq!(sidecar.comments.expect("comments")[0].author, "cpo·claude");
+    }
+
+    #[test]
+    fn add_comment_round_trips_through_sidecar() {
+        let (conn, paths, _temp) = test_state();
+        fs::create_dir_all(&paths.canvas_root).expect("canvas");
+        let markdown = paths.canvas_root.join("roundtrip.md");
+        fs::write(&markdown, "# Roundtrip\n").expect("markdown");
+        insert_test_file(&conn, &paths, &markdown, 1, None, 0);
+
+        handle_tools_call_with_conn(
+            json!(25),
+            json!({"name":"add_comment","arguments":{"path":markdown.to_string_lossy(),"anchor":{"start_offset":0,"end_offset":3},"body":"Body"}}),
+            &conn,
+            &paths,
+            None,
+            Some(&test_session("s1")),
+            None,
+        );
+
+        let response = handle_tools_call_with_conn(
+            json!(26),
+            json!({"name":"get_comments","arguments":{"path":markdown.to_string_lossy()}}),
+            &conn,
+            &paths,
+            None,
+            Some(&test_session("s1")),
+            None,
+        );
+        let comments = response["result"]["structuredContent"]
+            .as_array()
+            .expect("comments");
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0]["body"], "Body");
+    }
+
+    #[test]
+    fn notify_user_emits_tauri_event() {
+        let (conn, paths, _temp) = test_state();
+        fs::create_dir_all(&paths.canvas_root).expect("canvas");
+        let action_path = paths.canvas_root.join("x.md");
+        fs::write(&action_path, "# X\n").expect("action file");
+        let response = handle_tools_call_with_conn(
+            json!(27),
+            json!({"name":"notify_user","arguments":{"severity":"warn","message":"Check this","action":{"label":"Open","artifact_path":action_path.to_string_lossy()}}}),
+            &conn,
+            &paths,
+            None,
+            Some(&test_session("s1")),
+            None,
+        );
+
+        assert_eq!(
+            response["result"]["structuredContent"],
+            json!({"delivered": true})
+        );
+    }
+
+    #[test]
+    fn list_artifacts_default_returns_inbox_plus_project_plus_attached_plus_pinned() {
+        let (conn, paths, _temp) = test_state();
+        fs::create_dir_all(&paths.canvas_root).expect("canvas");
+        let inbox = paths.canvas_root.join("inbox.md");
+        let project = paths.canvas_root.join("project.md");
+        let attached = paths.canvas_root.join("attached.md");
+        let pinned = paths.canvas_root.join("pinned.md");
+        for path in [&inbox, &project, &attached, &pinned] {
+            fs::write(path, "# File\n").expect("write");
+        }
+        insert_test_file(&conn, &paths, &inbox, 1, None, 0);
+        insert_test_file(&conn, &paths, &project, 0, Some("agent-canvas"), 0);
+        insert_test_file(&conn, &paths, &attached, 0, None, 0);
+        insert_test_file(&conn, &paths, &pinned, 0, None, 1);
+        sessions::attach_artifact(&conn, "s1", &attached.to_string_lossy(), 1).expect("attach");
+
+        let response = handle_tools_call_with_conn(
+            json!(28),
+            json!({"name":"list_artifacts","arguments":{}}),
+            &conn,
+            &paths,
+            None,
+            Some(&test_session("s1")),
+            None,
+        );
+        let paths = response["result"]["structuredContent"]
+            .as_array()
+            .expect("artifacts")
+            .iter()
+            .map(|artifact| artifact["path"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+
+        assert!(paths.contains(&inbox.to_string_lossy().into_owned()));
+        assert!(paths.contains(&project.to_string_lossy().into_owned()));
+        assert!(paths.contains(&attached.to_string_lossy().into_owned()));
+        assert!(paths.contains(&pinned.to_string_lossy().into_owned()));
+    }
+
+    #[test]
+    fn send_back_to_session_inserts_user_message_and_emits_notification() {
+        let (conn, paths, _temp) = test_state();
+        let path = paths.canvas_root.join("send.md");
+        sessions::insert_agent_session(&conn, "s1", "cpo", "claude", "agent-canvas", 1)
+            .expect("session");
+        sessions::attach_artifact(&conn, "s1", &path.to_string_lossy(), 2).expect("attach");
+        sessions::insert_user_message(
+            &conn,
+            "s1",
+            &path.to_string_lossy(),
+            Some("note"),
+            Some("Review"),
+            3,
+        )
+        .expect("message");
+        let registry = SubscriptionRegistry::default();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        registry.register_default("s1".to_owned(), tx);
+
+        let delivered = registry.dispatch_to_session(
+            "s1",
+            JsonRpcNotification::artifact_updated(
+                path.to_string_lossy().into_owned(),
+                "user",
+                Some("note".to_owned()),
+                Some("Review".to_owned()),
+            ),
+        );
+
+        assert!(delivered);
+        assert_eq!(
+            rx.try_recv().expect("notification").method,
+            "notifications/artifact_updated"
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM user_messages WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn session_attachments_migration_idempotent() {
+        let conn = Connection::open_in_memory().expect("db");
+        sessions::migrate_session_attachments(&conn).expect("migration 1");
+        sessions::migrate_session_attachments(&conn).expect("migration 2");
+        sessions::attach_artifact(&conn, "s1", "/tmp/x.md", 1).expect("attach");
+        sessions::attach_artifact(&conn, "s1", "/tmp/x.md", 2).expect("attach again");
+        let attached_at: i64 = conn
+            .query_row(
+                "SELECT attached_at FROM session_attachments WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("attached_at");
+        assert_eq!(attached_at, 2);
+    }
+
     fn test_comment(id: &str, created_at: i64) -> Comment {
         Comment {
             id: id.to_owned(),
@@ -787,5 +1138,33 @@ mod tests {
             body: id.to_owned(),
             resolved: false,
         }
+    }
+
+    fn insert_test_file(
+        conn: &Connection,
+        paths: &crate::AgentCanvasPaths,
+        path: &std::path::Path,
+        in_inbox: i64,
+        project: Option<&str>,
+        pinned: i64,
+    ) {
+        let mut file = crate::metadata_for_file(path, &paths.canvas_root).expect("metadata");
+        crate::upsert_file_state(conn, &file).expect("upsert");
+        conn.execute(
+            "UPDATE files SET in_inbox = ?2, project_tag = ?3, pinned = ?4 WHERE path = ?1",
+            rusqlite::params![file.path, in_inbox, project, pinned],
+        )
+        .expect("update");
+        crate::hydrate_file_state(conn, &mut file).expect("hydrate");
+    }
+
+    fn load_identity_for_test(
+        paths: &crate::AgentCanvasPaths,
+        path: &std::path::Path,
+    ) -> IdentityMap {
+        let bytes = fs::read(path).expect("read");
+        vellum_core::sidecar::load_or_migrate(paths.canvas_root.as_path(), path, &bytes)
+            .expect("load")
+            .expect("identity")
     }
 }
