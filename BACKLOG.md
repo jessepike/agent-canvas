@@ -12,6 +12,10 @@ Status: `todo` / `in-progress` / `blocked` / `done` / `cut`.
 | 4 | done | MCP server skeleton, stdio shim, initialize, tools/list |
 | 5 | done | MCP read tools and push notification channel |
 
+## v0.3 Critical fixes
+
+- todo — Watcher coverage gap for Flavor 2. `watch::watch_vault(&canvas_root, ...)` only watches `~/Library/Mobile Documents/com~apple~CloudDocs/AgentCanvas/`, but Flavor 2 tracks files by absolute path anywhere on disk. Files tracked outside canvas root never fire `mcp::emit_artifact_updated`, so MCP clients never receive `notifications/artifact_updated`. Fix: watch the parent directory of every tracked path (notify supports multi-path), refresh on track/untrack events. Without this, the agent loop (Send-back → agent reads update) doesn't function for the majority of tracked files. **Recommended before Slice 6 acceptance.**
+
 ## v0.4 candidates
 
 - todo — Positional comments on PNG and PDF (Word/GDocs-style region anchors). PNG: click-to-pin and drag-to-rectangle, new anchor `png_region { x_pct, y_pct, w_pct?, h_pct? }`, pins rendered as numbered overlay. PDF: swap `<object>` to `pdf.js` so we control the canvas, new anchor `pdf_region { page, x_pct, y_pct, w_pct?, h_pct? }`. Slice 3 added `file_level` as the floor; this slice adds the real model. Lighter version: PNG-region-only + `pdf_page` anchor (page number, no region), defer pdf.js to a later slice.
