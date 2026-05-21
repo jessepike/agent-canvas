@@ -74,3 +74,5 @@ Status: `todo` / `in-progress` / `blocked` / `done` / `cut`.
 - Same-directory tmpfile atomic save.
 - Stat+hash optimistic concurrency guard.
 - Tauri 2 Rust substrate and IPC patterns.
+
+- todo — [v0.3-watcher-spinoff] Notification de-duplication at dispatch. End-to-end smoke shows watcher fires 4× per single write event (fsevents reports MODIFIED + ATTR_CHANGED + variants). Currently each fires its own `notifications/artifact_updated` down the socket. Dedupe at the watcher → emit boundary (e.g., 100ms coalesce per (path, by)). Minor noise issue; not blocking.
