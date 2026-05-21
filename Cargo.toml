@@ -2,6 +2,7 @@
 members = [
   "crates/vellum-core",
   "crates/agent-canvas-app",
+  "crates/agent-canvas-mcp",
   "crates/vellum-corpus",
 ]
 resolver = "2"
@@ -29,7 +30,7 @@ tauri-plugin-persisted-scope = { version = "2", features = ["protocol-asset"] }
 tempfile = { version = "3" }
 thiserror = { version = "1" }
 time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
 toml = { version = "0.8" }
 tracing = { version = "0.1" }
 ts-rs = { version = "10" }

@@ -26,6 +26,8 @@ use vellum_core::{
 };
 use walkdir::WalkDir;
 
+mod mcp;
+
 type PersonaMetadataCacheKey = (String, i64, u64);
 
 static PERSONA_METADATA_CACHE: OnceLock<Mutex<HashMap<PersonaMetadataCacheKey, String>>> =
@@ -739,7 +741,7 @@ fn list_agent_sessions(state: tauri::State<AppState>) -> Result<Vec<AgentSession
     let mut statement = conn
         .prepare(
             "SELECT id, persona, backbone, COALESCE(context, ''), connected_at, last_active
-             FROM agent_sessions ORDER BY last_active DESC",
+             FROM manual_agent_sessions ORDER BY last_active DESC",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -778,7 +780,7 @@ fn add_agent_session(
         .lock()
         .map_err(|_| "state db lock poisoned".to_owned())?;
     conn.execute(
-        "INSERT INTO agent_sessions(id, persona, backbone, context, connected_at, last_active)
+        "INSERT INTO manual_agent_sessions(id, persona, backbone, context, connected_at, last_active)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             session.id,
@@ -1090,6 +1092,7 @@ fn open_in_memory_state_db() -> Result<Connection, String> {
 }
 
 fn initialize_state_db(db: &Connection, legacy_canvas_root: &Path) -> Result<(), String> {
+    mcp::sessions::migrate_manual_agent_sessions_if_needed(db)?;
     db.execute_batch(
         r#"
         PRAGMA journal_mode = WAL;
@@ -1101,14 +1104,6 @@ fn initialize_state_db(db: &Connection, legacy_canvas_root: &Path) -> Result<(),
           pinned INTEGER DEFAULT 0,
           archived INTEGER DEFAULT 0,
           last_read_at INTEGER
-        );
-        CREATE TABLE IF NOT EXISTS agent_sessions (
-          id TEXT PRIMARY KEY,
-          persona TEXT NOT NULL,
-          backbone TEXT NOT NULL,
-          context TEXT,
-          connected_at INTEGER NOT NULL,
-          last_active INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS comments (
           id TEXT PRIMARY KEY,
@@ -1144,7 +1139,7 @@ fn initialize_state_db(db: &Connection, legacy_canvas_root: &Path) -> Result<(),
         );
         CREATE TABLE IF NOT EXISTS projects (
           name TEXT PRIMARY KEY,
-          default_agent_session_id TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
+          default_agent_session_id TEXT REFERENCES manual_agent_sessions(id) ON DELETE SET NULL,
           updated_at INTEGER NOT NULL
         );
         INSERT OR IGNORE INTO projects(name, updated_at)
@@ -1152,6 +1147,7 @@ fn initialize_state_db(db: &Connection, legacy_canvas_root: &Path) -> Result<(),
         "#,
     )
     .map_err(|error| error.to_string())?;
+    mcp::sessions::migrate_agent_sessions(db)?;
     add_column_if_missing(
         db,
         "files",
@@ -2066,8 +2062,14 @@ fn main() {
                     let _ = app_handle.emit("agentcanvas://fs-event", payload);
                 })?;
                 *state.watcher.lock().map_err(|_| "watcher lock poisoned")? = Some(watcher);
+                mcp::init_mcp_server(app.handle().clone()).map_err(std::io::Error::other)?;
             }
             Ok(())
+        })
+        .on_window_event(|_window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                mcp::shutdown_mcp_server();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             bootstrap_info,

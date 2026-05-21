@@ -9,6 +9,7 @@ Status: `todo` / `in-progress` / `blocked` / `done` / `cut`.
 | 1 | done | Sidecar comments on Markdown selections |
 | 2 | done | Interactive HTML viewer, postMessage bridge, comments-on-HTML |
 | 3 | done | File-level comments and grouped comments panel |
+| 4 | done | MCP server skeleton, stdio shim, initialize, tools/list |
 
 ## v0.4 candidates
 

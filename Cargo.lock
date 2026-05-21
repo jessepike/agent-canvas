@@ -21,10 +21,20 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-persisted-scope",
  "tempfile",
+ "tokio",
+ "tracing",
  "ts-rs",
  "uuid",
  "vellum-core",
  "walkdir",
+]
+
+[[package]]
+name = "agent-canvas-mcp"
+version = "0.3.0"
+dependencies = [
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

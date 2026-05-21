@@ -13,6 +13,8 @@ serde_json.workspace = true
 tauri = { workspace = true, default-features = false, features = ["wry", "protocol-asset"] }
 tauri-plugin-dialog.workspace = true
 tauri-plugin-persisted-scope.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "sync", "time"] }
+tracing.workspace = true
 ts-rs.workspace = true
 vellum-core = { path = "../vellum-core" }
 uuid.workspace = true

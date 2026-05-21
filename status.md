@@ -1,10 +1,32 @@
 ---
 project: agent-canvas
 updated: 2026-05-20
-stage: v0.3 Slice 1 implemented
+stage: v0.3 Slice 4 implemented
 ---
 
 # AgentCanvas — Status
+
+## v0.3 Slice 4 Summary (2026-05-20)
+
+Slice 4 of `docs/BUILD-SPEC-v0.3.md` was implemented.
+
+- Added the `agent-canvas-mcp` stdio shim binary.
+- Added a Tauri-side Unix-domain socket MCP skeleton at `~/Library/Application Support/AgentCanvas/mcp.sock`.
+- The app unlinks stale socket files before bind and removes the socket on graceful close.
+- Implemented newline-delimited JSON-RPC handling for `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `tools/call`.
+- Added the 9-tool schema list from the v0.3 spec, including `add_comment`.
+- Added stub JSON-RPC `-32601` errors for unimplemented tools; `list_artifacts` has a minimal DB-backed proof-of-life implementation.
+- Added MCP `agent_sessions` table migration, with the previous manual agent-panel table migrated to `manual_agent_sessions`.
+- Wrote the implementation report to `docs/active/codex-slice4-v0.3-report-2026-05-20.md`.
+
+Verification:
+
+- `cd crates/agent-canvas-mcp && cargo build` passes in OrbStack dev VM.
+- `cd crates/agent-canvas-app && cargo build` passes in OrbStack dev VM.
+- `cargo test --bin agent-canvas-app` passes in OrbStack dev VM: 16 tests.
+- `cd ui && ./node_modules/.bin/tsc --noEmit` passes in OrbStack dev VM.
+- `cd ui && ./node_modules/.bin/vite build` passes on host with the known large-chunk warning.
+- VM Vite build is blocked by the existing Rollup optional dependency state in `ui/node_modules` (`@rollup/rollup-linux-arm64-gnu` missing).
 
 ## v0.3 Slice 1 Summary (2026-05-20)
 
