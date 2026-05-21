@@ -1,10 +1,31 @@
 ---
 project: agent-canvas
 updated: 2026-05-21
-stage: v0.3 Slice 5 implemented
+stage: v0.3 watcher critical fix implemented
 ---
 
 # AgentCanvas — Status
+
+## v0.3 Watcher Critical Fix Summary (2026-05-21)
+
+The Slice 6-blocking Flavor 2 watcher coverage gap is fixed.
+
+- Replaced the app's single-root watcher startup with `watch::start(...)` plus `watch_recursive(&canvas_root)`.
+- Added multi-path tracked-file watching in `vellum-core`: explicit files are tracked by normalized path, their parent directories are watched non-recursively with ref-counted unwatch, and the canvas root remains recursively watched for ad-hoc new files.
+- Expanded watcher extension coverage to Markdown, HTML, PNG, JPG/JPEG, PDF, JSON, and TXT.
+- Startup now syncs watcher paths from `files` rows where `in_inbox=1 OR project_tag IS NOT NULL OR archived=1 OR pinned=1`.
+- Watcher resync now runs after track, untrack, project move, archive move, delete-from-disk, archive, pin toggle, and rename.
+- Added deterministic watcher tests and an MCP notification dispatch test proving a watcher change can emit `notifications/artifact_updated` with `by="watcher"`.
+- Wrote the implementation report to `docs/active/codex-watcher-v0.3-report-2026-05-21.md`.
+
+Verification:
+
+- `cd crates/vellum-core && cargo test 2>&1 | tail -20` passes.
+- `cd crates/agent-canvas-app && cargo check -q` passes with the pre-existing ts-rs sidecar warning.
+- `cd crates/agent-canvas-app && cargo test --bin agent-canvas-app 2>&1 | tail -25` passes: 27 tests.
+- `cd crates/agent-canvas-mcp && cargo build` passes.
+- `cd ui && ./node_modules/.bin/tsc --noEmit` passes.
+- `cd ui && ./node_modules/.bin/vite build 2>&1 | tail -3` passes with the known chunk-size warning.
 
 ## v0.3 Slice 5 Summary (2026-05-21)
 

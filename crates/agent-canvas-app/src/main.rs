@@ -404,6 +404,8 @@ fn toggle_pin(state: tauri::State<AppState>, path: String) -> Result<bool, Strin
         params![next, path],
     )
     .map_err(|error| error.to_string())?;
+    drop(conn);
+    resync_watcher_from_db(&state)?;
     Ok(next == 1)
 }
 
@@ -412,17 +414,20 @@ fn archive_file(state: tauri::State<AppState>, path: String) -> Result<String, S
     let paths = state.paths()?;
     let source = path_safe_for_canvas(Path::new(&path))?;
     ensure_regular_file(&source)?;
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| "state db lock poisoned".to_owned())?;
     let mut file = metadata_for_file(&source, &paths.canvas_root)?;
-    upsert_file_state(&conn, &file)?;
-    conn.execute(
-        "UPDATE files SET archived = 1, in_inbox = 0 WHERE path = ?1",
-        params![source.to_string_lossy()],
-    )
-    .map_err(|error| error.to_string())?;
+    {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        upsert_file_state(&conn, &file)?;
+        conn.execute(
+            "UPDATE files SET archived = 1, in_inbox = 0 WHERE path = ?1",
+            params![source.to_string_lossy()],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    resync_watcher_from_db(&state)?;
     file.archived = true;
     Ok(file.path)
 }
@@ -438,19 +443,22 @@ fn track_paths_in_inbox(
         let source = path_safe_for_canvas(Path::new(&path))?;
         ensure_regular_file(&source)?;
         let mut file = metadata_for_file(&source, &state_paths.canvas_root)?;
-        let conn = state
-            .db
-            .lock()
-            .map_err(|_| "state db lock poisoned".to_owned())?;
-        upsert_file_state(&conn, &file)?;
-        conn.execute(
-            "UPDATE files SET in_inbox = 1, project_tag = NULL, archived = 0 WHERE path = ?1",
-            params![file.path],
-        )
-        .map_err(|error| error.to_string())?;
-        hydrate_file_state(&conn, &mut file)?;
+        {
+            let conn = state
+                .db
+                .lock()
+                .map_err(|_| "state db lock poisoned".to_owned())?;
+            upsert_file_state(&conn, &file)?;
+            conn.execute(
+                "UPDATE files SET in_inbox = 1, project_tag = NULL, archived = 0 WHERE path = ?1",
+                params![file.path],
+            )
+            .map_err(|error| error.to_string())?;
+            hydrate_file_state(&conn, &mut file)?;
+        }
         tracked.push(file);
     }
+    resync_watcher_from_db(&state)?;
     Ok(tracked)
 }
 
@@ -475,17 +483,20 @@ fn move_file_to_project(
     let source = path_safe_for_canvas(Path::new(&path))?;
     ensure_regular_file(&source)?;
     let mut file = metadata_for_file(&source, &paths.canvas_root)?;
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| "state db lock poisoned".to_owned())?;
-    upsert_file_state(&conn, &file)?;
-    conn.execute(
-        "UPDATE files SET project_tag = ?1, in_inbox = 0, archived = 0 WHERE path = ?2",
-        params![project, file.path],
-    )
-    .map_err(|error| error.to_string())?;
-    hydrate_file_state(&conn, &mut file)?;
+    {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        upsert_file_state(&conn, &file)?;
+        conn.execute(
+            "UPDATE files SET project_tag = ?1, in_inbox = 0, archived = 0 WHERE path = ?2",
+            params![project, file.path],
+        )
+        .map_err(|error| error.to_string())?;
+        hydrate_file_state(&conn, &mut file)?;
+    }
+    resync_watcher_from_db(&state)?;
     Ok(file)
 }
 
@@ -499,17 +510,20 @@ fn move_file_to_archive(
     let source = path_safe_for_canvas(Path::new(&path))?;
     ensure_regular_file(&source)?;
     let mut file = metadata_for_file(&source, &paths.canvas_root)?;
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| "state db lock poisoned".to_owned())?;
-    upsert_file_state(&conn, &file)?;
-    conn.execute(
-        "UPDATE files SET archived = 1, in_inbox = 0 WHERE path = ?1",
-        params![file.path],
-    )
-    .map_err(|error| error.to_string())?;
-    hydrate_file_state(&conn, &mut file)?;
+    {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        upsert_file_state(&conn, &file)?;
+        conn.execute(
+            "UPDATE files SET archived = 1, in_inbox = 0 WHERE path = ?1",
+            params![file.path],
+        )
+        .map_err(|error| error.to_string())?;
+        hydrate_file_state(&conn, &mut file)?;
+    }
+    resync_watcher_from_db(&state)?;
     Ok(file)
 }
 
@@ -568,11 +582,14 @@ fn reveal_in_finder(state: tauri::State<AppState>, path: String) -> Result<(), S
 fn untrack_file(state: tauri::State<AppState>, path: String) -> Result<(), String> {
     let _ = state.paths()?;
     let source = path_safe_for_canvas(Path::new(&path))?;
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| "state db lock poisoned".to_owned())?;
-    untrack_file_impl(&conn, &source)
+    {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        untrack_file_impl(&conn, &source)?;
+    }
+    resync_watcher_from_db(&state)
 }
 
 #[tauri::command]
@@ -580,11 +597,14 @@ fn delete_file_from_disk(state: tauri::State<AppState>, path: String) -> Result<
     let _ = state.paths()?;
     let source = path_safe_for_canvas(Path::new(&path))?;
     ensure_regular_file(&source)?;
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| "state db lock poisoned".to_owned())?;
-    delete_file_from_disk_impl(&conn, &source)
+    {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        delete_file_from_disk_impl(&conn, &source)?;
+    }
+    resync_watcher_from_db(&state)
 }
 
 #[tauri::command]
@@ -623,18 +643,20 @@ fn rename_file(
     let target_bounded = path_safe_for_canvas(&target)?;
     fs::rename(&source, &target_bounded).map_err(|error| error.to_string())?;
 
-    let conn = state
-        .db
-        .lock()
-        .map_err(|_| "state db lock poisoned".to_owned())?;
-    conn.execute(
-        "UPDATE files SET path = ?1 WHERE path = ?2",
-        params![target_bounded.to_string_lossy(), source.to_string_lossy()],
-    )
-    .map_err(|error| error.to_string())?;
-
     let mut file = metadata_for_file(&target_bounded, &paths.canvas_root)?;
-    hydrate_file_state(&conn, &mut file)?;
+    {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        conn.execute(
+            "UPDATE files SET path = ?1 WHERE path = ?2",
+            params![target_bounded.to_string_lossy(), source.to_string_lossy()],
+        )
+        .map_err(|error| error.to_string())?;
+        hydrate_file_state(&conn, &mut file)?;
+    }
+    resync_watcher_from_db(&state)?;
     Ok(file)
 }
 
@@ -2096,7 +2118,7 @@ fn main() {
                     .canvas_root
                     .clone();
                 let app_handle = app.handle().clone();
-                let watcher = watch::watch_vault(&canvas_root, move |event| {
+                let watcher = watch::start(move |event| {
                     let payload = fs_event_payload(event);
                     if let Some(path) = payload.path.as_ref()
                         && tracked_file_exists(&app_handle, path)
@@ -2105,6 +2127,17 @@ fn main() {
                     }
                     let _ = app_handle.emit("agentcanvas://fs-event", payload);
                 })?;
+                watcher.watch_recursive(&canvas_root)?;
+                let tracked_paths = {
+                    let conn = state
+                        .db
+                        .lock()
+                        .map_err(|_| std::io::Error::other("state db lock poisoned"))?;
+                    tracked_watch_paths_from_db(&conn).map_err(std::io::Error::other)?
+                };
+                watcher
+                    .set_paths(tracked_paths)
+                    .map_err(std::io::Error::other)?;
                 *state.watcher.lock().map_err(|_| "watcher lock poisoned")? = Some(watcher);
                 mcp::init_mcp_server(app.handle().clone()).map_err(std::io::Error::other)?;
             }
@@ -2205,6 +2238,46 @@ fn tracked_file_exists(app_handle: &tauri::AppHandle, path: &str) -> bool {
         |_| Ok(()),
     )
     .is_ok()
+}
+
+fn resync_watcher_from_db(state: &AppState) -> Result<(), String> {
+    let tracked_paths = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        tracked_watch_paths_from_db(&conn)?
+    };
+    let watcher = state
+        .watcher
+        .lock()
+        .map_err(|_| "watcher lock poisoned".to_owned())?;
+    if let Some(watcher) = watcher.as_ref() {
+        watcher
+            .set_paths(tracked_paths)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn tracked_watch_paths_from_db(conn: &Connection) -> Result<Vec<PathBuf>, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT path FROM files
+             WHERE in_inbox = 1
+                OR project_tag IS NOT NULL
+                OR archived = 1
+                OR pinned = 1",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    let mut paths = Vec::new();
+    for row in rows {
+        paths.push(PathBuf::from(row.map_err(|error| error.to_string())?));
+    }
+    Ok(paths)
 }
 
 #[cfg(test)]

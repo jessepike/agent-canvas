@@ -426,7 +426,10 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{
+        fs,
+        time::{Duration, Instant},
+    };
 
     use rusqlite::Connection;
     use serde_json::json;
@@ -434,6 +437,7 @@ mod tests {
     use vellum_core::sidecar::{
         Comment, CommentAnchor, FileLevelAnchor, FileLevelKind, IdentityMap,
     };
+    use vellum_core::watch;
 
     use super::*;
 
@@ -570,6 +574,49 @@ mod tests {
         registry.register_default("s1".to_owned(), tx);
 
         assert!(!registry.get("s1").expect("subscription").artifact_focused);
+    }
+
+    #[test]
+    fn watcher_change_dispatches_artifact_updated_notification() {
+        let temp = tempfile::tempdir_in(std::env::current_dir().expect("cwd")).expect("tempdir");
+        let target = temp.path().join("watched.md");
+        fs::write(&target, "old").expect("write old");
+
+        let registry = SubscriptionRegistry::default();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        registry.register_default("s1".to_owned(), tx);
+        registry.subscribe("s1", true, false);
+        let watcher_registry = registry.clone();
+        let watch = watch::start(move |event| {
+            if let watch::WatchEvent::Changed { path, .. } = event {
+                notifications::dispatch_artifact_updated(
+                    &watcher_registry,
+                    path.to_string_lossy().into_owned(),
+                    "watcher",
+                    None,
+                    None,
+                );
+            }
+        })
+        .expect("watch start");
+        watch.watch_recursive(temp.path()).expect("watch recursive");
+
+        std::thread::sleep(Duration::from_millis(250));
+        fs::write(&target, "new").expect("write new");
+
+        let deadline = Instant::now() + Duration::from_millis(1500);
+        let notification = loop {
+            if let Ok(notification) = rx.try_recv() {
+                break notification;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected artifact_updated notification"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        assert_eq!(notification.method, "notifications/artifact_updated");
+        assert_eq!(notification.params["by"], "watcher");
     }
 
     #[test]
