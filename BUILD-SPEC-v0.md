@@ -343,21 +343,26 @@ These must all pass:
 
 ---
 
-## Out of Scope for v0 (Deferred to v0.2)
+## Out of Scope for v0 (carried forward through v0.3)
 
-The list below is the v0.1.0 deferral set. **v0.2.0 (2026-05-20) landed everything in `docs/BUILD-SPEC-v0.2-finish.md` except live MCP.** Items now in scope are struck through; the remaining v0.2-proper deferral is **Live MCP server only**.
+The list below tracks deferrals through every shipped milestone.
+**v0.3.0 (2026-05-21) landed the full interactive-agent-workbench surface in `docs/BUILD-SPEC-v0.3.md` Slices 1-7.** Items shipped in any milestone are struck through; the remaining deferrals are the v0.4+ candidates.
 
-- **Live MCP server with 10 tools** — pasteboard handoff is the v0 substitute (still deferred — v0.2-proper target)
+- ~~Live MCP server with 9 coordination tools~~ — shipped in v0.3.0 Slices 4-7 (socket protocol + stdio shim + 9 tools + push channel + one-click client install for Claude Code / Codex / Cursor)
 - ~~Comments / anchors~~ — shipped in v0.2.0 Slice 6 (raw-source-offset anchors persisted in sidecar)
 - ~~Rendered ProseMirror editing~~ — shipped in v0.2.0 Slice 5e (rendered edit with source-preserving save + source fallback)
 - ~~Three-way merge UI~~ — shipped in v0.2.0 Slice 5g (base_snapshot in sidecar + per-block resolve dialog)
 - ~~Annotation toolbar~~ — shipped in v0.2.0 Slice 5f (Bold / Italic / Strike / Code / Mark-for-Revision)
 - ~~PNG / JSON / TXT viewer modes~~ — shipped in v0.2.0 Slice 5a–c (+ PDF in 5d)
 - ~~Search across files~~ — shipped in v0.2.0 Slice 2b (filename substring + ⌘F focus, per-mode)
+- ~~File-level comments on PNG / PDF~~ — shipped in v0.3.0 Slice 3 (file_level anchor on every viewer)
+- ~~Interactive HTML (scripts, postMessage Send-back)~~ — shipped in v0.3.0 Slice 2 (sandboxed iframe + postMessage bridge)
 - Pending Reviews aggregate view — still deferred (per-artifact review state shipped, no aggregate panel yet)
+- Positional comments on PNG / PDF (point-and-pin) — deferred to v0.4
+- Shape annotations (circles, arrows, callouts) — deferred to v0.4
 - Cross-machine sync of state.db — still deferred
 - iOS reader — still deferred
-- Notarization / code-signing — still deferred (v0.2.0 ships ad-hoc/dev-signed)
+- Notarization / code-signing — still deferred (v0.3.0 ships ad-hoc/dev-signed)
 - Trust boundaries / per-artifact agent visibility — still deferred
 
 ---
