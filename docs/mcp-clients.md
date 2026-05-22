@@ -40,24 +40,32 @@ For a per-project install, put the same server entry in the project `.mcp.json`:
 }
 ```
 
-Claude Code should identify the live session during `initialize` with the `clientInfo.agentCanvas` extension block:
+Claude Code cannot set `clientInfo.agentCanvas` itself, so **the `agent-canvas-mcp` shim injects it on `initialize`**. Without any configuration the shim derives:
+
+- `persona` → `default`
+- `agent` → `claude`
+- `project` → basename of the working directory
+- `session_id` → a unique per-process id (so each connection is distinct and cleanly disconnectable — no more stacked `unknown-session` ghost cards)
+
+To override any field, set environment variables in the server's `env` block:
 
 ```json
 {
-  "clientInfo": {
-    "name": "claude-code",
-    "version": "local",
-    "agentCanvas": {
-      "persona": "cpo",
-      "agent": "claude",
-      "project": "agent-canvas",
-      "session_id": "claude-code-unique-session"
+  "mcpServers": {
+    "agent-canvas": {
+      "command": "/absolute/path/to/agent-canvas-mcp",
+      "args": [],
+      "env": {
+        "AGENTCANVAS_PERSONA": "cpo",
+        "AGENTCANVAS_PROJECT": "agent-canvas",
+        "AGENTCANVAS_SESSION_ID": "claude-agent-canvas-1"
+      }
     }
   }
 }
 ```
 
-Use the persona that best matches the project agent. `session_id` should be stable for the running agent process and unique across concurrent sessions.
+Set `AGENTCANVAS_PERSONA` to the persona that best matches the project agent. Set a stable `AGENTCANVAS_SESSION_ID` only if you want reconnects to replace the prior card instead of generating a fresh per-process id; concurrent sessions must use distinct ids. A client that *can* set `clientInfo.agentCanvas` directly takes precedence — the shim never overrides an explicit block.
 
 ## Codex
 
@@ -86,7 +94,7 @@ Codex-compatible MCP launches should include the same AgentCanvas extension bloc
 }
 ```
 
-If the client cannot customize `clientInfo`, AgentCanvas still accepts the connection and falls back to `persona: "default"`, `agent: "unknown"`, `project: "default"`, and `session_id: "unknown-session"`. Customized client info is strongly preferred because it makes the agent panel useful.
+If a client cannot customize `clientInfo`, the `agent-canvas-mcp` shim injects identity for it (see the Claude Code section — `persona: "default"`, `agent: "claude"`, `project:` working-dir basename, and a unique per-process `session_id`). Set the `AGENTCANVAS_*` env vars to make the agent panel more useful. The legacy `unknown-session` fallback only applies to a direct socket client that bypasses the shim.
 
 ## Cursor
 

@@ -834,6 +834,37 @@ pub fn disconnect_all_sessions(conn: &Connection, now_ts: i64) -> Result<usize, 
     Ok(count)
 }
 
+/// Connect-time dedup: retire stale live rows that the just-inserted session supersedes.
+///
+/// Retires (sets `disconnected_at`) every live row that is NOT the freshly inserted
+/// `(session_id, connected_at)` row AND that either:
+///   (a) shares the SAME `session_id` — a client with a stable id reconnecting, or
+///   (b) is a legacy `'unknown-session'` ghost left by the pre-injection shim (these can
+///       never be a live distinct session now that the shim injects a unique id).
+///
+/// D10-safe: two genuinely concurrent sessions carry distinct, non-`unknown-session`
+/// session_ids, so neither matches the other's clause — both survive. Returns rows retired.
+pub fn retire_superseded_sessions(
+    conn: &Connection,
+    session_id: &str,
+    connected_at: i64,
+    now_ts: i64,
+) -> Result<usize, String> {
+    let count = conn
+        .execute(
+            r#"
+            UPDATE agent_sessions
+            SET disconnected_at = ?3
+            WHERE disconnected_at IS NULL
+              AND NOT (session_id = ?1 AND connected_at = ?2)
+              AND (session_id = ?1 OR session_id = 'unknown-session')
+            "#,
+            params![session_id, connected_at, now_ts],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(count)
+}
+
 fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
     let mut statement = conn
         .prepare(&format!("PRAGMA table_info({table})"))
@@ -906,6 +937,52 @@ mod tests {
             )
             .expect("count dc");
         assert_eq!(dc_count, 2, "expect both rows stamped with now_ts");
+    }
+
+    /// retire_superseded_sessions clears legacy unknown-session ghosts + same-id reconnects,
+    /// keeps the fresh row, and never touches a distinct concurrent session (D10).
+    #[test]
+    fn test_retire_superseded_sessions() {
+        let conn = in_memory_db();
+        let now: i64 = 1_700_000_500;
+
+        // (a) legacy ghosts — three stacked unknown-session rows.
+        for t in [now - 300, now - 200, now - 100] {
+            conn.execute(
+                "INSERT INTO agent_sessions(session_id, source, persona, agent, project, connected_at) VALUES ('unknown-session', 'mcp', 'default', 'unknown', 'default', ?1)",
+                params![t],
+            ).expect("insert ghost");
+        }
+        // (b) an older live row with the SAME stable session_id (a reconnect supersedes it).
+        conn.execute(
+            "INSERT INTO agent_sessions(session_id, source, persona, agent, project, connected_at) VALUES ('stable-1', 'mcp', 'cto', 'claude', 'agent-canvas', ?1)",
+            params![now - 50],
+        ).expect("insert old stable");
+        // (c) a DISTINCT concurrent session — must survive (D10).
+        conn.execute(
+            "INSERT INTO agent_sessions(session_id, source, persona, agent, project, connected_at) VALUES ('other-window', 'mcp', 'cto', 'claude', 'agent-canvas', ?1)",
+            params![now - 40],
+        ).expect("insert distinct");
+        // (d) the freshly inserted row for the connecting client.
+        conn.execute(
+            "INSERT INTO agent_sessions(session_id, source, persona, agent, project, connected_at) VALUES ('stable-1', 'mcp', 'cto', 'claude', 'agent-canvas', ?1)",
+            params![now],
+        ).expect("insert fresh");
+
+        let retired = retire_superseded_sessions(&conn, "stable-1", now, now).expect("retire");
+        assert_eq!(retired, 4, "3 ghosts + 1 old same-id row = 4 retired");
+
+        // Fresh row + distinct concurrent session remain live.
+        let live: Vec<(String, i64)> = {
+            let mut stmt = conn
+                .prepare("SELECT session_id, connected_at FROM agent_sessions WHERE disconnected_at IS NULL ORDER BY connected_at")
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        assert_eq!(live, vec![("other-window".to_owned(), now - 40), ("stable-1".to_owned(), now)]);
     }
 
     /// disconnect_all_sessions is a no-op when there are no live sessions.

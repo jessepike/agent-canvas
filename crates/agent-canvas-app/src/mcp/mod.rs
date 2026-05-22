@@ -393,6 +393,14 @@ fn handle_initialize_with_conn(
         Ok(session) => session,
         Err(error) => return rpc_error(id, -32603, &error),
     };
+    // Connect-time dedup: retire any live rows this connection supersedes (same session_id
+    // reconnecting, plus legacy 'unknown-session' ghosts). Keeps Presence from accumulating
+    // duplicate cards. DB-only — safe inside the lock.
+    if let Err(error) =
+        sessions::retire_superseded_sessions(conn, session_id, connected_at, connected_at)
+    {
+        eprintln!("AgentCanvas MCP: retire_superseded_sessions failed: {error}");
+    }
     *active_session = Some(session);
 
     rpc_result(
