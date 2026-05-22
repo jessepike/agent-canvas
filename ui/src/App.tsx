@@ -342,6 +342,12 @@ export default function App() {
     toggleRightCollapsed(false);
   }, [toggleSidebarCollapsed, toggleRightCollapsed]);
   const bothCollapsed = sidebarCollapsed && rightCollapsed;
+  // The right region only reserves its full width when something is actually
+  // expanded inside it (comments open, or the full agent panel showing). When
+  // idle it renders just the narrow gutters, so it should size to content and
+  // let the reader reclaim the space instead of leaving a dead cream strip.
+  const agentPanelExpanded = !(sessions.length === 0 && !showSessionForm && agentMessages.length === 0);
+  const rightRegionExpanded = commentsOpen || agentPanelExpanded;
 
   // Drag state refs (not React state — no re-render needed during drag).
   const sidebarDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -2958,7 +2964,7 @@ export default function App() {
             ) : null}
           </section>
           {/* Slice 8: right side resize divider + collapsible right region */}
-          {!rightCollapsed && (
+          {!rightCollapsed && rightRegionExpanded && (
             <div
               className="resize-divider resize-divider-right"
               onPointerDown={onRightDividerDown}
@@ -2975,7 +2981,7 @@ export default function App() {
               </button>
             </div>
           ) : (
-            <div className="right-region" style={{ width: rightWidth }}>
+            <div className="right-region" style={rightRegionExpanded ? { width: rightWidth } : undefined}>
               {commentsOpen ? (
                 <CommentsPanel
                   comments={comments}
