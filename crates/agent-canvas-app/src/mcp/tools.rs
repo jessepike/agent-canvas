@@ -59,7 +59,9 @@ pub fn call_tool(
             arguments,
         ),
         "open_artifact" => open_artifact(conn, paths, app_handle, arguments),
-        "notify_user" => notify_user(app_handle, arguments),
+        // notify_user: DB insert happens here (under the lock); emit happens post-lock
+        // via the dispatcher (app_handle is always None when called from handle_tools_call).
+        "notify_user" => notify_user(conn, session, arguments),
         "attach_artifact" => attach_artifact(conn, paths, session, app_handle, arguments),
         "add_comment" => add_comment(conn, session, app_handle, arguments),
         _ => Err(json!({
@@ -220,7 +222,12 @@ fn attach_artifact(
     Ok(tool_result(json!({ "attached": true })))
 }
 
-fn notify_user(app_handle: Option<&AppHandle>, arguments: Value) -> Result<Value, Value> {
+/// notify_user: validate arguments, persist to `agent_messages`, then return.
+/// The caller (dispatcher in mod.rs) performs the Tauri window emit AFTER the db
+/// guard is released (lock discipline — no window ops while holding state.db).
+/// Returns the generated message id so the dispatcher can include it in the post-lock
+/// emit payload if desired. On success returns `{ "delivered": true }`.
+fn notify_user(conn: &Connection, session: Option<&McpSession>, arguments: Value) -> Result<Value, Value> {
     let severity = arguments
         .get("severity")
         .and_then(Value::as_str)
@@ -236,32 +243,37 @@ fn notify_user(app_handle: Option<&AppHandle>, arguments: Value) -> Result<Value
         .and_then(Value::as_str)
         .ok_or_else(|| rpc_error(-32602, "message is required".to_owned()))?;
     let action = arguments.get("action").cloned();
-    if let Some(action) = action.as_ref() {
+    let (action_artifact_path, action_label) = if let Some(action) = action.as_ref() {
         let action_path = action
             .get("artifact_path")
             .and_then(Value::as_str)
             .ok_or_else(|| rpc_error(-32602, "action.artifact_path is required".to_owned()))?;
-        let _ = action
+        let label = action
             .get("label")
             .and_then(Value::as_str)
             .ok_or_else(|| rpc_error(-32602, "action.label is required".to_owned()))?;
         path_safe_for_canvas(Path::new(action_path)).map_err(|error| rpc_error(-32602, error))?;
-    }
-    if let Some(app_handle) = app_handle
-        && let Some(window) = app_handle.get_webview_window("main")
-    {
-        window
-            .emit(
-                "agentcanvas://notify-user",
-                json!({
-                    "severity": severity,
-                    "message": message,
-                    "action": action
-                }),
-            )
-            .map_err(|error| rpc_error(-32603, error.to_string()))?;
-    }
-    Ok(tool_result(json!({ "delivered": true })))
+        (Some(action_path), Some(label))
+    } else {
+        (None, None)
+    };
+
+    // Persist the message to the DB under the current lock.
+    let session_id = session.map(|s| s.session_id.as_str()).unwrap_or("unknown");
+    let created_at = crate::unix_now();
+    let msg_id = sessions::insert_agent_message(
+        conn,
+        session_id,
+        severity,
+        message,
+        action_artifact_path,
+        action_label,
+        created_at,
+    )
+    .map_err(|error| rpc_error(-32603, error))?;
+
+    // Return the id so the post-lock dispatcher can carry the event payload.
+    Ok(tool_result(json!({ "delivered": true, "id": msg_id })))
 }
 
 fn add_comment(

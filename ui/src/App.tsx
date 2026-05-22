@@ -7,6 +7,7 @@ import { SourceView, type SourceFormat, type SourceSelection, type SourceViewHan
 import { injectBootstrap } from "./htmlBootstrap";
 import { useFocusTrap } from "./hooks/useFocusTrap";
 import {
+  acknowledgeAgentMessage,
   addAgentSession,
   archiveFile,
   closeEphemeralPath,
@@ -23,6 +24,7 @@ import {
   installMcpForClaudeCode,
   installMcpForCodex,
   installMcpForCursor,
+  listAgentMessages,
   listAgentSessions,
   listArchive,
   listDrafts,
@@ -64,6 +66,7 @@ import {
   updateSidecarComments,
   writeDocument,
   type ActionTemplate,
+  type AgentMessage,
   type BootstrapInfo,
   type AgentSession,
   type ConflictStrategy,
@@ -247,6 +250,8 @@ export default function App() {
   const [handoffToast, setHandoffToast] = useState<string | null>(null);
   const [handoffToastBody, setHandoffToastBody] = useState<string | null>(null);
   const [handoffToastAction, setHandoffToastAction] = useState<NotifyUserPayload["action"]>(null);
+  // Slice 7: persistent agent messages (sticky until acknowledged).
+  const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
   const [sendPopoverOpen, setSendPopoverOpen] = useState(false);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
@@ -288,6 +293,94 @@ export default function App() {
   const [pendingSendPath, setPendingSendPath] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const currentProjectKey = currentProject ?? "Inbox";
+
+  // ── Slice 8: resizable/collapsible layout ────────────────────────────────
+  // Column widths persist in localStorage (frontend-only, no backend schema).
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try { return Number(window.localStorage.getItem("ac.layout.sidebarWidth")) || 280; } catch { return 280; }
+  });
+  const [rightWidth, setRightWidth] = useState<number>(() => {
+    try { return Number(window.localStorage.getItem("ac.layout.rightWidth")) || 346; } catch { return 346; }
+  });
+  // Collapse state for left sidebar, right pane (comments+agent combined), and agent-center sub-pane.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try { return window.localStorage.getItem("ac.layout.sidebarCollapsed") === "true"; } catch { return false; }
+  });
+  const [rightCollapsed, setRightCollapsed] = useState<boolean>(() => {
+    try { return window.localStorage.getItem("ac.layout.rightCollapsed") === "true"; } catch { return false; }
+  });
+
+  const persistSidebarWidth = useCallback((w: number) => {
+    setSidebarWidth(w);
+    try { window.localStorage.setItem("ac.layout.sidebarWidth", String(w)); } catch { /* ignore */ }
+  }, []);
+  const persistRightWidth = useCallback((w: number) => {
+    setRightWidth(w);
+    try { window.localStorage.setItem("ac.layout.rightWidth", String(w)); } catch { /* ignore */ }
+  }, []);
+  const toggleSidebarCollapsed = useCallback((next?: boolean) => {
+    setSidebarCollapsed((current) => {
+      const val = next !== undefined ? next : !current;
+      try { window.localStorage.setItem("ac.layout.sidebarCollapsed", val ? "true" : "false"); } catch { /* ignore */ }
+      return val;
+    });
+  }, []);
+  const toggleRightCollapsed = useCallback((next?: boolean) => {
+    setRightCollapsed((current) => {
+      const val = next !== undefined ? next : !current;
+      try { window.localStorage.setItem("ac.layout.rightCollapsed", val ? "true" : "false"); } catch { /* ignore */ }
+      return val;
+    });
+  }, []);
+  // Collapse-all: hides both side regions to maximize the reader.
+  const collapseAll = useCallback(() => {
+    toggleSidebarCollapsed(true);
+    toggleRightCollapsed(true);
+  }, [toggleSidebarCollapsed, toggleRightCollapsed]);
+  const expandAll = useCallback(() => {
+    toggleSidebarCollapsed(false);
+    toggleRightCollapsed(false);
+  }, [toggleSidebarCollapsed, toggleRightCollapsed]);
+  const bothCollapsed = sidebarCollapsed && rightCollapsed;
+
+  // Drag state refs (not React state — no re-render needed during drag).
+  const sidebarDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const rightDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const onSidebarDividerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    sidebarDragRef.current = { startX: event.clientX, startWidth: sidebarWidth };
+  }, [sidebarWidth]);
+
+  const onSidebarDividerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!sidebarDragRef.current) return;
+    const delta = event.clientX - sidebarDragRef.current.startX;
+    const next = Math.min(480, Math.max(180, sidebarDragRef.current.startWidth + delta));
+    persistSidebarWidth(next);
+  }, [persistSidebarWidth]);
+
+  const onSidebarDividerUp = useCallback(() => {
+    sidebarDragRef.current = null;
+  }, []);
+
+  const onRightDividerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    rightDragRef.current = { startX: event.clientX, startWidth: rightWidth };
+  }, [rightWidth]);
+
+  const onRightDividerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!rightDragRef.current) return;
+    const delta = event.clientX - rightDragRef.current.startX;
+    // Right divider: dragging left increases right width, dragging right decreases it.
+    const next = Math.min(560, Math.max(240, rightDragRef.current.startWidth - delta));
+    persistRightWidth(next);
+  }, [persistRightWidth]);
+
+  const onRightDividerUp = useCallback(() => {
+    rightDragRef.current = null;
+  }, []);
+  // ── end Slice 8 layout state ─────────────────────────────────────────────
+
   useFocusTrap(paletteRef, paletteOpen ? () => setPaletteOpen(false) : undefined);
 
   const refresh = useCallback(async () => {
@@ -419,6 +512,17 @@ export default function App() {
     try {
       await disconnectMcpSession(sessionId);
       setSessions((current) => current.filter((session) => session.id !== sessionId));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, []);
+
+  // Slice 7: acknowledge (delete) a persistent agent message.
+  const handleAcknowledgeMessage = useCallback(async (id: string) => {
+    try {
+      await acknowledgeAgentMessage(id);
+      // Optimistically remove from local state; messages-changed event will resync.
+      setAgentMessages((current) => current.filter((msg) => msg.id !== id));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
@@ -1020,22 +1124,30 @@ export default function App() {
     };
   }, [artifact?.path, openArtifact]);
 
-  // notify-user toast: kept in a stable effect (no artifact dep) so the listener
-  // is never torn down while a notification is in-flight on artifact change.
+  // Slice 7: refresh agent messages from the backend.
+  const refreshAgentMessages = useCallback(() => {
+    void listAgentMessages()
+      .then(setAgentMessages)
+      .catch(() => { /* best-effort */ });
+  }, []);
+
+  // notify-user event: the backend now persists the message before emitting.
+  // On arrival, refresh the persisted list (sticky stack) instead of auto-dismissing.
+  // Kept in a stable effect (no artifact dep) so the listener is never torn down.
   useEffect(() => {
-    const unlistenNotify = listen<NotifyUserPayload>("agentcanvas://notify-user", (event) => {
-      setHandoffToast(event.payload.message);
-      setHandoffToastBody(event.payload.severity === "info" ? null : event.payload.severity.toUpperCase());
-      setHandoffToastAction(event.payload.action ?? null);
-      window.setTimeout(() => {
-        setHandoffToast((current) => (current === event.payload.message ? null : current));
-        setHandoffToastBody(null);
-        setHandoffToastAction(null);
-      }, 4500);
+    refreshAgentMessages();
+    const unlistenNotify = listen<NotifyUserPayload>("agentcanvas://notify-user", () => {
+      refreshAgentMessages();
+    });
+    const unlistenMessagesChanged = listen("agentcanvas://messages-changed", () => {
+      refreshAgentMessages();
     });
     return () => {
       void unlistenNotify.then((dispose) => dispose());
+      void unlistenMessagesChanged.then((dispose) => dispose());
     };
+  // refreshAgentMessages is stable (useCallback with no deps); omitting from deps is intentional.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // no deps — listener is stable for the lifetime of the app
 
   // sessions-changed: refresh sessions list when an agent connects or disconnects,
@@ -1050,6 +1162,26 @@ export default function App() {
       void unlistenSessionsChanged.then((dispose) => dispose());
     };
   }, []); // no deps — stable for app lifetime
+
+  // Slice 8: reactive re-default for the Send dialog.
+  // If the popover is open and the currently-selected agent is no longer in the
+  // route list (agent disconnected), snap to the new best default.
+  useEffect(() => {
+    if (!sendPopoverOpen) return;
+    const currentLiveMcp = sessions.filter((s) => s.is_live);
+    const routeSessions = artifact && !multiSelectActive && currentLiveMcp.length > 0
+      ? currentLiveMcp
+      : sessions;
+    const stillValid = selectedAgentId && routeSessions.some((s) => s.id === selectedAgentId);
+    if (!stillValid) {
+      const currentAttached = attachedSessions.map(attachmentToAgentSession);
+      const attachedInRoute = currentAttached.find((a) => routeSessions.some((r) => r.id === a.id));
+      const firstLive = currentLiveMcp[0] ?? null;
+      const projectDefault = routeSessions.find((s) => s.id === defaultAgentId) ?? null;
+      const bestDefault = attachedInRoute ?? firstLive ?? projectDefault ?? routeSessions[0] ?? null;
+      setSelectedAgentId(bestDefault?.id ?? null);
+    }
+  }, [sendPopoverOpen, sessions, selectedAgentId, artifact, multiSelectActive, attachedSessions, defaultAgentId]);
 
   useEffect(() => {
     function handleFocus() {
@@ -1407,15 +1539,21 @@ export default function App() {
     const routeSessions = artifact && selectedPaths.size <= 1 && currentLiveMcp.length > 0
       ? currentLiveMcp
       : sessions;
-    const defaultSession = routeSessions.find((session) => session.id === defaultAgentId) ?? routeSessions[0] ?? null;
-    const nextSelectedAgent = defaultSession?.id ?? (routeSessions.length === 1 ? routeSessions[0]?.id ?? null : null);
+    // Slice 8: default-agent fix — prefer the attached agent, then first live MCP session,
+    // then the project default, then the first session in the route. Never "default·unknown".
+    const currentAttached = attachedSessions.map(attachmentToAgentSession);
+    const attachedInRoute = currentAttached.find((a) => routeSessions.some((r) => r.id === a.id));
+    const firstLive = currentLiveMcp[0] ?? null;
+    const projectDefault = routeSessions.find((s) => s.id === defaultAgentId) ?? null;
+    const bestDefault = attachedInRoute ?? firstLive ?? projectDefault ?? routeSessions[0] ?? null;
+    const nextSelectedAgent = bestDefault?.id ?? null;
     setSelectedAgentId(nextSelectedAgent);
     setShowAgentPicker(routeSessions.length > 0 && (forceAgentPicker || routeSessions.length > 1));
     setSendActionVerb(defaultIsPreset ? defaultActionVerb : "Custom");
     setCustomActionVerb(defaultIsPreset ? "" : defaultActionVerb);
     setSendNote("");
     setSendPopoverOpen(true);
-  }, [artifact, defaultActionVerb, defaultAgentId, multiSelectActive, selectedPaths.size, sessions]);
+  }, [artifact, attachedSessions, defaultActionVerb, defaultAgentId, multiSelectActive, selectedPaths.size, sessions]);
 
   const sendCurrentArtifact = useCallback(async (actionVerb: string, note: string) => {
     if (!artifact && selectedPaths.size <= 1) {
@@ -2132,8 +2270,21 @@ export default function App() {
 
   return (
     <main className="main-shell" aria-label="AgentCanvas">
-          <aside className="sidebar">
+          {/* Slice 8: collapsible sidebar rail — shown when sidebar is collapsed */}
+          {sidebarCollapsed ? (
+            <div className="sidebar-rail" title="Expand sidebar">
+              <button type="button" className="rail-expand-btn" onClick={() => toggleSidebarCollapsed(false)} aria-label="Expand sidebar">
+                ›
+              </button>
+            </div>
+          ) : (
+          <aside className="sidebar" style={{ width: sidebarWidth, flexShrink: 0 }}>
             <div className="sidebar-header">
+              <div className="sidebar-header-row">
+                <button type="button" className="pane-collapse-btn" onClick={() => toggleSidebarCollapsed(true)} title="Collapse sidebar" aria-label="Collapse sidebar">
+                  ‹
+                </button>
+              </div>
               <label className="search">
                 <span>Search</span>
                 <input
@@ -2422,6 +2573,18 @@ export default function App() {
               </>
             ) : null}
           </aside>
+          )}
+          {/* Slice 8: left sidebar resize divider */}
+          {!sidebarCollapsed && (
+            <div
+              className="resize-divider resize-divider-left"
+              onPointerDown={onSidebarDividerDown}
+              onPointerMove={onSidebarDividerMove}
+              onPointerUp={onSidebarDividerUp}
+              title="Drag to resize sidebar"
+              aria-hidden="true"
+            />
+          )}
           {mode === "project" || mode === "archive" || mode === "pinned" ? (
             <aside className="middle">
               <div className="middle-header">
@@ -2498,9 +2661,16 @@ export default function App() {
                 <span>/</span> <strong>{selectedFile?.name ?? (artifact ? fileName(artifact.path) : null) ?? "Select a file"}</strong>
               </div>
               <div className="toolbar-actions">
+                {/* Slice 8: compact toolbar — Edit/Comments/Save as icon-style compact buttons */}
                 {artifact && isEditableArtifact(artifact.kind) ? (
                   <button
                     type="button"
+                    className="toolbar-compact-btn"
+                    title={
+                      artifact.kind === "html" || artifact.kind === "json"
+                        ? (sourceMode ? "Render" : "View Source")
+                        : (editMode ? "Preview" : "Edit")
+                    }
                     onClick={() =>
                       artifact.kind === "html" || artifact.kind === "json"
                         ? setSourceMode((current) => !current)
@@ -2510,7 +2680,7 @@ export default function App() {
                     {artifact.kind === "html" || artifact.kind === "json"
                       ? sourceMode
                         ? "Render"
-                        : "View Source"
+                        : "Source"
                       : editMode
                         ? "Preview"
                         : "Edit"}
@@ -2526,17 +2696,40 @@ export default function App() {
                     </button>
                   </div>
                 ) : null}
+                {/* Send is the single primary CTA */}
                 <button className="primary" type="button" onClick={() => openSendPopover()} disabled={!artifact && !multiSelectActive}>
                   {sendButtonLabel}
                 </button>
-                <button type="button" onClick={() => setCommentsOpen((current) => !current)} disabled={!artifact}>
-                  Comments {comments.filter((comment) => !comment.resolved).length}
+                {/* Comments toggle — compact icon-style; label removed from toolbar, moved into the pane */}
+                <button
+                  type="button"
+                  className="toolbar-compact-btn"
+                  title={commentsOpen ? "Hide comments" : `Comments (${comments.filter((c) => !c.resolved).length})`}
+                  onClick={() => setCommentsOpen((current) => !current)}
+                  disabled={!artifact}
+                >
+                  💬{comments.filter((c) => !c.resolved).length > 0 ? <span className="toolbar-badge">{comments.filter((c) => !c.resolved).length}</span> : null}
                 </button>
                 {artifact && isEditableArtifact(artifact.kind) ? (
-                  <button type="button" onClick={() => void saveArtifact()} disabled={!artifact.dirty || isSaving}>
-                    {isSaving ? "Saving" : "Save"}
+                  <button
+                    type="button"
+                    className="toolbar-compact-btn"
+                    title={isSaving ? "Saving..." : "Save (⌘S)"}
+                    onClick={() => void saveArtifact()}
+                    disabled={!artifact.dirty || isSaving}
+                  >
+                    {isSaving ? "…" : "Save"}
                   </button>
                 ) : null}
+                {/* Collapse-all / expand-all toggle */}
+                <button
+                  type="button"
+                  className="toolbar-compact-btn"
+                  title={bothCollapsed ? "Expand all panes" : "Collapse all panes"}
+                  onClick={bothCollapsed ? expandAll : collapseAll}
+                >
+                  {bothCollapsed ? "⊞" : "⊡"}
+                </button>
               </div>
             </div>
             {conflict ? (
@@ -2590,6 +2783,22 @@ export default function App() {
                     {handoffToastAction.label}
                   </button>
                 ) : null}
+              </div>
+            ) : null}
+            {/* Slice 7: sticky agent message stack — persists until Acknowledged */}
+            {agentMessages.length > 0 ? (
+              <div className="agent-message-stack">
+                {agentMessages.map((msg) => (
+                  <AgentMessageBanner
+                    key={msg.id}
+                    msg={msg}
+                    personaColors={personaColors}
+                    onOpenArtifact={async (artifactPath) => {
+                      await openExternalPath(artifactPath);
+                    }}
+                    onAcknowledge={() => void handleAcknowledgeMessage(msg.id)}
+                  />
+                ))}
               </div>
             ) : null}
             {multiSelectActive ? (
@@ -2748,111 +2957,163 @@ export default function App() {
               />
             ) : null}
           </section>
-          {commentsOpen ? (
-            <CommentsPanel
-              comments={comments}
-              hoveredCommentId={hoveredCommentId}
-              onHover={setHoveredCommentId}
-              onSelect={revealComment}
-              onResolve={(commentId) => void resolveComment(commentId)}
+          {/* Slice 8: right side resize divider + collapsible right region */}
+          {!rightCollapsed && (
+            <div
+              className="resize-divider resize-divider-right"
+              onPointerDown={onRightDividerDown}
+              onPointerMove={onRightDividerMove}
+              onPointerUp={onRightDividerUp}
+              title="Drag to resize right pane"
+              aria-hidden="true"
             />
-          ) : (
-            <aside className="comments-gutter">
-              <button type="button" onClick={() => setCommentsOpen(true)} disabled={!artifact}>
-                Comments
-              </button>
-            </aside>
           )}
-          {sessions.length === 0 && !showSessionForm ? (
-            <aside className="agent-gutter">
-              <button type="button" onClick={() => setShowSessionForm(true)}>
-                + Connect
+          {rightCollapsed ? (
+            <div className="right-rail" title="Expand right pane">
+              <button type="button" className="rail-expand-btn" onClick={() => toggleRightCollapsed(false)} aria-label="Expand right pane">
+                ‹
               </button>
-            </aside>
+            </div>
           ) : (
-            <aside className="agent-panel">
-              <div className="agent-panel-header">
-                <span>Agent Sessions</span>
-                <button type="button" onClick={() => setShowSessionForm((current) => !current)}>
-                  +
-                </button>
-              </div>
-              {showSessionForm ? (
-                <form
-                  className="session-form"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void addSession();
-                  }}
-                >
-                  <select value={sessionPersona} onChange={(event) => setSessionPersona(event.target.value)}>
-                    {(personas?.personas ?? []).map((persona) => (
-                      <option key={persona.name} value={persona.name}>
-                        {persona.display_label}
-                      </option>
-                    ))}
-                  </select>
-                  <select value={sessionBackbone} onChange={(event) => setSessionBackbone(event.target.value)}>
-                    <option value="claude">claude</option>
-                    <option value="codex">codex</option>
-                    <option value="other">other</option>
-                  </select>
-                  <input
-                    value={sessionContext}
-                    onChange={(event) => setSessionContext(event.target.value)}
-                    placeholder="[context]"
-                  />
-                  <button type="submit">Add session</button>
-                </form>
-              ) : null}
-              <div className="agent-session-list">
-                {sessions.map((session) => (
-                  <article
-                    className={`agent-card ${session.id === defaultAgentId ? "default-agent" : ""}`}
-                    data-source={session.source}
-                    key={session.id}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      if (session.source === "manual") {
-                        setAgentMenu({ x: event.clientX, y: event.clientY, session });
-                      }
-                    }}
-                  >
-                    <div className="agent-card-top">
-                      <span className={`status-dot ${session.is_live ? "connected" : "offline"}`} aria-label={session.is_live ? "Connected" : "Offline"} />
-                      <span
-                        className="persona-chip"
-                        style={{ color: personaColors.get(session.persona) ?? fallbackPersonaColor(session.persona) }}
-                      >
-                        {session.persona}·{session.agent}
-                      </span>
-                      <button
-                        className="agent-session-action"
-                        type="button"
-                        onClick={() => {
-                          if (session.source === "mcp") {
-                            void disconnectLiveSession(session.id);
-                          } else {
-                            void removeManualSession(session.id);
+            <div className="right-region" style={{ width: rightWidth }}>
+              {commentsOpen ? (
+                <CommentsPanel
+                  comments={comments}
+                  hoveredCommentId={hoveredCommentId}
+                  onHover={setHoveredCommentId}
+                  onSelect={revealComment}
+                  onResolve={(commentId) => void resolveComment(commentId)}
+                  onClose={() => setCommentsOpen(false)}
+                  onAddComment={artifact ? () => setFileLevelDialogOpen(true) : undefined}
+                />
+              ) : (
+                <aside className="comments-gutter">
+                  <button type="button" onClick={() => setCommentsOpen(true)} disabled={!artifact} title="Show comments">
+                    💬
+                  </button>
+                </aside>
+              )}
+              {sessions.length === 0 && !showSessionForm && agentMessages.length === 0 ? (
+                <aside className="agent-gutter">
+                  <button type="button" onClick={() => setShowSessionForm(true)}>
+                    + Connect
+                  </button>
+                </aside>
+              ) : (
+                <aside className="agent-panel">
+                  {/* Agent Center — Section 1: Presence */}
+                  <div className="agent-panel-header">
+                    <span>Presence</span>
+                    <div className="agent-panel-header-actions">
+                      <button type="button" onClick={() => setShowSessionForm((current) => !current)} title="Add session">
+                        +
+                      </button>
+                      <button type="button" className="pane-collapse-btn" onClick={() => toggleRightCollapsed(true)} title="Collapse right pane" aria-label="Collapse right pane">
+                        ›
+                      </button>
+                    </div>
+                  </div>
+                  {showSessionForm ? (
+                    <form
+                      className="session-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void addSession();
+                      }}
+                    >
+                      <select value={sessionPersona} onChange={(event) => setSessionPersona(event.target.value)}>
+                        {(personas?.personas ?? []).map((persona) => (
+                          <option key={persona.name} value={persona.name}>
+                            {persona.display_label}
+                          </option>
+                        ))}
+                      </select>
+                      <select value={sessionBackbone} onChange={(event) => setSessionBackbone(event.target.value)}>
+                        <option value="claude">claude</option>
+                        <option value="codex">codex</option>
+                        <option value="other">other</option>
+                      </select>
+                      <input
+                        value={sessionContext}
+                        onChange={(event) => setSessionContext(event.target.value)}
+                        placeholder="[context]"
+                      />
+                      <button type="submit">Add session</button>
+                    </form>
+                  ) : null}
+                  <div className="agent-session-list">
+                    {sessions.map((session) => (
+                      <article
+                        className={`agent-card ${session.id === defaultAgentId ? "default-agent" : ""}`}
+                        data-source={session.source}
+                        key={session.id}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          if (session.source === "manual") {
+                            setAgentMenu({ x: event.clientX, y: event.clientY, session });
                           }
                         }}
                       >
-                        {session.source === "mcp" ? "Disconnect" : "Remove"}
-                      </button>
-                    </div>
-                    <div className="agent-context">{session.project || "current"}</div>
-                    {session.attached_paths.length > 0 ? (
-                      <ul className="attached-list">
-                        {session.attached_paths.map((path) => (
-                          <li key={path}>{fileName(path)}</li>
+                        <div className="agent-card-top">
+                          <span className={`status-dot ${session.is_live ? "connected" : "offline"}`} aria-label={session.is_live ? "Connected" : "Offline"} />
+                          <span
+                            className="persona-chip"
+                            style={{ color: personaColors.get(session.persona) ?? fallbackPersonaColor(session.persona) }}
+                          >
+                            {session.persona}·{session.agent}
+                          </span>
+                          <button
+                            className="agent-session-action"
+                            type="button"
+                            onClick={() => {
+                              if (session.source === "mcp") {
+                                void disconnectLiveSession(session.id);
+                              } else {
+                                void removeManualSession(session.id);
+                              }
+                            }}
+                          >
+                            {session.source === "mcp" ? "Disconnect" : "Remove"}
+                          </button>
+                        </div>
+                        <div className="agent-context">{session.project || "current"}</div>
+                        {session.attached_paths.length > 0 ? (
+                          <ul className="attached-list">
+                            {session.attached_paths.map((path) => (
+                              <li key={path}>{fileName(path)}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {session.id === defaultAgentId ? <div className="agent-default">default for {currentProjectKey}</div> : null}
+                      </article>
+                    ))}
+                  </div>
+                  {/* Agent Center — Section 2: Messages (same set as the sticky stack) */}
+                  {agentMessages.length > 0 ? (
+                    <>
+                      <div className="agent-panel-header agent-messages-header">
+                        <span>Messages</span>
+                        <span className="agent-messages-count">{agentMessages.length}</span>
+                      </div>
+                      <div className="agent-messages-list">
+                        {agentMessages.map((msg) => (
+                          <AgentMessageBanner
+                            key={msg.id}
+                            msg={msg}
+                            personaColors={personaColors}
+                            compact
+                            onOpenArtifact={async (artifactPath) => {
+                              await openExternalPath(artifactPath);
+                            }}
+                            onAcknowledge={() => void handleAcknowledgeMessage(msg.id)}
+                          />
                         ))}
-                      </ul>
-                    ) : null}
-                    {session.id === defaultAgentId ? <div className="agent-default">default for {currentProjectKey}</div> : null}
-                  </article>
-                ))}
-              </div>
-            </aside>
+                      </div>
+                    </>
+                  ) : null}
+                </aside>
+              )}
+            </div>
           )}
         {paletteOpen ? (
           <div className="palette-backdrop" onMouseDown={() => setPaletteOpen(false)}>
@@ -3147,9 +3408,13 @@ type CommentsPanelProps = {
   onHover: (id: string | null) => void;
   onSelect: (comment: Comment) => void;
   onResolve: (commentId: string) => void;
+  /** Slice 8: close button in the panel header */
+  onClose?: () => void;
+  /** Slice 8: + button to add a file-level comment, moved from toolbar */
+  onAddComment?: () => void;
 };
 
-function CommentsPanel({ comments, hoveredCommentId, onHover, onSelect, onResolve }: CommentsPanelProps) {
+function CommentsPanel({ comments, hoveredCommentId, onHover, onSelect, onResolve, onClose, onAddComment }: CommentsPanelProps) {
   const openComments = comments.filter((comment) => !comment.resolved);
   const selectionComments = openComments.filter((comment) => comment.anchor.kind !== "file_level");
   const fileLevelComments = openComments.filter((comment) => comment.anchor.kind === "file_level");
@@ -3175,7 +3440,21 @@ function CommentsPanel({ comments, hoveredCommentId, onHover, onSelect, onResolv
     <aside className="comments-panel">
       <div className="agent-panel-header">
         <span>Comments</span>
-        <span className="count">{openComments.length}</span>
+        <div className="agent-panel-header-actions">
+          <span className="count">{openComments.length}</span>
+          {/* Slice 8: + to add file-level comment (moved from toolbar) */}
+          {onAddComment ? (
+            <button type="button" title="Add comment about this file" onClick={onAddComment}>
+              +
+            </button>
+          ) : null}
+          {/* Slice 8: explicit × close button */}
+          {onClose ? (
+            <button type="button" title="Close comments pane" onClick={onClose}>
+              ×
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="comments-list">
         {openComments.length === 0 ? (
@@ -3944,6 +4223,60 @@ function JsonNode({ name, value, defaultOpen = false }: { name: string; value: J
   );
 }
 
+// ---------------------------------------------------------------------------
+// Slice 7 — AgentMessageBanner component
+// ---------------------------------------------------------------------------
+
+type AgentMessageBannerProps = {
+  msg: AgentMessage;
+  personaColors: Map<string, string>;
+  compact?: boolean;
+  onOpenArtifact: (path: string) => Promise<void>;
+  onAcknowledge: () => void;
+};
+
+function AgentMessageBanner({
+  msg,
+  personaColors,
+  compact = false,
+  onOpenArtifact,
+  onAcknowledge
+}: AgentMessageBannerProps) {
+  const agentLabel = msg.persona && msg.agent ? `${msg.persona}·${msg.agent}` : (msg.session_id ?? "");
+  const color = personaColors.get(msg.persona) ?? fallbackPersonaColor(msg.persona);
+  return (
+    <div
+      className={`agent-message-banner severity-${msg.severity}${compact ? " compact" : ""}`}
+      role="status"
+      aria-label={`Agent message: ${msg.message}`}
+    >
+      <div className="agent-message-header">
+        <span className="agent-message-source" style={{ color }}>
+          {agentLabel}
+        </span>
+        <span className={`agent-message-severity severity-badge-${msg.severity}`}>
+          {msg.severity}
+        </span>
+      </div>
+      <p className="agent-message-body">{msg.message}</p>
+      <div className="agent-message-actions">
+        {msg.action_artifact_path && msg.action_label ? (
+          <button
+            type="button"
+            className="agent-message-open"
+            onClick={() => void onOpenArtifact(msg.action_artifact_path!)}
+          >
+            {msg.action_label}
+          </button>
+        ) : null}
+        <button type="button" className="agent-message-ack" onClick={onAcknowledge}>
+          Acknowledge
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function markdownExtension(extension: string): boolean {
   const ext = extension.toLowerCase();
   return ext === "md" || ext === "markdown";
@@ -4024,20 +4357,40 @@ function fallbackPersonaColor(persona: string): string {
   return "var(--text-secondary)";
 }
 
+function isJunkSession(session: AgentSession): boolean {
+  // Filter out sessions with placeholder persona/agent values that look like fallbacks.
+  const junkPersona = !session.persona || session.persona === "default";
+  const junkAgent = !session.agent || session.agent === "unknown";
+  return junkPersona || junkAgent;
+}
+
 function sendLabelForSessions(
   sessions: AgentSession[],
   defaultSessionId: string | null,
   fileCount?: number,
   isMcpSendBack = false
 ): string {
-  const prefix = fileCount && fileCount > 1 ? `Send ${fileCount} files to` : isMcpSendBack ? "Send back to" : "Send to";
-  if (sessions.length === 0) {
-    return `${prefix} Agent`;
+  // Filter junk sessions (persona="default" / agent="unknown") from the label computation.
+  const real = sessions.filter((s) => !isJunkSession(s));
+  const multiPrefix = fileCount && fileCount > 1 ? `Send ${fileCount} files` : null;
+
+  // No live agent path — plain "Send" (clipboard).
+  if (!isMcpSendBack) {
+    if (multiPrefix) return multiPrefix;
+    return "Send";
   }
-  if (sessions.length === 1) {
-    return `${prefix} ${agentSessionLabel(sessions[0])}`;
+
+  const prefix = multiPrefix ? `${multiPrefix} to` : "Send back to";
+  if (real.length === 0) {
+    // isMcpSendBack is true but the filtered list is empty — shouldn't normally happen,
+    // but fall back gracefully.
+    return prefix.replace(" back", "");
   }
-  const defaultSession = sessions.find((session) => session.id === defaultSessionId);
+  if (real.length === 1) {
+    return `${prefix} ${agentSessionLabel(real[0])}`;
+  }
+  // Multiple live sessions: prefer the most-recently-active one as the default label.
+  const defaultSession = real.find((s) => s.id === defaultSessionId) ?? real[0] ?? null;
   return defaultSession ? `${prefix} ${agentSessionLabel(defaultSession)}` : `${prefix}...`;
 }
 

@@ -722,3 +722,39 @@ export async function takePendingOpens(): Promise<string[]> {
     throw ipcError("take_pending_opens", caught);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Slice 7 — Agent messages
+// ---------------------------------------------------------------------------
+
+export const AgentMessage = z
+  .object({
+    id: z.string(),
+    session_id: z.string(),
+    persona: z.string(),
+    agent: z.string(),
+    severity: z.enum(["info", "warn", "error"]),
+    message: z.string(),
+    action_artifact_path: z.string().nullable(),
+    action_label: z.string().nullable(),
+    created_at: z.number()
+  })
+  .strict();
+export type AgentMessage = z.infer<typeof AgentMessage>;
+
+export async function listAgentMessages(): Promise<AgentMessage[]> {
+  try {
+    const result = await invoke<unknown>("list_agent_messages");
+    return z.array(AgentMessage).parse(result);
+  } catch (caught) {
+    throw ipcError("list_agent_messages", caught);
+  }
+}
+
+export async function acknowledgeAgentMessage(id: string): Promise<void> {
+  try {
+    await invoke<unknown>("acknowledge_agent_message", { id });
+  } catch (caught) {
+    throw ipcError("acknowledge_agent_message", caught);
+  }
+}

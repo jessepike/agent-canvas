@@ -1081,6 +1081,41 @@ fn disconnect_mcp_session(state: tauri::State<AppState>, session_id: String) -> 
     mcp::sessions::delete_agent_session(&conn, &session_id)
 }
 
+// ---------------------------------------------------------------------------
+// Slice 7 — Agent messages commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn list_agent_messages(
+    state: tauri::State<AppState>,
+) -> Result<Vec<mcp::sessions::AgentMessage>, String> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    mcp::sessions::list_unacknowledged_agent_messages(&conn)
+}
+
+#[tauri::command]
+fn acknowledge_agent_message(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    id: String,
+) -> Result<(), String> {
+    {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        mcp::sessions::delete_agent_message(&conn, &id)?;
+        // Guard drops here — emit runs post-lock (lock discipline).
+    }
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.emit("agentcanvas://messages-changed", serde_json::json!({}));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn install_mcp_for_claude_code() -> Result<InstallResult, String> {
     let config_path = home_dir()?.join(".claude.json");
@@ -1922,6 +1957,7 @@ fn initialize_state_db(db: &Connection, legacy_canvas_root: &Path) -> Result<(),
     mcp::sessions::migrate_agent_sessions(db)?;
     mcp::sessions::migrate_user_messages(db)?;
     mcp::sessions::migrate_session_attachments(db)?;
+    mcp::sessions::migrate_agent_messages(db)?;
     add_column_if_missing(
         db,
         "files",
@@ -1965,6 +2001,14 @@ fn initialize_state_db(db: &Connection, legacy_canvas_root: &Path) -> Result<(),
             backfill_file_tags_from_legacy_paths(db, &local_legacy)?;
         }
     }
+    // Slice 8: startup ghost-session sweep.
+    // No MCP connection survives an app restart. Mark any still-"live" session as
+    // disconnected so they don't show up as live agents after a force-quit or crash.
+    let now_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    mcp::sessions::disconnect_all_sessions(db, now_ts)?;
     Ok(())
 }
 
@@ -2929,6 +2973,9 @@ fn main() {
             add_agent_session,
             remove_agent_session,
             disconnect_mcp_session,
+            // Slice 7
+            list_agent_messages,
+            acknowledge_agent_message,
             install_mcp_for_claude_code,
             install_mcp_for_codex,
             install_mcp_for_cursor,

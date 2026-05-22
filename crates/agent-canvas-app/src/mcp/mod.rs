@@ -440,14 +440,16 @@ fn handle_tools_call(
     // perform ONLY their DB work under the lock, then drop the guard by ending the match
     // arm, and finally run the side-effects (watcher resync + window focus) here, after
     // the guard has been released.
-    let needs_post_lock_side_effects = matches!(name, "open_artifact" | "attach_artifact");
+    // notify_user now does only DB work (insert row) under the lock; the Tauri
+    // emit runs post-lock, same pattern as open_artifact / attach_artifact.
+    let needs_post_lock_side_effects = matches!(name, "open_artifact" | "attach_artifact" | "notify_user");
 
-    let (rpc_response, open_path) = {
+    let (rpc_response, open_path, notify_payload) = {
         let conn = match state.db.lock() {
             Ok(conn) => conn,
             Err(_) => return rpc_error(id, -32603, "state db lock poisoned"),
         };
-        // Pass app_handle=None for the two mutating tools so their handlers cannot
+        // Pass app_handle=None for mutating tools so their handlers cannot
         // attempt state.db.lock() or window ops while this guard is still held.
         let effective_app_handle = if needs_post_lock_side_effects {
             None
@@ -474,14 +476,22 @@ fn handle_tools_call(
         } else {
             None
         };
-        (response, open_path)
+        // For notify_user, capture the arguments for the post-lock emit.
+        let notify_payload = if name == "notify_user" {
+            params.get("arguments").cloned()
+        } else {
+            None
+        };
+        (response, open_path, notify_payload)
         // `conn` (the MutexGuard) is dropped here at the end of this block.
     };
 
     // Side-effects that must NOT run while the db guard is held.
     if needs_post_lock_side_effects && rpc_response.get("result").is_some() {
-        // Resync the watcher now that the db lock is free.
-        let _ = resync_watcher_from_db(&state);
+        // Resync the watcher now that the db lock is free (open_artifact / attach_artifact).
+        if name != "notify_user" {
+            let _ = resync_watcher_from_db(&state);
+        }
 
         // For open_artifact: bring the window to front and emit the focus event.
         if let Some(path_string) = open_path {
@@ -495,6 +505,15 @@ fn handle_tools_call(
             }
             if let Ok(mut current_focus) = state.current_focus.lock() {
                 *current_focus = Some(path_string);
+            }
+        }
+
+        // For notify_user: emit the live toast event and the messages-changed event
+        // after the db guard has been released (lock discipline).
+        if let Some(notify_args) = notify_payload {
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.emit("agentcanvas://notify-user", &notify_args);
+                let _ = window.emit("agentcanvas://messages-changed", json!({}));
             }
         }
     }
@@ -1144,11 +1163,13 @@ mod tests {
     }
 
     #[test]
-    fn notify_user_emits_tauri_event() {
+    fn notify_user_inserts_row_and_returns_delivered() {
         let (conn, paths, _temp) = test_state();
         fs::create_dir_all(&paths.canvas_root).expect("canvas");
         let action_path = paths.canvas_root.join("x.md");
         fs::write(&action_path, "# X\n").expect("action file");
+        sessions::insert_agent_session(&conn, "s1", "cpo", "claude", "agent-canvas", 1)
+            .expect("session");
         let response = handle_tools_call_with_conn(
             json!(27),
             json!({"name":"notify_user","arguments":{"severity":"warn","message":"Check this","action":{"label":"Open","artifact_path":action_path.to_string_lossy()}}}),
@@ -1159,10 +1180,54 @@ mod tests {
             None,
         );
 
-        assert_eq!(
-            response["result"]["structuredContent"],
-            json!({"delivered": true})
+        assert_eq!(response["result"]["structuredContent"]["delivered"], true);
+        // The id should be a non-empty string.
+        assert!(response["result"]["structuredContent"]["id"].as_str().map(|s| !s.is_empty()).unwrap_or(false));
+        // Verify row landed in agent_messages.
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM agent_messages WHERE session_id = 's1'", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn agent_messages_list_and_acknowledge_cycle() {
+        let (conn, paths, _temp) = test_state();
+        fs::create_dir_all(&paths.canvas_root).expect("canvas");
+        sessions::insert_agent_session(&conn, "s1", "cpo", "claude", "agent-canvas", 1)
+            .expect("session");
+        // Insert via notify_user tool.
+        handle_tools_call_with_conn(
+            json!(30),
+            json!({"name":"notify_user","arguments":{"severity":"info","message":"Hello from agent"}}),
+            &conn,
+            &paths,
+            None,
+            Some(&test_session("s1")),
+            None,
         );
+        // List — should return one unacknowledged message.
+        let messages = sessions::list_unacknowledged_agent_messages(&conn).expect("list");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].message, "Hello from agent");
+        assert_eq!(messages[0].severity, "info");
+        assert_eq!(messages[0].session_id, "s1");
+        // Acknowledge (delete).
+        sessions::delete_agent_message(&conn, &messages[0].id).expect("delete");
+        // List again — should be empty.
+        let after = sessions::list_unacknowledged_agent_messages(&conn).expect("list after");
+        assert!(after.is_empty());
+    }
+
+    #[test]
+    fn agent_messages_migration_idempotent() {
+        let conn = Connection::open_in_memory().expect("db");
+        sessions::migrate_agent_messages(&conn).expect("migration 1");
+        sessions::migrate_agent_messages(&conn).expect("migration 2");
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM agent_messages", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(count, 0);
     }
 
     #[test]

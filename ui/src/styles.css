@@ -122,9 +122,160 @@ button:hover {
   overflow: hidden;
 }
 
+/* ── Slice 8: Resizable layout ────────────────────────────────────────────── */
+
+/* Draggable divider handle between columns */
+.resize-divider {
+  flex-shrink: 0;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 10;
+  transition: background 0.15s ease;
+}
+
+.resize-divider::after {
+  content: "";
+  position: absolute;
+  inset: 0 1px;
+  background: var(--border);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.resize-divider:hover::after,
+.resize-divider:active::after {
+  opacity: 1;
+}
+
+/* The right-region wrapper holds comments + agent panel side by side */
+.right-region {
+  display: flex;
+  flex-shrink: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Collapsed sidebar rail — thin strip with vertical expand button */
+.sidebar-rail {
+  display: flex;
+  width: 24px;
+  flex-shrink: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding-top: 14px;
+  border-right: 0.5px solid var(--border);
+  background: var(--bg-sidebar);
+}
+
+/* Collapsed right rail */
+.right-rail {
+  display: flex;
+  width: 24px;
+  flex-shrink: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding-top: 14px;
+  border-left: 0.5px solid var(--border);
+  background: var(--bg-agent-panel);
+}
+
+/* Expand button in collapsed rail */
+.rail-expand-btn {
+  width: 20px;
+  height: 60px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1;
+  writing-mode: horizontal-tb;
+}
+
+.rail-expand-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+  filter: none;
+}
+
+/* Collapse button on panes (sidebar, agent panel header) */
+.pane-collapse-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.pane-collapse-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+  filter: none;
+}
+
+/* Sidebar header row with collapse control */
+.sidebar-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 6px 4px 2px;
+}
+
+/* Agent panel header with multiple action buttons */
+.agent-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Compact toolbar button — shorter label, icon-style, less padding */
+.toolbar-compact-btn {
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* Small badge for comment count on the toolbar 💬 button */
+.toolbar-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--btn-primary-text);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ── end Slice 8 ───────────────────────────────────────────────────────────── */
+
 .sidebar {
   display: flex;
-  width: 280px;
   flex-shrink: 0;
   flex-direction: column;
   overflow: hidden;
@@ -1547,8 +1698,9 @@ button:hover {
 
 .agent-panel {
   display: flex;
-  width: 300px;
-  flex-shrink: 0;
+  /* Width is now set by the right-region container; agent-panel takes remaining space */
+  min-width: 180px;
+  flex: 1;
   flex-direction: column;
   overflow: hidden;
   border-left: 0.5px solid var(--border);
@@ -1557,7 +1709,7 @@ button:hover {
 
 .comments-gutter {
   display: flex;
-  width: 46px;
+  width: 36px;
   flex-shrink: 0;
   align-items: flex-start;
   justify-content: center;
@@ -1567,18 +1719,29 @@ button:hover {
 }
 
 .comments-gutter button {
-  width: 30px;
-  height: 104px;
+  width: 28px;
+  height: 36px;
   padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
   color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.2;
-  writing-mode: vertical-rl;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.comments-gutter button:hover {
+  background: var(--hover-bg);
+  filter: none;
 }
 
 .comments-panel {
   display: flex;
-  width: 280px;
+  /* Width is constrained by the right-region container; use a flex share of it */
+  width: 44%;
+  min-width: 160px;
   flex-shrink: 0;
   flex-direction: column;
   overflow: hidden;
@@ -1928,4 +2091,160 @@ button:hover {
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 11px;
+}
+
+/* ─── Slice 7: Agent Messages ─────────────────────────────────────────────── */
+
+/* Sticky banner stack above the doc area */
+.agent-message-stack {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px 0;
+  flex: 0 0 auto;
+}
+
+/* Individual banner */
+.agent-message-banner {
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg-window);
+  box-shadow: var(--shadow-card);
+}
+
+/* severity tints — left accent bar via border-left */
+.agent-message-banner.severity-info {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+.agent-message-banner.severity-warn {
+  border-left: 3px solid var(--pending);
+  background: var(--pending-bg);
+}
+
+.agent-message-banner.severity-error {
+  border-left: 3px solid var(--diff-rem-strong);
+  background: var(--diff-rem-bg);
+}
+
+/* compact variant used inside the agent panel Messages section */
+.agent-message-banner.compact {
+  padding: 7px 9px;
+  border-radius: 6px;
+}
+
+/* Row: source label + severity badge */
+.agent-message-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.agent-message-source {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* small pill badge */
+.agent-message-severity {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.severity-badge-info {
+  color: var(--accent-deep);
+  background: var(--accent-soft-deep);
+}
+
+.severity-badge-warn {
+  color: var(--pending-deep);
+  background: var(--pending-border);
+}
+
+.severity-badge-error {
+  color: var(--diff-rem-text);
+  background: var(--diff-rem-bg);
+}
+
+/* message text */
+.agent-message-body {
+  margin: 0 0 8px;
+  color: var(--text-prose);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.compact .agent-message-body {
+  font-size: 11.5px;
+  margin-bottom: 6px;
+}
+
+/* action row */
+.agent-message-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.agent-message-open {
+  padding: 4px 9px;
+  font-size: 11px;
+  background: var(--btn-bg-top);
+}
+
+.agent-message-ack {
+  padding: 4px 9px;
+  font-size: 11px;
+  margin-left: auto;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0.5px solid var(--border-strong);
+  box-shadow: none;
+}
+
+.agent-message-ack:hover {
+  background: var(--hover-bg);
+}
+
+/* Agent panel — Messages section header */
+.agent-messages-header {
+  /* inherits .agent-panel-header, just adds spacing tweak */
+  margin-top: 4px;
+}
+
+/* count badge next to "Messages" heading */
+.agent-messages-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  padding: 0 5px;
+  color: var(--accent-deep);
+  background: var(--accent-soft-deep);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* scrollable list inside the panel */
+.agent-messages-list {
+  display: grid;
+  gap: 6px;
+  overflow: auto;
+  padding: 6px 10px 10px;
 }
