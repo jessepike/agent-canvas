@@ -4,7 +4,7 @@ spec: v0.5
 status: draft
 created: 2026-05-22
 author: cto
-implements: AWS Interaction Protocol Spec v1 (ADR-003)
+implements: AWS Interaction Protocol Spec v1.1.0 (ADR-003)
 supersedes: v0.4 backlog items [interactive-send], [send-dialog]; folds in Slice 9 (loop receipts)
 ---
 
@@ -44,7 +44,7 @@ returned via `get_user_messages`) and the clipboard-paste workaround surfaced in
 |---|---|---|
 | Agent → operator request | `open_artifact` / `notify_user` (no class, no id) | `dispatch_interaction(envelope)` carrying `interaction_id`, `class`, `questions[]`, `trace_id` |
 | Operator → agent response | `user_messages` row `{note, action_verb}` (prose) | structured `payload` per protocol §4 (`responses[]` / `comments[]`+`edits[]` / `decision`+`reason`), correlated by `interaction_id` |
-| `get_user_messages` shape | `{messages:[{id,session_id,path,note,action_verb,created_at}]}` (v0.4 wrap) | `{messages:[{interaction_id, payload:{§4}, ts}]}` (protocol §5) |
+| `get_user_messages` shape | `{messages:[{id,session_id,path,note,action_verb,created_at}]}` (v0.4 wrap) | `{messages:[{interaction_id, ts, payload:{§4 incl. class}}]}` (protocol §5, v1.1.0) |
 | `get_comments` shape | `{comments:[…sidecar…]}` (v0.4 wrap) | unchanged shape; feeds `document-review` responses |
 | Rich UI | agent hand-rolls HTML (clipboard return) | Canvas renders typed classes from the envelope |
 | Receipts | none (Slice 9 planned) | Delivered→Read→Responded keyed by `interaction_id` (folded in here) |
@@ -58,20 +58,27 @@ the **per-item shape** to the protocol envelope.
 New `interactions` table (mirrors the protocol's request+response, additive migration):
 
 ```
-interaction_id TEXT PRIMARY KEY,   -- correlates request ↔ response
-session_id     TEXT NOT NULL,      -- dispatching agent session
-class          TEXT NOT NULL,      -- decision-set | document-review | approval-gate | visual-artifact
-title          TEXT,
-artifact_path  TEXT,               -- optional doc/HTML to render
-trace_id       TEXT,               -- handoff-event boundary link
-request_json   TEXT NOT NULL,      -- the §3 envelope as received
-status         TEXT NOT NULL,      -- pending | submitted | draft | dismissed
-response_json  TEXT,               -- the §4 structured payload on submit
-created_at     INTEGER NOT NULL,
-responded_at   INTEGER,
-read_at        INTEGER             -- when the agent consumed it (Read receipt)
+interaction_id  TEXT PRIMARY KEY,  -- correlates request ↔ response
+session_id      TEXT NOT NULL,     -- dispatching agent session
+class           TEXT NOT NULL,     -- decision-set | document-review | approval-gate | visual-artifact
+title           TEXT,
+artifact_path   TEXT,              -- absolute doc/HTML path (XOR artifact_inline)
+artifact_inline TEXT,              -- inline HTML (visual-artifact ONLY; XOR artifact_path)
+trace_id        TEXT,              -- echoed to response; spine writes the handoff-event log
+request_json    TEXT NOT NULL,     -- the §3 envelope as received
+status          TEXT NOT NULL,     -- pending | submitted | draft | dismissed
+response_json   TEXT,              -- the §4 structured payload on submit (carries submitted_at ISO-8601)
+created_at      INTEGER NOT NULL,  -- epoch, internal ordering only
+responded_at    INTEGER,           -- epoch, internal ordering only
+read_at         INTEGER            -- epoch; set when the agent consumes it (Read receipt)
 + index on (session_id, status), (interaction_id)
 ```
+
+**Timestamps (locked by spec v1.1.0):** all WIRE/payload timestamps are **ISO-8601 UTC with
+trailing `Z`**. `payload.submitted_at` is canonical; the transport wrapper `ts` mirrors it and
+is also ISO-8601 (if they ever disagree, `submitted_at` wins). Table `*_at` columns stay epoch
+for internal ordering/indexing only — never emitted raw; derive the ISO-8601 wire values from
+them (or store `submitted_at` verbatim in `response_json`).
 
 - `comments` stay in the existing sidecar (document-review pulls them into `response_json`).
 - The v0.4 `user_messages` free-text send-back is **deprecated** in favor of `interactions`;
@@ -86,11 +93,15 @@ read_at        INTEGER             -- when the agent consumed it (Read receipt)
   window), and pings via the existing notification channel. Returns `{dispatched: true,
   interaction_id}`. **Lock discipline:** insert under the db guard, window/emit post-lock
   (per commits `95261f6`/`cffcae5`).
-- **Evolve `get_user_messages`** → `{messages:[{interaction_id, payload, ts}]}` where
-  `payload` is the §4 response object for `status in (submitted, draft)` interactions for the
-  caller's session (honor `since`). On read, set `read_at` (the Read receipt) inside the lock,
-  emit `messages-changed`/`interaction-read` post-lock. Non-destructive (agents dedupe via
-  `since`).
+- **Evolve `get_user_messages`** → exact element shape (spec v1.1.0 §5):
+  `{messages:[{ "interaction_id": "...", "ts": "<ISO-8601 Z>", "payload": { /* §4 verbatim:
+  interaction_id, class, artifact_path, status, submitted_at + per-class fields */ } }]}`.
+  Wrapper `interaction_id` is canonical for routing; `payload` repeats it and **must equal** the
+  wrapper (agent validates against `payload.interaction_id`); `ts` mirrors `payload.submitted_at`.
+  Canvas MUST NOT add fields to `payload` beyond §4. Return `status in (submitted, draft)`
+  interactions for the caller's session (honor `since`). On read, set `read_at` inside the lock
+  and emit the `interaction.read` lifecycle event + `messages-changed` post-lock. Non-destructive
+  (agents dedupe via `since`).
 - **`get_comments`** keeps `{comments:[{anchor, body, ts}]}` (already conformant).
 - **Keep** `open_artifact` / `attach_artifact` for the plain "just show me this file" path
   (not every artifact is an interaction) and `get_current_focus`.
@@ -109,23 +120,29 @@ read_at        INTEGER             -- when the agent consumed it (Read receipt)
 - **`document-review`**: render the doc; reuse existing inline comments + the edit/save flow,
   computing `edits[] = [{kind:"diff", unified_diff}]` from the operator's edits and gathering
   sidecar `comments[]` into the response.
-- **`visual-artifact`**: render the supplied HTML/image payload (reuse the sandboxed HTML
-  viewer) + annotate → `comments[]`. This is the escape hatch for genuinely-custom rendering.
+- **`visual-artifact`**: render from `artifact_path` **XOR** `artifact_inline` (inline HTML
+  string, valid for this class only — `document-review` always uses `artifact_path`); reuse the
+  sandboxed HTML viewer (scripts disabled — script-bearing HTML stays out of scope per protocol
+  §9) + annotate → `comments[]`. Escape hatch for genuinely-custom rendering.
 
 ### Response builder
-The v0.4 "Send to" dialog becomes the **response submitter**: it emits the §4 envelope
-(`interaction_id` echoed, `artifact_path`, `status` = submitted|draft|dismissed,
-`submitted_at` ISO-8601, plus the class-specific fields). No free-text-only path. "Dismiss"
-sets `status:dismissed`; "Save draft" sets `status:draft`.
+The v0.4 "Send to" dialog becomes the **response submitter**: it emits the §4 envelope —
+`interaction_id` echoed, **`class` echoed** (spec v1.1.0; lets the agent dispatch without
+inferring), `artifact_path`, `status` = submitted|draft|dismissed, `submitted_at` (ISO-8601
+UTC `Z`), plus the class-specific fields. No free-text-only path. "Dismiss" sets
+`status:dismissed`; "Save draft" sets `status:draft`.
 
 ### Lifecycle, receipts, telemetry
-- Emit Canvas-side lifecycle events: `interaction.dispatched`, `interaction.responded`,
-  `interaction.dismissed`, and `interaction.read` (agent consumed). These drive the
-  **Delivered → Read → Responded** receipt UI (folds in Slice 9), keyed by `interaction_id`.
-- **Handoff-event emission is NOT Canvas's job** (open question — see below): Canvas exposes
-  the lifecycle so the wm-agent spine / dispatching agent writes the boundary record
-  (`human_in_loop:true`, `gate_type`, shared `trace_id`) per protocol §7. Canvas just carries
-  and echoes `trace_id`.
+- Emit the four Canvas-side lifecycle events (spec v1.1.0 §5.1): `interaction.dispatched`,
+  `interaction.read`, `interaction.responded`, `interaction.dismissed` — each carrying
+  `interaction_id`, `trace_id`, `ts` (ISO-8601 Z), and `class`/`status` where relevant. These
+  drive the **Delivered → Read → Responded** receipt UI (folds in Slice 9), keyed by
+  `interaction_id`.
+- **Handoff-event log writing is NOT Canvas's job (locked, spec v1.1.0 §7).** The wm-agent
+  spine consumes the lifecycle events and writes the boundary record (`human_in_loop`,
+  `gate_type`, cost/outcome, `trace_id`). **Canvas's responsibility is exactly two things:**
+  (a) echo `trace_id` from request → response untouched, and (b) emit the four lifecycle
+  events above. Canvas never writes/reads the handoff-event JSONL.
 - **Spine re-invoke** (agent releases → re-invoked on matching `interaction_id`) is the
   spine's job; Canvas's responsibility is only that `get_user_messages` polling works as the
   always-available fallback.
@@ -168,20 +185,24 @@ sets `status:dismissed`; "Save draft" sets `status:draft`.
   handoff-event writing belong to the agent/spine. Consequence: Canvas exposes lifecycle but
   doesn't write the handoff log.
 
+## Resolved by Forge (protocol v1.1.0, 2026-05-22)
+
+- **`interaction_id`:** wrapper-level is canonical for routing; `payload` repeats it and the
+  two MUST be equal; agent validates against `payload.interaction_id`. Wire element is
+  `{interaction_id, ts, payload}`.
+- **Time format:** ISO-8601 UTC with trailing `Z` everywhere; `payload.submitted_at` canonical,
+  wrapper `ts` mirrors it (`submitted_at` wins on conflict).
+- **Handoff-event:** the spine writes the log; Canvas only echoes `trace_id` + emits the four
+  §5.1 lifecycle events.
+- **`class` in response:** ACCEPTED — echo the request class in the §4 response.
+- **`visual-artifact` source:** `artifact_path` XOR `artifact_inline`; inline HTML only for
+  `visual-artifact`; both sandboxed, scripts disabled.
+
 ## Open questions (capture, don't build)
 
-- **Who writes the handoff-event boundary record** for a Canvas interaction — the dispatching
-  agent, the wm-agent spine, or does Canvas emit a precursor event the spine consumes?
-  (Protocol §7 says the interaction "emits" one; ownership of the *write* is unspecified.)
-  Route to Forge.
-- **`interaction_id` redundancy:** protocol §5 wraps as `{messages:[{interaction_id, payload,
-  ts}]}` while §4's `payload` also carries `interaction_id`. Confirm canonical source with
-  Forge before implementing the read shape.
-- **Time format:** §5 uses epoch `ts`; §4 uses ISO-8601 `submitted_at`. Pick one for the
-  stored `responded_at` / wire `ts`. Route to Forge.
 - **`document-review` edit capture:** diff against the dispatched artifact version vs the
   on-disk version at submit (concurrent-edit window). Reuse the existing stat+hash guard.
-- Whether `visual-artifact` accepts a file path, inline HTML, or both in the envelope.
+- One-click "Track this" promotion for ephemeral files (carried from v0.4).
 
 ## Acceptance (milestone)
 
