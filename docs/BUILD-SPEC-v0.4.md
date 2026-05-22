@@ -230,6 +230,45 @@ unacknowledged set; acknowledging removes it from both.
   unacknowledged; the Send button never shows "default·unknown". Gates: `cargo test`,
   `tsc`, `vite build`, A22=0, A15=0.
 
+### Slice 8 — Layout & panes (collapsible, resizable, header declutter)
+
+**Why:** The header toolbar collides at normal widths (the Comments toggle that closes the
+comments pane gets clipped, so the user can't find it). Panes can't be collapsed or resized;
+the reader width is fixed. Owner asks (2026-05-22): close/collapse panes, collapse-all,
+resize the main reader, declutter the header. Also fold in the startup ghost-session sweep.
+
+- **Resizable layout:** the three-column shell (left sidebar | main reader | right panes)
+  gets **draggable dividers**. The main reader resizes as side columns are dragged. Enforce
+  sensible min/max widths. Persist column widths in `localStorage` (frontend-only; no backend
+  schema) keyed per layout so they survive restart.
+- **Collapsible panes:** left sidebar, comments pane, and the Agent Center each collapse to a
+  thin rail (or fully hidden) via a control on the pane, and restore. A **collapse-all**
+  affordance hides both side regions to maximize the reader. Collapse state persisted in
+  `localStorage`. Comments pane is NOT auto-pinned open when empty.
+- **Comments pane close:** add an explicit **×** in the COMMENTS header that closes the pane
+  (sets `commentsOpen=false`), in addition to the existing toolbar toggle (App.tsx ~2556).
+  Stop the force-open on artifact open if it fights collapse state — opening a file should
+  not re-expand a pane the user collapsed (keep auto-open only when a comment is added).
+- **Header declutter (toolbar ~2553-2561):** keep **Send** as the single primary button;
+  render **Edit / Comments / Save** as compact/icon controls (icon + tooltip, or a tighter
+  group) so they stop wrapping/clipping; move **"Add comment about this file"** out of the
+  toolbar into the COMMENTS pane header as a `+`. Preserve all existing behaviors and the
+  command-palette entries; this is presentation, not new actions.
+- **Send dialog default agent (App.tsx openSendPopover ~1434, dialog ~3790):** the AGENT
+  dropdown must default to the agent that sent/owns the current artifact — prefer
+  `attachedAgentOptions[0]?.id`, then the first live MCP session, then `defaultAgentId`
+  (mirror `sendButtonLabel` at ~524). Re-default reactively if `sendRouteSessions` changes
+  while the dialog is open and the selection is no longer valid. Never show "default·unknown"
+  as the pre-selected default.
+- **Startup ghost-session sweep (backend):** on app launch / `initialize_state_db`, mark all
+  `agent_sessions` with `disconnected_at IS NULL` as disconnected — no MCP connection
+  survives an app restart. Removes the stale "live" ghosts seen after a force-quit.
+- **Accept:** reader resizes via dividers and widths persist across restart; each side pane
+  collapses/restores and a collapse-all maximizes the reader; the COMMENTS × closes the pane;
+  the header no longer wraps/clips at the default 1280px window; the Send dialog pre-selects
+  the live/attached agent; a relaunch shows zero ghost sessions. Gates: `cargo test`, `tsc`,
+  `vite build`, A22=0, A15=0.
+
 ## Open questions (capture, don't build)
 
 - One-click **"Track this"** promotion for ephemeral files (Recents → Inbox/Drafts)?
