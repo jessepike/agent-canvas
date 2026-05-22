@@ -187,6 +187,49 @@ these extensions in the installed `.app` (`plutil -p …/Info.plist`). Known Tau
 around `LSHandlerRank` on macOS — if the generated mapping is wrong/missing rank, fall back
 to an `Info.plist` partial merge.
 
+### Slice 7 — Persistent agent messages + Agent Center (UX wave)
+
+**Why:** The agent→user direction had working transport but no real UX. `notify_user`
+was a transient 4s toast — no persistence, no acknowledgement, not actionable. The
+right-hand agent pane was a passive roster with no job. Owner decisions (2026-05-22):
+messages are **sticky until acknowledged, no history archive**; the right pane becomes an
+**Agent Center** = presence (top) + unacknowledged-message queue (bottom).
+
+**Reconciled model:** an agent message persists until the user **acknowledges** it, then it
+is deleted (no archive). Unacknowledged messages survive an app restart (persisted in
+`state.db`). The on-arrival toast and the Agent Center "Messages" section render the *same*
+unacknowledged set; acknowledging removes it from both.
+
+- **Backend — `agent_messages` table** (sessions.rs migration, mirror `user_messages`):
+  `id TEXT PK, session_id TEXT NOT NULL, severity TEXT NOT NULL, message TEXT NOT NULL,
+  action_artifact_path TEXT, action_label TEXT, created_at INTEGER NOT NULL,
+  acknowledged_at INTEGER` + index on `acknowledged_at`. Register in
+  `initialize_state_db`.
+- **Backend — `notify_user` inserts a row** (in addition to emitting), so the message is
+  durable. Commands: `list_agent_messages()` → unacknowledged only (ordered newest-first);
+  `acknowledge_agent_message(id)` sets `acknowledged_at`. Emit
+  `agentcanvas://messages-changed` **post-lock** (lock discipline — insert/ack under the db
+  guard, emit after it drops). Prefer delete-on-ack to keep the table small (still "no
+  history" to the user).
+- **Frontend — sticky notification:** replace the auto-dismiss toast with a sticky
+  banner/stack that stays until **Acknowledge**. On mount, hydrate from
+  `list_agent_messages()`; refresh on `messages-changed` and on the live `notify-user`
+  event. Each item: severity styling, source agent (persona/agent), message, **Open
+  artifact** (if `action_artifact_path`, routes through `open_path`), **Acknowledge** →
+  `acknowledge_agent_message(id)`.
+- **Frontend — Agent Center (right pane):** two sections. **Presence**: existing live-agent
+  roster + attached artifact + Disconnect (already cleaned via sessions-changed). **Messages**:
+  the same unacknowledged queue as the sticky stack, each with Open-artifact + Acknowledge.
+- **Send-button default fix:** the default Send target must name a real live agent
+  (persona/agent label), default to the most-recently-active live MCP session, and fall
+  back to a plain "Send" (clipboard) label when no live agent exists — never
+  "default·unknown". Drop the junk fallback persona/session from the visible label.
+- **Accept:** an agent `notify_user` produces a message that stays until acknowledged,
+  appears in both the sticky stack and the Agent Center Messages list, opens its artifact on
+  click, and disappears from both on Acknowledge; survives an app restart while
+  unacknowledged; the Send button never shows "default·unknown". Gates: `cargo test`,
+  `tsc`, `vite build`, A22=0, A15=0.
+
 ## Open questions (capture, don't build)
 
 - One-click **"Track this"** promotion for ephemeral files (Recents → Inbox/Drafts)?
