@@ -525,6 +525,7 @@ mod tests {
             canvas_root: temp.path().join("AgentCanvas"),
             user_symlink: temp.path().join("AgentCanvas"),
             inbox_dir: temp.path().join("AgentCanvas/Inbox"),
+            myfiles_dir: temp.path().join("AgentCanvas/MyFiles"),
             projects_dir: temp.path().join("AgentCanvas/Projects"),
             archive_dir: temp.path().join("AgentCanvas/Archive"),
             state_db: temp.path().join("state.db"),

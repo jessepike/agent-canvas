@@ -132,6 +132,7 @@ export const BootstrapInfo = z
   .object({
     canvas_root: z.string(),
     inbox_dir: z.string(),
+    myfiles_dir: z.string(),
     projects_dir: z.string(),
     archive_dir: z.string(),
     state_db: z.string(),
@@ -176,6 +177,33 @@ export async function listInbox(): Promise<FileMetadata[]> {
     return z.array(FileMetadata).parse(result);
   } catch (caught) {
     throw ipcError("list_inbox", caught);
+  }
+}
+
+export async function listDrafts(): Promise<FileMetadata[]> {
+  try {
+    const result = await invoke<unknown>("list_drafts");
+    return z.array(FileMetadata).parse(result);
+  } catch (caught) {
+    throw ipcError("list_drafts", caught);
+  }
+}
+
+export async function inboxUnreadCount(): Promise<number> {
+  try {
+    const result = await invoke<unknown>("inbox_unread_count");
+    return z.number().parse(result);
+  } catch (caught) {
+    throw ipcError("inbox_unread_count", caught);
+  }
+}
+
+export async function createMyFile(name: string): Promise<string> {
+  try {
+    const result = await invoke<unknown>("create_my_file", { name });
+    return z.string().parse(result);
+  } catch (caught) {
+    throw ipcError("create_my_file", caught);
   }
 }
 

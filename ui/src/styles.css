@@ -69,6 +69,8 @@
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-modal: 0 30px 80px rgba(20, 18, 12, 0.32), 0 12px 30px rgba(20, 18, 12, 0.18);
   --shadow-context-menu: 0 16px 36px rgba(20, 18, 12, 0.18), 0 4px 12px rgba(20, 18, 12, 0.12);
+  --unread-badge-bg: var(--accent);
+  --unread-badge-text: #ffffff;
 }
 
 * {
@@ -192,6 +194,77 @@ button:hover {
 
 .projects-header {
   margin-top: 10px;
+}
+
+/* Unread badge on Inbox section header */
+.unread-badge {
+  border-radius: 8px;
+  padding: 1px 6px;
+  background: var(--unread-badge-bg);
+  color: var(--unread-badge-text);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* Drafts section: header row with label button + new-file (+) button */
+.drafts-section-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 8px 6px;
+  margin-top: 2px;
+}
+
+.section-header-label-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 6px;
+  border: 0.5px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.section-header-label-btn:hover {
+  background: var(--hover-bg);
+}
+
+.section-header-label-btn.selected {
+  border-color: var(--border);
+  background: var(--selected-bg);
+  box-shadow: var(--shadow-hairline);
+}
+
+.section-header-label-btn.selected .section-label {
+  color: var(--accent-deep);
+}
+
+.new-file-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: 0.5px solid var(--border);
+  border-radius: 6px;
+  background: var(--control-fill);
+  box-shadow: var(--shadow-toolbar-btn);
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.new-file-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text);
 }
 
 .pin-star {

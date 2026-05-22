@@ -10,6 +10,7 @@ import {
   addAgentSession,
   archiveFile,
   copyTextToClipboard,
+  createMyFile,
   deleteFileFromDisk,
   deleteProjectIfEmpty,
   exportFileTo,
@@ -17,11 +18,13 @@ import {
   getDefaultActionVerb,
   getBootstrapInfo,
   getProjectDefaultAgent,
+  inboxUnreadCount,
   installMcpForClaudeCode,
   installMcpForCodex,
   installMcpForCursor,
   listAgentSessions,
   listArchive,
+  listDrafts,
   listInbox,
   listPinned,
   listProjectFiles,
@@ -167,7 +170,7 @@ export default function App() {
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
   const [projectCounts, setProjectCounts] = useState<Map<string, number>>(new Map());
-  const [mode, setMode] = useState<"inbox" | "project" | "archive" | "pinned">("inbox");
+  const [mode, setMode] = useState<"inbox" | "drafts" | "project" | "archive" | "pinned">("inbox");
   const [currentProject, setCurrentProject] = useState<string | null>(null);
   const [projectFiles, setProjectFiles] = useState<FileMetadata[]>([]);
   const [archiveFiles, setArchiveFiles] = useState<FileMetadata[]>([]);
@@ -249,6 +252,9 @@ export default function App() {
   const [isOpening, setIsOpening] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [arrivedPaths, setArrivedPaths] = useState<Set<string>>(new Set());
+  const [draftFiles, setDraftFiles] = useState<FileMetadata[]>([]);
+  const [inboxUnread, setInboxUnread] = useState(0);
+  const [newFileDialogOpen, setNewFileDialogOpen] = useState(false);
   const [agentMenu, setAgentMenu] = useState<AgentMenu>(null);
   const [fileMenu, setFileMenu] = useState<FileMenu>(null);
   const [projectMenu, setProjectMenu] = useState<ProjectMenu>(null);
@@ -279,6 +285,7 @@ export default function App() {
       const [
         nextBootstrap,
         nextFiles,
+        nextDrafts,
         nextProjects,
         nextProjectCounts,
         nextPersonas,
@@ -286,10 +293,12 @@ export default function App() {
         nextDefaultVerb,
         nextActionTemplates,
         nextPinned,
-        nextArchive
+        nextArchive,
+        nextUnread
       ] = await Promise.all([
         getBootstrapInfo(),
         listInbox(),
+        listDrafts(),
         listProjects(),
         listProjectCounts(),
         listPersonas(),
@@ -297,10 +306,12 @@ export default function App() {
         getDefaultActionVerb(),
         getActionTemplates(),
         listPinned(),
-        listArchive()
+        listArchive(),
+        inboxUnreadCount()
       ]);
       setBootstrap(nextBootstrap);
       setFiles(nextFiles);
+      setDraftFiles(nextDrafts);
       setProjects(nextProjects);
       setProjectCounts(nextProjectCounts);
       setPersonas(nextPersonas);
@@ -309,6 +320,7 @@ export default function App() {
       setActionTemplatesState(nextActionTemplates);
       setPinnedFiles(nextPinned);
       setArchiveFiles(nextArchive);
+      setInboxUnread(nextUnread);
       setSelectedPath((current) => current ?? nextFiles[0]?.path ?? null);
       setSelectedPaths((current) => current.size > 0 ? current : new Set(nextFiles[0]?.path ? [nextFiles[0].path] : []));
     } catch (caught) {
@@ -367,13 +379,13 @@ export default function App() {
   }, []);
 
   const selectedFile = useMemo(
-    () => [...files, ...projectFiles, ...archiveFiles, ...pinnedFiles].find((file) => file.path === selectedPath) ?? null,
-    [archiveFiles, files, pinnedFiles, projectFiles, selectedPath]
+    () => [...files, ...draftFiles, ...projectFiles, ...archiveFiles, ...pinnedFiles].find((file) => file.path === selectedPath) ?? null,
+    [archiveFiles, draftFiles, files, pinnedFiles, projectFiles, selectedPath]
   );
   const selectedFileMetadatas = useMemo(() => {
-    const byPath = new Map([...files, ...projectFiles, ...archiveFiles, ...pinnedFiles].map((file) => [file.path, file]));
+    const byPath = new Map([...files, ...draftFiles, ...projectFiles, ...archiveFiles, ...pinnedFiles].map((file) => [file.path, file]));
     return [...selectedPaths].map((path) => byPath.get(path)).filter((file): file is FileMetadata => Boolean(file));
-  }, [archiveFiles, files, pinnedFiles, projectFiles, selectedPaths]);
+  }, [archiveFiles, draftFiles, files, pinnedFiles, projectFiles, selectedPaths]);
   const multiSelectActive = selectedPaths.size > 1;
   useEffect(() => {
     let disposed = false;
@@ -393,6 +405,10 @@ export default function App() {
     };
   }, [artifact?.path, multiSelectActive]);
   const filteredFiles = useMemo(() => filterFilesByQuery(files, mode === "inbox" ? searchQuery : ""), [files, mode, searchQuery]);
+  const filteredDraftFiles = useMemo(
+    () => filterFilesByQuery(draftFiles, mode === "drafts" ? searchQuery : ""),
+    [draftFiles, mode, searchQuery]
+  );
   const filteredProjectFiles = useMemo(
     () => filterFilesByQuery(projectFiles, mode === "project" ? searchQuery : ""),
     [mode, projectFiles, searchQuery]
@@ -415,8 +431,11 @@ export default function App() {
     if (mode === "project") {
       return filteredProjectFiles;
     }
+    if (mode === "drafts") {
+      return filteredDraftFiles;
+    }
     return filteredFiles;
-  }, [filteredArchiveFiles, filteredFiles, filteredPinnedFiles, filteredProjectFiles, mode]);
+  }, [filteredArchiveFiles, filteredDraftFiles, filteredFiles, filteredPinnedFiles, filteredProjectFiles, mode]);
   const attachedAgentOptions = useMemo(
     () => attachedSessions.map(attachmentToAgentSession),
     [attachedSessions]
@@ -499,6 +518,8 @@ export default function App() {
         await loadCommentsForPath(file.path, setComments);
         if (file.review_state === "unread") {
           markReviewStateLocally(file.path, "reviewed", setFiles, setProjectFiles, setArchiveFiles, setPinnedFiles);
+          setInboxUnread((n) => Math.max(0, n - 1));
+          void setReviewState(file.path, "reviewed").catch(() => { /* best-effort */ });
         }
         return;
       }
@@ -523,6 +544,8 @@ export default function App() {
         await loadCommentsForPath(file.path, setComments);
         if (file.review_state === "unread") {
           markReviewStateLocally(file.path, "reviewed", setFiles, setProjectFiles, setArchiveFiles, setPinnedFiles);
+          setInboxUnread((n) => Math.max(0, n - 1));
+          void setReviewState(file.path, "reviewed").catch(() => { /* best-effort */ });
         }
         return;
       }
@@ -554,6 +577,8 @@ export default function App() {
       await loadCommentsForPath(opened.path, setComments);
       if (file.review_state === "unread") {
         markReviewStateLocally(file.path, "reviewed", setFiles, setProjectFiles, setArchiveFiles, setPinnedFiles);
+        setInboxUnread((n) => Math.max(0, n - 1));
+        void setReviewState(file.path, "reviewed").catch(() => { /* best-effort */ });
       }
     } catch (caught) {
       // Even with extension check, openDocument can fail. Clear stale artifact so the
@@ -637,6 +662,45 @@ export default function App() {
     setCurrentProject(null);
     setSearchQuery("");
   }, []);
+
+  const openDrafts = useCallback(async () => {
+    try {
+      const nextFiles = await listDrafts();
+      setMode("drafts");
+      setCurrentProject(null);
+      setSearchQuery("");
+      setDraftFiles(nextFiles);
+      if (nextFiles[0]) {
+        await openArtifact(nextFiles[0]);
+      } else {
+        setArtifact(null);
+        setSelectedPath(null);
+        setSelectedPaths(new Set());
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [openArtifact]);
+
+  const createNewFile = useCallback(async (name: string) => {
+    try {
+      const path = await createMyFile(name);
+      // Refresh drafts list so the file appears.
+      const nextDrafts = await listDrafts();
+      setDraftFiles(nextDrafts);
+      setMode("drafts");
+      setCurrentProject(null);
+      // Find and open the new file in edit mode.
+      const newFile = nextDrafts.find((f) => f.path === path);
+      if (newFile) {
+        await openArtifact(newFile);
+        setEditMode(true);
+      }
+      setNewFileDialogOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [openArtifact]);
 
   const selectFileFromList = useCallback(
     async (file: FileMetadata, list: FileMetadata[], event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -753,11 +817,13 @@ export default function App() {
           return next;
         });
       }, 2500);
-      const [nextFiles, nextPinned, nextArchive, nextProjects] = await Promise.all([
+      const [nextFiles, nextDrafts, nextPinned, nextArchive, nextProjects, nextUnread] = await Promise.all([
         listInbox(),
+        listDrafts(),
         listPinned(),
         listArchive(),
-        listProjects()
+        listProjects(),
+        inboxUnreadCount()
       ]);
       const nextProjectEntries = await Promise.all(
         nextProjects.map(async (project) => [project, await listProjectFiles(project)] as const)
@@ -766,17 +832,23 @@ export default function App() {
         return;
       }
       setFiles(nextFiles);
+      setDraftFiles(nextDrafts);
       setPinnedFiles(nextPinned);
       setArchiveFiles(nextArchive);
+      setInboxUnread(nextUnread);
       const projectEntry = nextProjectEntries.find(([, projectFiles]) =>
         projectFiles.some((candidate) => candidate.path === path)
       );
       const file =
         nextFiles.find((candidate) => candidate.path === path) ??
+        nextDrafts.find((candidate) => candidate.path === path) ??
         projectEntry?.[1].find((candidate) => candidate.path === path) ??
         nextPinned.find((candidate) => candidate.path === path) ??
         nextArchive.find((candidate) => candidate.path === path);
-      if (projectEntry) {
+      if (nextDrafts.some((candidate) => candidate.path === path)) {
+        setMode("drafts");
+        setCurrentProject(null);
+      } else if (projectEntry) {
         setMode("project");
         setCurrentProject(projectEntry[0]);
         setProjectFiles(projectEntry[1]);
@@ -1727,6 +1799,7 @@ export default function App() {
 
   const paletteItems = useMemo(() => {
     const actions = [
+      { section: "ACTIONS", label: "New File (⌘N)", run: () => setNewFileDialogOpen(true) },
       { section: "ACTIONS", label: sendButtonLabel, run: openSendPopover },
       { section: "ACTIONS", label: "Toggle Pin", run: toggleCurrentPin },
       { section: "ACTIONS", label: "Archive", run: archiveCurrent },
@@ -1761,6 +1834,11 @@ export default function App() {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        setNewFileDialogOpen(true);
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         searchRef.current?.focus();
@@ -1879,6 +1957,9 @@ export default function App() {
             >
               <span className="section-label">Inbox</span>
               <span className="count">{files.length}</span>
+              {inboxUnread > 0 ? (
+                <span className="unread-badge" title={`${inboxUnread} unread`}>{inboxUnread}</span>
+              ) : null}
             </button>
             <div
               className={`file-list ${dropTarget === "inbox" ? "drop-target" : ""}`}
@@ -1957,6 +2038,81 @@ export default function App() {
                 ))
               )}
             </div>
+            <div className="section-header drafts-section-header">
+              <button
+                className={`section-header-label-btn ${mode === "drafts" ? "selected" : ""}`}
+                type="button"
+                onClick={() => void openDrafts()}
+              >
+                <span className="section-label">Drafts</span>
+                <span className="count">{draftFiles.length}</span>
+              </button>
+              <button
+                className="new-file-btn"
+                type="button"
+                title="New file (⌘N)"
+                aria-label="New file"
+                onClick={() => setNewFileDialogOpen(true)}
+              >
+                +
+              </button>
+            </div>
+            {mode === "drafts" ? (
+              <div className="file-list">
+                {filteredDraftFiles.length === 0 ? (
+                  <div className="empty-list">
+                    {searchQuery ? (
+                      "No matching drafts"
+                    ) : (
+                      <>
+                        <strong>No drafts yet</strong>
+                        <span>Press ⌘N to create a file</span>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  filteredDraftFiles.map((file) => (
+                    <button
+                      className={`file-row ${file.path === selectedPath ? "selected" : ""} ${
+                        file.pinned ? "pinned" : ""
+                      } ${selectedPaths.has(file.path) && selectedPaths.size > 1 ? "multi-selected" : ""}`}
+                      key={file.path}
+                      type="button"
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        setFileMenu({ x: event.clientX, y: event.clientY, file });
+                      }}
+                      onClick={(event) => {
+                        setMode("drafts");
+                        setCurrentProject(null);
+                        void selectFileFromList(file, filteredDraftFiles, event);
+                      }}
+                    >
+                      <span className="arrival-dot review-dot review-reviewed" title="Draft" />
+                      <span className="file-name">
+                        {file.pinned ? <span className="pin-star" title="Pinned">★ </span> : null}
+                        {file.name}
+                      </span>
+                      <span className="file-time" title={formatTimeTooltip(file.mtime)}>{formatTime(file.mtime)}</span>
+                      <span
+                        className="file-row-trash"
+                        role="button"
+                        tabIndex={-1}
+                        aria-label={`Remove ${file.name} from AgentCanvas`}
+                        title={`Remove ${file.name} from AgentCanvas`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void removeFromCanvas(file);
+                        }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                      >
+                        ×
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : null}
             <button
               className={`section-header section-button ${mode === "pinned" ? "selected" : ""}`}
               type="button"
@@ -2089,12 +2245,15 @@ export default function App() {
                 <button type="button" onClick={refresh} disabled={isLoading}>
                   {isLoading ? "Scanning" : "Rescan"}
                 </button>
+                <button type="button" onClick={() => setNewFileDialogOpen(true)} title="New file (⌘N)" aria-label="New file">
+                  New
+                </button>
                 <button type="button" onClick={() => void openFileDialog()} aria-label="Open file">
                   +
                 </button>
               </div>
               <div className="breadcrumb">
-                {mode === "archive" ? "Archive" : mode === "pinned" ? "★ Pinned" : mode === "project" ? (currentProject ?? "Project") : "Inbox"}
+                {mode === "archive" ? "Archive" : mode === "pinned" ? "★ Pinned" : mode === "project" ? (currentProject ?? "Project") : mode === "drafts" ? "Drafts" : "Inbox"}
                 <span>/</span> <strong>{selectedFile?.name ?? "Select a file"}</strong>
               </div>
               <div className="toolbar-actions">
@@ -2713,6 +2872,12 @@ export default function App() {
             onCancel={() => setActionTemplatesOpen(false)}
             onSave={(templates) => void saveActionTemplates(templates)}
             onReset={() => void resetActionTemplatesToDefaults()}
+          />
+        ) : null}
+        {newFileDialogOpen ? (
+          <NewFileDialog
+            onCancel={() => setNewFileDialogOpen(false)}
+            onCreate={(name) => void createNewFile(name)}
           />
         ) : null}
     </main>
@@ -3804,4 +3969,64 @@ function currentTime(): string {
     .getSeconds()
     .toString()
     .padStart(2, "0")}`;
+}
+
+type NewFileDialogProps = {
+  onCancel: () => void;
+  onCreate: (name: string) => void;
+};
+
+function NewFileDialog({ onCancel, onCreate }: NewFileDialogProps) {
+  const [value, setValue] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useFocusTrap(dialogRef, onCancel);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const submit = () => {
+    const trimmed = value.trim();
+    if (trimmed) {
+      onCreate(trimmed);
+    }
+  };
+
+  return (
+    <div className="palette-backdrop" onMouseDown={onCancel}>
+      <div
+        ref={dialogRef}
+        className="rename-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="New file"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>New file</header>
+        <input
+          ref={inputRef}
+          value={value}
+          placeholder="File name"
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              submit();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              onCancel();
+            }
+          }}
+        />
+        <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--text-secondary)" }}>
+          Saved as <code>.md</code> in Drafts
+        </p>
+        <footer>
+          <button type="button" onClick={onCancel}>Cancel</button>
+          <button type="button" className="primary" disabled={!value.trim()} onClick={submit}>Create</button>
+        </footer>
+      </div>
+    </div>
+  );
 }

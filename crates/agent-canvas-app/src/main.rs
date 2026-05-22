@@ -53,6 +53,7 @@ struct AgentCanvasPaths {
     canvas_root: PathBuf,
     user_symlink: PathBuf,
     inbox_dir: PathBuf,
+    myfiles_dir: PathBuf,
     projects_dir: PathBuf,
     archive_dir: PathBuf,
     state_db: PathBuf,
@@ -63,6 +64,7 @@ struct AgentCanvasPaths {
 struct BootstrapInfo {
     canvas_root: String,
     inbox_dir: String,
+    myfiles_dir: String,
     projects_dir: String,
     archive_dir: String,
     state_db: String,
@@ -230,6 +232,138 @@ fn list_pinned(state: tauri::State<AppState>) -> Result<Vec<FileMetadata>, Strin
         "pinned = 1 AND archived = 0",
         [],
     )
+}
+
+#[tauri::command]
+fn list_drafts(state: tauri::State<AppState>) -> Result<Vec<FileMetadata>, String> {
+    let paths = state.paths()?;
+    let myfiles_prefix = paths.myfiles_dir.to_string_lossy().into_owned();
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    // Find all tracked, non-archived files that live under MyFiles/.
+    let mut stmt = conn
+        .prepare(
+            "SELECT path FROM files WHERE archived = 0 AND path LIKE ?1",
+        )
+        .map_err(|error| error.to_string())?;
+    let like_pattern = format!("{}/%", myfiles_prefix);
+    let db_paths = stmt
+        .query_map([like_pattern], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    drop(stmt);
+
+    let mut files = Vec::new();
+    for path_str in db_paths {
+        let path = PathBuf::from(&path_str);
+        if !path.exists() || !is_supported_artifact(&path) {
+            continue;
+        }
+        let mut file = metadata_for_file(&path, &paths.canvas_root)?;
+        hydrate_file_state(&conn, &mut file)?;
+        files.push(file);
+    }
+    files.sort_by(|left, right| {
+        right
+            .pinned
+            .cmp(&left.pinned)
+            .then_with(|| right.mtime.cmp(&left.mtime))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(files)
+}
+
+#[tauri::command]
+fn inbox_unread_count(state: tauri::State<AppState>) -> Result<u32, String> {
+    let _ = state.paths()?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE in_inbox = 1 AND archived = 0 AND review_state = 'unread'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(count as u32)
+}
+
+/// Sanitize a user-supplied draft filename: strip path separators, force `.md` extension,
+/// resolve collisions by appending ` 2`, ` 3`, … (matching rename-dialog convention).
+fn sanitize_draft_name(raw: &str, myfiles_dir: &Path) -> Result<PathBuf, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("file name cannot be empty".to_owned());
+    }
+    // Strip any path traversal components.
+    let bare: String = trimmed
+        .chars()
+        .filter(|&c| c != '/' && c != '\\' && c != '\0')
+        .collect();
+    if bare.is_empty() || bare == "." || bare == ".." {
+        return Err("invalid file name".to_owned());
+    }
+    // Strip existing extension and always force `.md`.
+    let stem = Path::new(&bare)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(&bare)
+        .to_owned();
+    if stem.is_empty() {
+        return Err("invalid file name".to_owned());
+    }
+
+    // Find a non-colliding path: `stem.md`, then `stem 2.md`, `stem 3.md`, …
+    let candidate = myfiles_dir.join(format!("{stem}.md"));
+    if !candidate.exists() {
+        return Ok(candidate);
+    }
+    for n in 2_u32..=999 {
+        let candidate = myfiles_dir.join(format!("{stem} {n}.md"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err("too many files with that name".to_owned())
+}
+
+#[tauri::command]
+fn create_my_file(state: tauri::State<AppState>, name: String) -> Result<String, String> {
+    let paths = state.paths()?;
+    let target = sanitize_draft_name(&name, &paths.myfiles_dir)?;
+
+    // Atomic-write an empty file (same guard: fail if it somehow appeared between check and write).
+    let mut file_handle = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .map_err(|error| error.to_string())?;
+    file_handle.flush().map_err(|error| error.to_string())?;
+    drop(file_handle);
+
+    let path_str = target.to_string_lossy().into_owned();
+    let file = metadata_for_file(&target, &paths.canvas_root)?;
+    {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        upsert_file_state(&conn, &file)?;
+        // Drafts: NOT in_inbox, NOT archived, review_state stays default 'unread'
+        // but we immediately mark it 'reviewed' since the user created it intentionally.
+        conn.execute(
+            "UPDATE files SET in_inbox = 0, archived = 0, review_state = 'reviewed' WHERE path = ?1",
+            params![path_str],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    resync_watcher_from_db(&state)?;
+    Ok(path_str)
 }
 
 #[tauri::command]
@@ -1402,6 +1536,7 @@ impl AgentCanvasPaths {
 
         Ok(Self {
             inbox_dir: canvas_root.join("Inbox"),
+            myfiles_dir: canvas_root.join("MyFiles"),
             projects_dir: canvas_root.join("Projects"),
             archive_dir: canvas_root.join("Archive"),
             canvas_root,
@@ -1415,7 +1550,7 @@ impl AgentCanvasPaths {
         fs::create_dir_all(self.inbox_dir.join("captures")).map_err(|error| error.to_string())?;
         fs::create_dir_all(self.projects_dir.join("Default")).map_err(|error| error.to_string())?;
         fs::create_dir_all(&self.archive_dir).map_err(|error| error.to_string())?;
-        fs::create_dir_all(self.canvas_root.join("MyFiles")).map_err(|error| error.to_string())?;
+        fs::create_dir_all(&self.myfiles_dir).map_err(|error| error.to_string())?;
 
         if let Some(parent) = self.state_db.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -1427,6 +1562,7 @@ impl AgentCanvasPaths {
         BootstrapInfo {
             canvas_root: self.canvas_root.to_string_lossy().into_owned(),
             inbox_dir: self.inbox_dir.to_string_lossy().into_owned(),
+            myfiles_dir: self.myfiles_dir.to_string_lossy().into_owned(),
             projects_dir: self.projects_dir.to_string_lossy().into_owned(),
             archive_dir: self.archive_dir.to_string_lossy().into_owned(),
             state_db: self.state_db.to_string_lossy().into_owned(),
@@ -2461,6 +2597,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             bootstrap_info,
             list_inbox,
+            list_drafts,
+            inbox_unread_count,
+            create_my_file,
             list_projects,
             list_project_counts,
             rename_project,
@@ -2895,5 +3034,147 @@ mod tests {
             inbox_str.ends_with("Documents/AgentCanvas/Inbox"),
             "inbox_dir should end with Documents/AgentCanvas/Inbox, got: {inbox_str}"
         );
+        let myfiles_str = paths.myfiles_dir.to_string_lossy();
+        assert!(
+            myfiles_str.ends_with("Documents/AgentCanvas/MyFiles"),
+            "myfiles_dir should end with Documents/AgentCanvas/MyFiles, got: {myfiles_str}"
+        );
+    }
+
+    // -- create_my_file / sanitize_draft_name tests --
+
+    #[test]
+    fn sanitize_draft_name_basic_creates_md() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let myfiles = temp.path().join("MyFiles");
+        fs::create_dir_all(&myfiles).expect("myfiles dir");
+
+        let path = sanitize_draft_name("my note", &myfiles).expect("sanitize");
+        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "my note.md");
+        assert!(path.starts_with(&myfiles));
+    }
+
+    #[test]
+    fn sanitize_draft_name_forces_md_extension() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let myfiles = temp.path().join("MyFiles");
+        fs::create_dir_all(&myfiles).expect("myfiles dir");
+
+        // Caller passes "note.txt" — must come out as "note.md"
+        let path = sanitize_draft_name("note.txt", &myfiles).expect("sanitize");
+        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "note.md");
+    }
+
+    #[test]
+    fn sanitize_draft_name_collision_suffix() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let myfiles = temp.path().join("MyFiles");
+        fs::create_dir_all(&myfiles).expect("myfiles dir");
+
+        // Pre-create colliding files.
+        fs::write(myfiles.join("idea.md"), "").expect("first");
+        fs::write(myfiles.join("idea 2.md"), "").expect("second");
+
+        let path = sanitize_draft_name("idea", &myfiles).expect("sanitize");
+        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "idea 3.md");
+    }
+
+    #[test]
+    fn sanitize_draft_name_empty_is_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let myfiles = temp.path().join("MyFiles");
+        fs::create_dir_all(&myfiles).expect("myfiles dir");
+
+        assert!(sanitize_draft_name("", &myfiles).is_err());
+        assert!(sanitize_draft_name("   ", &myfiles).is_err());
+    }
+
+    #[test]
+    fn create_my_file_not_in_inbox() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let canvas_root = temp.path().join("AgentCanvas");
+        let myfiles = canvas_root.join("MyFiles");
+        fs::create_dir_all(&myfiles).expect("myfiles dir");
+
+        let conn = open_in_memory_state_db().expect("db");
+
+        let target = sanitize_draft_name("draft", &myfiles).expect("sanitize");
+        let mut file_handle = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .expect("create file");
+        file_handle.flush().expect("flush");
+        drop(file_handle);
+
+        let path_str = target.to_string_lossy().into_owned();
+        let file = metadata_for_file(&target, &canvas_root).expect("metadata");
+        upsert_file_state(&conn, &file).expect("upsert");
+        conn.execute(
+            "UPDATE files SET in_inbox = 0, archived = 0, review_state = 'reviewed' WHERE path = ?1",
+            params![path_str],
+        )
+        .expect("update");
+
+        let in_inbox: i64 = conn
+            .query_row(
+                "SELECT in_inbox FROM files WHERE path = ?1",
+                params![path_str],
+                |row| row.get(0),
+            )
+            .expect("row");
+        let review_state: String = conn
+            .query_row(
+                "SELECT review_state FROM files WHERE path = ?1",
+                params![path_str],
+                |row| row.get(0),
+            )
+            .expect("row");
+
+        assert_eq!(in_inbox, 0, "draft must NOT be in_inbox");
+        assert_eq!(review_state, "reviewed", "draft must NOT be unread");
+        assert!(target.exists(), "file must exist on disk");
+    }
+
+    #[test]
+    fn inbox_unread_count_counts_only_inbox_unread() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let canvas_root = temp.path().join("AgentCanvas");
+        let inbox = canvas_root.join("Inbox");
+        let myfiles = canvas_root.join("MyFiles");
+        fs::create_dir_all(&inbox).expect("inbox");
+        fs::create_dir_all(&myfiles).expect("myfiles");
+
+        let inbox_unread = inbox.join("a.md");
+        let inbox_read = inbox.join("b.md");
+        let draft_file = myfiles.join("c.md");
+        fs::write(&inbox_unread, "").expect("a");
+        fs::write(&inbox_read, "").expect("b");
+        fs::write(&draft_file, "").expect("c");
+
+        let conn = open_in_memory_state_db().expect("db");
+
+        for (path, in_inbox, review_state) in [
+            (&inbox_unread, 1_i64, "unread"),
+            (&inbox_read, 1, "reviewed"),
+            (&draft_file, 0, "reviewed"),
+        ] {
+            let f = metadata_for_file(path, &canvas_root).expect("meta");
+            upsert_file_state(&conn, &f).expect("upsert");
+            conn.execute(
+                "UPDATE files SET in_inbox = ?1, review_state = ?2 WHERE path = ?3",
+                params![in_inbox, review_state, f.path],
+            )
+            .expect("update");
+        }
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE in_inbox = 1 AND archived = 0 AND review_state = 'unread'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(count, 1, "only the unread inbox file should be counted");
     }
 }
