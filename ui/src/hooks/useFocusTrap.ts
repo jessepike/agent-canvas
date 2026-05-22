@@ -1,4 +1,4 @@
-import { type RefObject, useEffect } from "react";
+import { type RefObject, useEffect, useRef } from "react";
 
 const FOCUSABLE =
   'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
@@ -7,8 +7,17 @@ export function useFocusTrap<T extends HTMLElement>(
   ref: RefObject<T | null>,
   onEscape?: () => void
 ) {
+  // Keep the latest onEscape without making the effect depend on its identity.
+  // Dialogs pass inline closures, so depending on `onEscape` would re-run this
+  // effect on every render and call first.focus() again — stealing focus
+  // mid-typing (cursor jumps out). The effect should only re-run when the trap
+  // toggles on/off, so we gate on `enabled` and read the handler from a ref.
+  const onEscapeRef = useRef(onEscape);
+  onEscapeRef.current = onEscape;
+  const enabled = onEscape != null;
+
   useEffect(() => {
-    if (!onEscape) {
+    if (!enabled) {
       return;
     }
     const container = ref.current;
@@ -17,13 +26,12 @@ export function useFocusTrap<T extends HTMLElement>(
     }
     const activeContainer = container;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const first = firstFocusable(activeContainer);
-    first?.focus();
+    firstFocusable(activeContainer)?.focus();
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && onEscape) {
+      if (event.key === "Escape") {
         event.preventDefault();
-        onEscape();
+        onEscapeRef.current?.();
         return;
       }
       if (event.key !== "Tab") {
@@ -44,12 +52,14 @@ export function useFocusTrap<T extends HTMLElement>(
       }
     }
 
-    activeContainer.addEventListener("keydown", handleKeyDown);
+    container.addEventListener("keydown", handleKeyDown);
     return () => {
-      activeContainer.removeEventListener("keydown", handleKeyDown);
+      container.removeEventListener("keydown", handleKeyDown);
       previous?.focus();
     };
-  }, [onEscape, ref]);
+    // Intentionally excludes `onEscape` identity (read via ref) so typing in a
+    // dialog does not re-run this effect and re-grab focus.
+  }, [enabled, ref]);
 }
 
 function firstFocusable(container: HTMLElement): HTMLElement | null {
