@@ -9,6 +9,7 @@ import { useFocusTrap } from "./hooks/useFocusTrap";
 import {
   addAgentSession,
   archiveFile,
+  closeEphemeralPath,
   copyTextToClipboard,
   createMyFile,
   deleteFileFromDisk,
@@ -31,10 +32,12 @@ import {
   listPersonas,
   listProjectCounts,
   listProjects,
+  listRecents,
   loadSidecar,
   moveFileToArchive,
   moveFileToProject,
   openDocument,
+  openPath,
   parseDocument,
   readBinaryArtifact,
   renameFile,
@@ -53,6 +56,7 @@ import {
   setCurrentFocus,
   setProjectDefaultAgent,
   setReviewState,
+  takePendingOpens,
   targetFileExists,
   trackPathsInInbox,
   togglePin,
@@ -65,6 +69,7 @@ import {
   type ConflictStrategy,
   type FileMetadata,
   type PersonaRegistry,
+  type RecentEntry,
   type SessionAttachment
 } from "./ipc";
 import type { BaseSnapshot, Block, Comment, CommentAnchor } from "./types/blocks";
@@ -170,7 +175,7 @@ export default function App() {
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
   const [projectCounts, setProjectCounts] = useState<Map<string, number>>(new Map());
-  const [mode, setMode] = useState<"inbox" | "drafts" | "project" | "archive" | "pinned">("inbox");
+  const [mode, setMode] = useState<"inbox" | "drafts" | "project" | "archive" | "pinned" | "recents">("inbox");
   const [currentProject, setCurrentProject] = useState<string | null>(null);
   const [projectFiles, setProjectFiles] = useState<FileMetadata[]>([]);
   const [archiveFiles, setArchiveFiles] = useState<FileMetadata[]>([]);
@@ -254,6 +259,9 @@ export default function App() {
   const [arrivedPaths, setArrivedPaths] = useState<Set<string>>(new Set());
   const [draftFiles, setDraftFiles] = useState<FileMetadata[]>([]);
   const [inboxUnread, setInboxUnread] = useState(0);
+  const [recents, setRecents] = useState<RecentEntry[]>([]);
+  // Track the currently open ephemeral path so we can release its transient watch on close.
+  const [ephemeralPath, setEphemeralPath] = useState<string | null>(null);
   const [newFileDialogOpen, setNewFileDialogOpen] = useState(false);
   const [agentMenu, setAgentMenu] = useState<AgentMenu>(null);
   const [fileMenu, setFileMenu] = useState<FileMenu>(null);
@@ -294,7 +302,8 @@ export default function App() {
         nextActionTemplates,
         nextPinned,
         nextArchive,
-        nextUnread
+        nextUnread,
+        nextRecents
       ] = await Promise.all([
         getBootstrapInfo(),
         listInbox(),
@@ -307,7 +316,8 @@ export default function App() {
         getActionTemplates(),
         listPinned(),
         listArchive(),
-        inboxUnreadCount()
+        inboxUnreadCount(),
+        listRecents()
       ]);
       setBootstrap(nextBootstrap);
       setFiles(nextFiles);
@@ -321,6 +331,7 @@ export default function App() {
       setPinnedFiles(nextPinned);
       setArchiveFiles(nextArchive);
       setInboxUnread(nextUnread);
+      setRecents(nextRecents);
       setSelectedPath((current) => current ?? nextFiles[0]?.path ?? null);
       setSelectedPaths((current) => current.size > 0 ? current : new Set(nextFiles[0]?.path ? [nextFiles[0].path] : []));
     } catch (caught) {
@@ -333,6 +344,37 @@ export default function App() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Slice 4: drain the cold-launch pending-opens buffer on mount, then listen for
+  // warm open-external events (fired when the app is already running and the user
+  // opens a file from Finder/open -a).
+  useEffect(() => {
+    let disposed = false;
+
+    // Cold-launch path: drain anything buffered before the webview attached.
+    void takePendingOpens().then((paths) => {
+      if (disposed) return;
+      for (const filePath of paths) {
+        void openExternalPath(filePath);
+      }
+    }).catch(() => { /* best-effort */ });
+
+    // Warm path: listen for open-external events emitted by RunEvent::Opened.
+    const unlistenOpenExternal = listen<{ path: string }>(
+      "agentcanvas://open-external",
+      (event) => {
+        if (disposed) return;
+        void openExternalPath(event.payload.path);
+      }
+    );
+
+    return () => {
+      disposed = true;
+      void unlistenOpenExternal.then((dispose) => dispose());
+    };
+  // openExternalPath is stable across renders (useCallback); omitting from deps is intentional.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!selectedPath) {
@@ -433,6 +475,10 @@ export default function App() {
     }
     if (mode === "drafts") {
       return filteredDraftFiles;
+    }
+    if (mode === "recents") {
+      // Recents are displayed in the sidebar section directly, not as tracked FileMetadata.
+      return [];
     }
     return filteredFiles;
   }, [filteredArchiveFiles, filteredDraftFiles, filteredFiles, filteredPinnedFiles, filteredProjectFiles, mode]);
@@ -681,6 +727,86 @@ export default function App() {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
   }, [openArtifact]);
+
+  // Open a file by absolute path (Slice 4+5). Routes through open_path which returns
+  // tracked or ephemeral mode. For tracked files, locates the FileMetadata from existing
+  // lists and opens via openArtifact (which handles review state). For ephemeral files,
+  // synthesises a minimal FileMetadata (no review_state tracking) and opens directly.
+  const openExternalPath = useCallback(async (filePath: string) => {
+    try {
+      const result = await openPath(filePath);
+
+      if (result.mode === "tracked") {
+        // Find the file in tracked lists and open it normally.
+        await refresh();
+        // After refresh, look up the file in all lists. openArtifact will handle
+        // review state and unread marks.
+        const allFiles = await Promise.all([
+          listInbox(),
+          listDrafts(),
+          listPinned(),
+          listArchive()
+        ]);
+        const flat = allFiles.flat();
+        const found = flat.find((f) => f.path === result.path);
+        if (found) {
+          // Navigate to the right section.
+          const inInbox = allFiles[0].some((f) => f.path === result.path);
+          const inDrafts = allFiles[1].some((f) => f.path === result.path);
+          const inPinned = allFiles[2].some((f) => f.path === result.path);
+          const inArchive = allFiles[3].some((f) => f.path === result.path);
+          if (inDrafts) {
+            setMode("drafts");
+            setCurrentProject(null);
+            setDraftFiles(allFiles[1]);
+          } else if (inPinned) {
+            setMode("pinned");
+            setCurrentProject(null);
+            setPinnedFiles(allFiles[2]);
+          } else if (inArchive) {
+            setMode("archive");
+            setCurrentProject(null);
+            setArchiveFiles(allFiles[3]);
+          } else if (inInbox) {
+            setMode("inbox");
+            setCurrentProject(null);
+            setFiles(allFiles[0]);
+          }
+          await openArtifact(found);
+        }
+      } else {
+        // Ephemeral: release any previous ephemeral watch, then open the new one.
+        if (ephemeralPath && ephemeralPath !== result.path) {
+          void closeEphemeralPath(ephemeralPath).catch(() => { /* best-effort */ });
+        }
+        setEphemeralPath(result.path);
+        setMode("recents");
+        setCurrentProject(null);
+        // Refresh recents so the new entry appears.
+        listRecents().then(setRecents).catch(() => { /* best-effort */ });
+
+        // Synthesise a FileMetadata-compatible object for openArtifact.
+        const syntheticFile: FileMetadata = {
+          path: result.path,
+          relative_path: result.relative_path,
+          name: result.name,
+          extension: result.extension,
+          size: result.size,
+          mtime: result.mtime,
+          last_seen_hash: result.base_hash,
+          pinned: false,
+          archived: false,
+          last_read_at: null,
+          persona: "claude",
+          review_state: "reviewed",
+          comment_count: 0
+        };
+        await openArtifact(syntheticFile);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [ephemeralPath, openArtifact, refresh]);
 
   const createNewFile = useCallback(async (name: string) => {
     try {
@@ -2180,6 +2306,46 @@ export default function App() {
               <span>Archive</span>
               <span className="count">{archiveFiles.length}</span>
             </button>
+            {recents.length > 0 ? (
+              <>
+                <button
+                  className={`section-header section-button recents-header ${mode === "recents" ? "selected" : ""}`}
+                  type="button"
+                  onClick={() => {
+                    setMode("recents");
+                    setCurrentProject(null);
+                    setSearchQuery("");
+                  }}
+                >
+                  <span className="section-label">Recents</span>
+                  <span className="count">{recents.length}</span>
+                </button>
+                {mode === "recents" ? (
+                  <div className="file-list">
+                    {recents.map((entry) => {
+                      const name = entry.title || entry.path.split("/").pop() || entry.path;
+                      return (
+                        <button
+                          className={`file-row recents-row ${entry.path === selectedPath ? "selected" : ""}`}
+                          key={entry.path}
+                          type="button"
+                          title={entry.path}
+                          onClick={() => {
+                            void openExternalPath(entry.path);
+                          }}
+                        >
+                          <span className="arrival-dot review-dot review-reviewed" title="External" />
+                          <span className="file-name">{name}</span>
+                          <span className="file-time" title={new Date(entry.last_opened * 1000).toLocaleString()}>
+                            {formatTime(entry.last_opened)}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
           </aside>
           {mode === "project" || mode === "archive" || mode === "pinned" ? (
             <aside className="middle">
@@ -2253,8 +2419,8 @@ export default function App() {
                 </button>
               </div>
               <div className="breadcrumb">
-                {mode === "archive" ? "Archive" : mode === "pinned" ? "★ Pinned" : mode === "project" ? (currentProject ?? "Project") : mode === "drafts" ? "Drafts" : "Inbox"}
-                <span>/</span> <strong>{selectedFile?.name ?? "Select a file"}</strong>
+                {mode === "archive" ? "Archive" : mode === "pinned" ? "★ Pinned" : mode === "project" ? (currentProject ?? "Project") : mode === "drafts" ? "Drafts" : mode === "recents" ? "Recents" : "Inbox"}
+                <span>/</span> <strong>{selectedFile?.name ?? (artifact ? fileName(artifact.path) : null) ?? "Select a file"}</strong>
               </div>
               <div className="toolbar-actions">
                 {artifact && isEditableArtifact(artifact.kind) ? (
@@ -3913,7 +4079,7 @@ function reviewStateLabel(state: FileMetadata["review_state"]): string {
   return state.slice(0, 1).toUpperCase() + state.slice(1);
 }
 
-function emptyStateForMode(mode: "inbox" | "project" | "archive" | "pinned"): string {
+function emptyStateForMode(mode: "inbox" | "project" | "archive" | "pinned" | "recents"): string {
   if (mode === "pinned") {
     return "No pinned artifacts\n⌘P on any file to pin";
   }

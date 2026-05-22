@@ -196,6 +196,18 @@ button:hover {
   margin-top: 10px;
 }
 
+/* Recents section — visually distinct from Inbox/Drafts (external, not artifacts) */
+.recents-header {
+  margin-top: 8px;
+  border-top: 0.5px solid var(--border-soft);
+  padding-top: 12px;
+  opacity: 0.8;
+}
+
+.recents-row .arrival-dot {
+  opacity: 0.5;
+}
+
 /* Unread badge on Inbox section header */
 .unread-badge {
   border-radius: 8px;

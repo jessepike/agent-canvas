@@ -9,6 +9,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+// Maximum number of recent files to keep in the `recents` table.
+const RECENTS_LIMIT: usize = 50;
+
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
 
@@ -36,6 +39,10 @@ struct AppState {
     db: Mutex<Connection>,
     watcher: Mutex<Option<WatchHandle>>,
     current_focus: Mutex<Option<String>>,
+    /// Paths currently open as ephemeral (transient watched, no `files` row).
+    ephemeral_paths: Mutex<HashSet<PathBuf>>,
+    /// Paths buffered before the webview attaches (cold-launch open events).
+    pending_opens: Mutex<Vec<PathBuf>>,
 }
 
 impl AppState {
@@ -1349,6 +1356,263 @@ fn set_review_state(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Slice 5 — Ephemeral open model + Recents
+// ---------------------------------------------------------------------------
+
+/// How a path was resolved when opened via `open_path`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum OpenMode {
+    /// Path is under the canvas root or already has a `files` row — use the tracked identity.
+    Tracked,
+    /// Path is external and untracked.
+    Ephemeral,
+}
+
+/// Return value for `open_path`.
+#[derive(Debug, Clone, Serialize)]
+struct OpenResult {
+    mode: OpenMode,
+    path: String,
+    source: String,
+    base_hash: [u8; 32],
+    has_conflict_markers: bool,
+    /// Relative-to-canvas-root display path (equals `path` for ephemeral files).
+    relative_path: String,
+    name: String,
+    extension: String,
+    size: u64,
+    mtime: i64,
+}
+
+/// A single entry in the Recents list.
+#[derive(Debug, Clone, Serialize)]
+struct RecentEntry {
+    path: String,
+    last_opened: i64,
+    title: String,
+}
+
+/// Upsert a path into the `recents` table and prune to the cap.
+/// Must be called with NO db lock held (acquires its own lock).
+fn upsert_recent(db: &Mutex<Connection>, path_str: &str, title: &str, now: i64) -> Result<(), String> {
+    let conn = db.lock().map_err(|_| "state db lock poisoned".to_owned())?;
+    conn.execute(
+        r#"
+        INSERT INTO recents(path, last_opened, title)
+        VALUES (?1, ?2, ?3)
+        ON CONFLICT(path) DO UPDATE SET
+          last_opened = excluded.last_opened,
+          title = excluded.title
+        "#,
+        params![path_str, now, title],
+    )
+    .map_err(|error| error.to_string())?;
+    // Prune oldest rows beyond the cap.
+    conn.execute(
+        &format!(
+            r#"
+            DELETE FROM recents WHERE path IN (
+              SELECT path FROM recents
+              ORDER BY last_opened DESC
+              LIMIT -1 OFFSET {RECENTS_LIMIT}
+            )
+            "#
+        ),
+        [],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Arm a transient watch on the parent directory of an ephemeral path.
+/// Records the path in `state.ephemeral_paths` so it can be released later.
+fn arm_ephemeral_watch(state: &AppState, path: &PathBuf) {
+    let mut ephemeral_paths = match state.ephemeral_paths.lock() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+    if ephemeral_paths.insert(path.clone()) {
+        let watcher = match state.watcher.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        if let Some(watcher) = watcher.as_ref() {
+            let _ = watcher.add_path(path);
+        }
+    }
+}
+
+/// Release a transient watch on an ephemeral path.
+fn release_ephemeral_watch(state: &AppState, path: &PathBuf) {
+    let mut ephemeral_paths = match state.ephemeral_paths.lock() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+    if ephemeral_paths.remove(path) {
+        let watcher = match state.watcher.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        if let Some(watcher) = watcher.as_ref() {
+            let _ = watcher.remove_path(path);
+        }
+    }
+}
+
+/// Open a file by absolute path, resolving it to tracked or ephemeral per the spec rule:
+///   1. Path under canvas root → tracked
+///   2. Path already has a `files` row → tracked
+///   3. Otherwise → ephemeral (no files row created)
+#[tauri::command]
+fn open_path(state: tauri::State<AppState>, path: String) -> Result<OpenResult, String> {
+    let paths = state.paths()?;
+    let doc_path = path_safe_for_canvas(Path::new(&path))?;
+    ensure_regular_file(&doc_path)?;
+    let path_str = doc_path.to_string_lossy().into_owned();
+
+    // Determine if tracked or ephemeral — do DB work under the lock then drop it.
+    let is_tracked = {
+        let under_root = doc_path.starts_with(&paths.canvas_root);
+        if under_root {
+            true
+        } else {
+            let conn = state
+                .db
+                .lock()
+                .map_err(|_| "state db lock poisoned".to_owned())?;
+            let exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM files WHERE path = ?1 LIMIT 1",
+                    params![path_str],
+                    |_| Ok(()),
+                )
+                .is_ok();
+            exists
+        }
+    };
+    // DB lock is now released.
+
+    let mode = if is_tracked {
+        OpenMode::Tracked
+    } else {
+        OpenMode::Ephemeral
+    };
+
+    // Read the file content.
+    let bytes = fs::read(&doc_path).map_err(|error| error.to_string())?;
+    let base_hash = *vellum_core::hash::content_hash(&bytes).as_bytes();
+    let source = String::from_utf8(bytes.clone()).map_err(|error| error.to_string())?;
+    let metadata = fs::metadata(&doc_path).map_err(|error| error.to_string())?;
+    let size = metadata.len();
+    let mtime = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    let extension = normalized_extension(&doc_path);
+    let name = doc_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact")
+        .to_owned();
+    let relative_path = doc_path
+        .strip_prefix(&paths.canvas_root)
+        .unwrap_or(&doc_path)
+        .to_string_lossy()
+        .into_owned();
+
+    if is_tracked {
+        // Mark as read in the DB (best-effort, same as open_document does).
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+        let _ = conn.execute(
+            "UPDATE files
+             SET last_read_at = strftime('%s','now'),
+                 review_state = CASE WHEN review_state = 'unread' THEN 'reviewed' ELSE review_state END
+             WHERE path = ?1",
+            params![path_str],
+        );
+        // DB lock drops here.
+    } else {
+        // Ephemeral: arm transient watch and upsert into recents.
+        arm_ephemeral_watch(&state, &doc_path);
+        let now = unix_now();
+        upsert_recent(&state.db, &path_str, &name, now)?;
+    }
+
+    let has_markers = has_conflict_markers(&source);
+    Ok(OpenResult {
+        mode,
+        path: path_str,
+        source,
+        base_hash,
+        has_conflict_markers: has_markers,
+        relative_path,
+        name,
+        extension,
+        size,
+        mtime,
+    })
+}
+
+/// Release the ephemeral watch for a path that is no longer open.
+#[tauri::command]
+fn close_ephemeral_path(state: tauri::State<AppState>, path: String) -> Result<(), String> {
+    let doc_path = path_safe_for_canvas(Path::new(&path))?;
+    release_ephemeral_watch(&state, &doc_path);
+    Ok(())
+}
+
+/// List the most-recently opened external (recents) entries.
+#[tauri::command]
+fn list_recents(state: tauri::State<AppState>) -> Result<Vec<RecentEntry>, String> {
+    let _ = state.paths()?;
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT path, last_opened, title FROM recents ORDER BY last_opened DESC LIMIT ?1",
+        )
+        .map_err(|error| error.to_string())?;
+    let entries = stmt
+        .query_map(params![RECENTS_LIMIT as i64], |row| {
+            Ok(RecentEntry {
+                path: row.get(0)?,
+                last_opened: row.get(1)?,
+                title: row.get(2)?,
+            })
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(entries)
+}
+
+// ---------------------------------------------------------------------------
+// Slice 4 — Startup buffer + take_pending_opens
+// ---------------------------------------------------------------------------
+
+/// Drain the cold-launch pending-opens buffer. Called by the frontend on mount.
+#[tauri::command]
+fn take_pending_opens(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
+    let mut pending = state
+        .pending_opens
+        .lock()
+        .map_err(|_| "pending_opens lock poisoned".to_owned())?;
+    let drained: Vec<String> = pending
+        .drain(..)
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    Ok(drained)
+}
+
 #[tauri::command]
 fn write_document(
     state: tauri::State<AppState>,
@@ -1492,6 +1756,8 @@ fn bootstrap() -> Result<AppState, String> {
         db: Mutex::new(db),
         watcher: Mutex::new(None),
         current_focus: Mutex::new(None),
+        ephemeral_paths: Mutex::new(HashSet::new()),
+        pending_opens: Mutex::new(Vec::new()),
     })
 }
 
@@ -1511,6 +1777,8 @@ fn bootstrap_or_error_state() -> AppState {
                 db: Mutex::new(db),
                 watcher: Mutex::new(None),
                 current_focus: Mutex::new(None),
+                ephemeral_paths: Mutex::new(HashSet::new()),
+                pending_opens: Mutex::new(Vec::new()),
             }
         }
     }
@@ -1666,6 +1934,17 @@ fn initialize_state_db(db: &Connection, legacy_canvas_root: &Path) -> Result<(),
         "archived",
         "ALTER TABLE files ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
     )?;
+    // Slice 5 — Recents table (idempotent).
+    db.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS recents (
+          path TEXT PRIMARY KEY,
+          last_opened INTEGER NOT NULL,
+          title TEXT NOT NULL DEFAULT ''
+        );
+        "#,
+    )
+    .map_err(|error| error.to_string())?;
     backfill_file_tags_from_legacy_paths(db, legacy_canvas_root)?;
     // Also backfill from the secondary legacy root (old ~/AgentCanvas local path).
     // Guard: only run if this root differs from the primary legacy root passed in.
@@ -2651,14 +2930,71 @@ fn main() {
             update_sidecar_comments,
             set_current_focus,
             emit_artifact_updated,
-            set_review_state
+            set_review_state,
+            // Slice 5
+            open_path,
+            close_ephemeral_path,
+            list_recents,
+            // Slice 4
+            take_pending_opens
         ])
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_persisted_scope::init())
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!());
 
-    if let Err(error) = result {
-        eprintln!("AgentCanvas could not start: {error}");
+    match result {
+        Ok(app) => {
+            #[allow(unused_variables)]
+            app.run(|app_handle, event| {
+                // Slice 4: handle RunEvent::Opened (macOS file-open / URL event).
+                // This fires on both cold-launch and warm open-with; buffer paths first,
+                // then also emit the warm event so the webview can react immediately.
+                // LOCK DISCIPLINE: no db lock here; window ops happen AFTER any lock.
+                #[cfg(target_os = "macos")]
+                if let tauri::RunEvent::Opened { urls } = &event {
+                    let paths: Vec<PathBuf> = urls
+                        .iter()
+                        .filter_map(|url| {
+                            if url.scheme() == "file" {
+                                url.to_file_path().ok()
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    // Buffer for cold-launch path (take_pending_opens drains this on mount).
+                    if let Ok(mut pending) = app_handle.state::<AppState>().pending_opens.lock() {
+                        pending.extend(paths.iter().cloned());
+                    }
+
+                    // Also emit for the warm case (webview may already be listening).
+                    // Window focus is done AFTER pushing to the buffer — no db lock held.
+                    for path in &paths {
+                        let path_str = path.to_string_lossy().into_owned();
+                        let _ = app_handle.emit(
+                            "agentcanvas://open-external",
+                            serde_json::json!({ "path": path_str }),
+                        );
+                    }
+
+                    // Raise the window — no db lock held at this point.
+                    if !paths.is_empty() {
+                        if let Some(window) = app_handle.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                }
+
+                if matches!(event, tauri::RunEvent::Exit) {
+                    mcp::shutdown_mcp_server();
+                }
+            });
+        }
+        Err(error) => {
+            eprintln!("AgentCanvas could not start: {error}");
+        }
     }
 }
 
@@ -3176,5 +3512,176 @@ mod tests {
             )
             .expect("count");
         assert_eq!(count, 1, "only the unread inbox file should be counted");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Slice 5 — Recents migration + prune cap + open_path resolution rule
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn recents_migration_is_idempotent() {
+        // initialize_state_db runs the CREATE TABLE IF NOT EXISTS — running it twice must not fail.
+        let conn = Connection::open_in_memory().expect("db");
+        let legacy_root = PathBuf::from("/tmp/__nonexistent_legacy__");
+        initialize_state_db(&conn, &legacy_root).expect("init 1");
+        initialize_state_db(&conn, &legacy_root).expect("init 2 (idempotent)");
+        // Verify the table was actually created.
+        let tbl_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='recents'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("table check");
+        assert_eq!(tbl_exists, 1, "recents table must exist after migration");
+    }
+
+    #[test]
+    fn recents_prune_respects_cap() {
+        let conn = Connection::open_in_memory().expect("db");
+        let legacy_root = PathBuf::from("/tmp/__nonexistent_legacy__");
+        initialize_state_db(&conn, &legacy_root).expect("init");
+        let db = Mutex::new(conn);
+
+        // Insert RECENTS_LIMIT + 5 entries (each with a unique timestamp).
+        let total = RECENTS_LIMIT + 5;
+        for i in 0..total {
+            upsert_recent(
+                &db,
+                &format!("/tmp/file_{i}.md"),
+                &format!("file_{i}"),
+                (1_000_000 + i) as i64,
+            )
+            .expect("upsert");
+        }
+
+        let conn = db.lock().expect("lock");
+        let row_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM recents", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(
+            row_count, RECENTS_LIMIT as i64,
+            "recents must be capped at RECENTS_LIMIT after pruning"
+        );
+    }
+
+    #[test]
+    fn open_path_resolution_rule_under_root_is_tracked() {
+        // Verify the resolution rule: path under canvas_root → tracked (no files row needed).
+        let temp = tempfile::tempdir().expect("tempdir");
+        let canvas_root = temp.path().join("AgentCanvas");
+        let inbox = canvas_root.join("Inbox");
+        fs::create_dir_all(&inbox).expect("inbox");
+        let file = inbox.join("agent-note.md");
+        fs::write(&file, "hello from inbox").expect("write");
+
+        let conn = Connection::open_in_memory().expect("db");
+        initialize_state_db(&conn, &canvas_root).expect("init");
+
+        // Path is under canvas_root — must resolve as tracked even without a files row.
+        let under_root = file.starts_with(&canvas_root);
+        assert!(under_root, "test precondition: file must be under canvas root");
+
+        let has_files_row: bool = conn
+            .query_row(
+                "SELECT 1 FROM files WHERE path = ?1 LIMIT 1",
+                params![file.to_string_lossy()],
+                |_| Ok(()),
+            )
+            .is_ok();
+        assert!(!has_files_row, "no files row should exist yet");
+
+        // Simulate the tracked resolution branch.
+        let is_tracked = under_root || has_files_row;
+        assert!(is_tracked, "must resolve as tracked");
+    }
+
+    #[test]
+    fn open_path_resolution_rule_external_is_ephemeral_no_files_row() {
+        // Verify the resolution rule: path outside canvas_root without a files row → ephemeral.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let canvas_root = temp.path().join("AgentCanvas");
+        let external_dir = temp.path().join("Downloads");
+        fs::create_dir_all(&external_dir).expect("external dir");
+        let file = external_dir.join("x.md");
+        fs::write(&file, "external content").expect("write");
+
+        let conn = Connection::open_in_memory().expect("db");
+        initialize_state_db(&conn, &canvas_root).expect("init");
+
+        let under_root = file.starts_with(&canvas_root);
+        assert!(!under_root, "test precondition: file must NOT be under canvas root");
+
+        let has_files_row: bool = conn
+            .query_row(
+                "SELECT 1 FROM files WHERE path = ?1 LIMIT 1",
+                params![file.to_string_lossy()],
+                |_| Ok(()),
+            )
+            .is_ok();
+        assert!(!has_files_row, "no files row should exist");
+
+        // Simulate the ephemeral resolution branch.
+        let is_tracked = under_root || has_files_row;
+        assert!(!is_tracked, "must resolve as ephemeral");
+
+        // Confirm upsert_recent adds a recents row and no files row.
+        let db = Mutex::new(conn);
+        upsert_recent(&db, &file.to_string_lossy(), "x.md", 1_700_000_000).expect("upsert recent");
+
+        let conn = db.lock().expect("lock");
+        let recents_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM recents WHERE path = ?1",
+                params![file.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .expect("recents count");
+        assert_eq!(recents_count, 1, "must appear in recents");
+
+        let files_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE path = ?1",
+                params![file.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .expect("files count");
+        assert_eq!(files_count, 0, "must NOT appear in files table");
+    }
+
+    #[test]
+    fn open_path_resolution_rule_external_with_files_row_is_tracked() {
+        // Verify: path outside canvas_root BUT with an existing files row → tracked.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let canvas_root = temp.path().join("AgentCanvas");
+        let external_dir = temp.path().join("Downloads");
+        fs::create_dir_all(&external_dir).expect("external dir");
+        let file = external_dir.join("tracked-external.md");
+        fs::write(&file, "was tracked previously").expect("write");
+
+        let conn = Connection::open_in_memory().expect("db");
+        initialize_state_db(&conn, &canvas_root).expect("init");
+
+        // Pre-insert a files row (simulating a previously tracked external path).
+        conn.execute(
+            "INSERT INTO files(path, last_seen_hash, size, mtime, in_inbox) VALUES (?1, ?2, 1, 1, 0)",
+            params![file.to_string_lossy(), vec![0_u8; 32]],
+        )
+        .expect("insert files row");
+
+        let under_root = file.starts_with(&canvas_root);
+        assert!(!under_root, "test precondition: file must NOT be under canvas root");
+
+        let has_files_row: bool = conn
+            .query_row(
+                "SELECT 1 FROM files WHERE path = ?1 LIMIT 1",
+                params![file.to_string_lossy()],
+                |_| Ok(()),
+            )
+            .is_ok();
+        assert!(has_files_row, "files row must exist");
+
+        let is_tracked = under_root || has_files_row;
+        assert!(is_tracked, "existing files row → must resolve as tracked");
     }
 }

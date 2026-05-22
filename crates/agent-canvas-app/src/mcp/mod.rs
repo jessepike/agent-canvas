@@ -1503,6 +1503,8 @@ mod tests {
             db: std::sync::Mutex::new(conn),
             watcher: std::sync::Mutex::new(None),
             current_focus: std::sync::Mutex::new(None),
+            ephemeral_paths: std::sync::Mutex::new(std::collections::HashSet::new()),
+            pending_opens: std::sync::Mutex::new(Vec::new()),
         }
     }
 

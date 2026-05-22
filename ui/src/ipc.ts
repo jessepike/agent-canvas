@@ -651,3 +651,74 @@ export async function setReviewState(path: string, reviewState: FileMetadata["re
     throw ipcError("set_review_state", caught);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Slice 5 — Ephemeral open model + Recents
+// ---------------------------------------------------------------------------
+
+export const OpenMode = z.enum(["tracked", "ephemeral"]);
+export type OpenMode = z.infer<typeof OpenMode>;
+
+export const OpenResult = z
+  .object({
+    mode: OpenMode,
+    path: z.string(),
+    source: z.string(),
+    base_hash: Hash32,
+    has_conflict_markers: z.boolean(),
+    relative_path: z.string(),
+    name: z.string(),
+    extension: z.string(),
+    size: z.number(),
+    mtime: z.number()
+  })
+  .strict();
+export type OpenResult = z.infer<typeof OpenResult>;
+
+export const RecentEntry = z
+  .object({
+    path: z.string(),
+    last_opened: z.number(),
+    title: z.string()
+  })
+  .strict();
+export type RecentEntry = z.infer<typeof RecentEntry>;
+
+export async function openPath(path: string): Promise<OpenResult> {
+  try {
+    const result = await invoke<unknown>("open_path", { path });
+    return OpenResult.parse(result);
+  } catch (caught) {
+    throw ipcError("open_path", caught);
+  }
+}
+
+export async function closeEphemeralPath(path: string): Promise<void> {
+  try {
+    await invoke<unknown>("close_ephemeral_path", { path });
+  } catch (caught) {
+    throw ipcError("close_ephemeral_path", caught);
+  }
+}
+
+export async function listRecents(): Promise<RecentEntry[]> {
+  try {
+    const result = await invoke<unknown>("list_recents");
+    return z.array(RecentEntry).parse(result);
+  } catch (caught) {
+    throw ipcError("list_recents", caught);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 4 — Startup buffer
+// ---------------------------------------------------------------------------
+
+export async function takePendingOpens(): Promise<string[]> {
+  try {
+    const result = await invoke<unknown>("take_pending_opens");
+    return z.array(z.string()).parse(result);
+  } catch (caught) {
+    throw ipcError("take_pending_opens", caught);
+  }
+}
