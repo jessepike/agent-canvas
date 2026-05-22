@@ -269,6 +269,38 @@ resize the main reader, declutter the header. Also fold in the startup ghost-ses
   the live/attached agent; a relaunch shows zero ghost sessions. Gates: `cargo test`, `tsc`,
   `vite build`, A22=0, A15=0.
 
+### Slice 9 — Loop receipts (Delivered → Read → Responded)
+
+**Why:** When the user sends an artifact back to an agent, there is no signal the agent
+received or acted on it — the agent's response may only appear in its terminal. Owner
+decisions (2026-05-22): show all three signals **in canvas**; do NOT echo raw terminal
+output (keep the structured boundary). Depends on Slice 7 (`notify_user`) for the
+"Responded" leg.
+
+- **Delivered (frontend, cheap):** on a successful `send_back_to_session`, show a transient
+  confirmation "Delivered to <agent label>". When there is no live agent (clipboard/queued
+  route), say so plainly ("No live agent — copied to clipboard"). `send_back_to_session`
+  must **return the new message id** so the frontend can track its receipt lifecycle.
+- **Read receipt (backend + frontend):** add `read_at INTEGER` (nullable) to `user_messages`
+  (additive migration). When an agent calls `get_user_messages`, set `read_at = now` on any
+  returned previously-unread rows (inside the db-lock scope) and emit
+  `agentcanvas://user-message-read` with the affected message ids/session **post-lock**.
+  Keep returning read rows (non-destructive; agents dedupe via `since`). Frontend listens and
+  updates the tracked send to "Read by <agent>". Receipts are lightweight/transient status
+  (a toast or inline send-status) — NOT the sticky agent-message stack (that channel is
+  agent→user).
+- **Responded (already built):** the agent's reply returns via `notify_user` (Slice 7 sticky
+  message). To make this the norm, update the **connected-agent CLAUDE.md template** used by
+  the one-click MCP install (locate the template in-repo) to instruct agents: after acting on
+  a sent artifact, call `notify_user` with a short result + an action linking the artifact —
+  do not rely on terminal-only output.
+- **Out of scope (explicit):** mirroring raw terminal stdout into canvas (owner decision —
+  structured messages only). Capture any future "terminal mirror" idea to backlog.
+- **Accept:** sending to a live agent shows "Delivered to <agent>"; when that agent polls
+  `get_user_messages`, canvas updates to "Read by <agent>"; the agent's `notify_user` reply
+  appears as a sticky message; sending with no live agent shows the clipboard/queued state.
+  Gates: `cargo test`, `tsc`, `vite build`, A22=0, A15=0.
+
 ## Open questions (capture, don't build)
 
 - One-click **"Track this"** promotion for ephemeral files (Recents → Inbox/Drafts)?
