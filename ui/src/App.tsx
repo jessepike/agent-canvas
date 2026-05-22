@@ -223,6 +223,10 @@ export default function App() {
   }, [confirmBeforeRemove, setConfirmBeforeRemove]);
   const [editMode, setEditMode] = useState(false);
   const [sourceMode, setSourceMode] = useState(false);
+  // Live preview blocks — kept in sync with artifact.source via debounced parseDocument.
+  // Falls back to artifact.blocks until the first parse completes.
+  const [previewBlocks, setPreviewBlocks] = useState<Block[] | null>(null);
+  const latestPreviewSourceRef = useRef<string | null>(null);
   const [jsonViewMode, setJsonViewMode] = useState<"source" | "tree">("source");
   const [conflict, setConflict] = useState(false);
   const [mergeConflict, setMergeConflict] = useState<MergeConflict>(null);
@@ -1163,6 +1167,36 @@ export default function App() {
     setConflict(false);
     setSavedAt(null);
   }
+
+  // Reset previewBlocks when the open file changes so we don't flash a previous
+  // file's blocks while the new parse is in-flight.
+  useEffect(() => {
+    setPreviewBlocks(null);
+    latestPreviewSourceRef.current = null;
+  }, [artifact?.path]);
+
+  // Debounced live-preview: re-parse artifact.source ~200 ms after each keystroke.
+  // Stale-guard: latestPreviewSourceRef tracks the most-recently-requested source so
+  // out-of-order async responses are discarded.
+  useEffect(() => {
+    if (!artifact || artifact.kind !== "md") {
+      return;
+    }
+    const source = artifact.source;
+    const timer = window.setTimeout(async () => {
+      latestPreviewSourceRef.current = source;
+      try {
+        const blocks = await parseDocument(source);
+        // Discard if a newer request has already fired.
+        if (latestPreviewSourceRef.current === source) {
+          setPreviewBlocks(blocks);
+        }
+      } catch {
+        // Parse errors are non-fatal; leave previewBlocks unchanged.
+      }
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [artifact?.source, artifact?.kind]);
 
   const applyAnnotationFormat = useCallback((format: SourceFormat) => {
     sourceViewRef.current?.applyFormat(format);
@@ -2469,11 +2503,6 @@ export default function App() {
                 {fileName(artifact?.path ?? "File")} changed on disk since open. Resolve the merge dialog to continue.
               </div>
             ) : null}
-            {editMode && artifact?.kind === "md" ? (
-              <div className="edit-fallback-banner" role="status">
-                Rendered-view editing lands in v0.3 — using source editor
-              </div>
-            ) : null}
             {personas?.warning ? <div className="registry-warning">{personas.warning}</div> : null}
             {savedAt ? <div className="saved-toast">Saved {savedAt}</div> : null}
             {handoffToast ? (
@@ -2554,7 +2583,7 @@ export default function App() {
                     <FileLevelCommentButton onClick={() => setFileLevelDialogOpen(true)} count={fileLevelOpenCount} />
                   </div>
                   <section className="rendered-panel" aria-label="Rendered Markdown">
-                    <RenderedView blocks={artifact.blocks} />
+                    <RenderedView blocks={previewBlocks ?? artifact.blocks} />
                   </section>
                 </div>
               ) : artifact.kind === "html" ? (
