@@ -153,7 +153,7 @@ fn list_artifacts(
         }));
     }
 
-    Ok(tool_result(json!(artifacts)))
+    Ok(tool_result(json!({ "artifacts": artifacts })))
 }
 
 fn open_artifact(
@@ -373,7 +373,7 @@ fn get_comments(arguments: Value) -> Result<Value, Value> {
         .into_iter()
         .filter(|comment| since.is_none_or(|since| comment.created_at >= since))
         .collect::<Vec<_>>();
-    Ok(tool_result(json!(comments)))
+    Ok(tool_result(json!({ "comments": comments })))
 }
 
 fn get_user_messages(
@@ -411,7 +411,7 @@ fn get_user_messages(
         .map_err(|error| rpc_error(-32603, error.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| rpc_error(-32603, error.to_string()))?;
-    Ok(tool_result(json!(messages)))
+    Ok(tool_result(json!({ "messages": messages })))
 }
 
 fn rpc_error(code: i64, message: String) -> Value {
@@ -487,13 +487,29 @@ fn text_kind(kind: &str) -> bool {
 }
 
 fn tool_result(value: Value) -> Value {
-    json!({
+    // MCP requires `structuredContent` to be a JSON object (a record). A bare
+    // array fails client-side deserialization ("expected record, received
+    // array") and the whole tool call errors — this silently broke
+    // get_user_messages / get_comments / list_artifacts for real MCP clients.
+    // List-returning tools must wrap their payload in a named object
+    // (e.g. { "messages": [...] }). As a backstop, only emit structuredContent
+    // when the value is actually an object; otherwise omit it (the `content`
+    // text still carries the data) so we never ship an invalid envelope.
+    let mut result = json!({
         "content": [{
             "type": "text",
             "text": serde_json::to_string(&value).unwrap_or_else(|_| "null".to_owned())
-        }],
-        "structuredContent": value
-    })
+        }]
+    });
+    if value.is_object() {
+        result["structuredContent"] = value;
+    } else {
+        debug_assert!(
+            value.is_object(),
+            "tool_result expects an object for structuredContent; wrap arrays in a named key"
+        );
+    }
+    result
 }
 
 fn tool_schema(name: &str) -> Value {

@@ -900,7 +900,7 @@ mod tests {
             None,
         );
 
-        let comments = response["result"]["structuredContent"]
+        let comments = response["result"]["structuredContent"]["comments"]
             .as_array()
             .expect("comments");
         assert_eq!(comments.len(), 1);
@@ -931,11 +931,14 @@ mod tests {
             None,
         );
 
-        let messages = response["result"]["structuredContent"]
+        let messages = response["result"]["structuredContent"]["messages"]
             .as_array()
             .expect("messages");
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["id"], "m1");
+        // Guard against the array-vs-record regression: structuredContent must
+        // be a JSON object so real MCP clients can deserialize it.
+        assert!(response["result"]["structuredContent"].is_object());
     }
 
     #[test]
@@ -1155,7 +1158,7 @@ mod tests {
             Some(&test_session("s1")),
             None,
         );
-        let comments = response["result"]["structuredContent"]
+        let comments = response["result"]["structuredContent"]["comments"]
             .as_array()
             .expect("comments");
         assert_eq!(comments.len(), 1);
@@ -1256,7 +1259,7 @@ mod tests {
             Some(&test_session("s1")),
             None,
         );
-        let paths = response["result"]["structuredContent"]
+        let paths = response["result"]["structuredContent"]["artifacts"]
             .as_array()
             .expect("artifacts")
             .iter()
