@@ -135,12 +135,35 @@ fn mcp_socket_path() -> Result<PathBuf, String> {
         .join("mcp.sock"))
 }
 
+/// Bind the MCP listener, clearing a stale socket file left by a crashed or force-quit
+/// instance. `UnixListener::bind` fails with `AddrInUse` if the path already exists, which
+/// would silently kill the MCP server on a cold restart (the socket file lingers because we
+/// don't unlink on shutdown). Before removing it we probe-connect: if something answers, a
+/// real instance owns the socket and we refuse rather than orphan it.
+async fn bind_listener(socket_path: &PathBuf) -> Result<UnixListener, String> {
+    match UnixListener::bind(socket_path) {
+        Ok(listener) => Ok(listener),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            if UnixStream::connect(socket_path).await.is_ok() {
+                return Err(format!(
+                    "another AgentCanvas instance is already listening on {}",
+                    socket_path.display()
+                ));
+            }
+            // Stale file from a dead instance — remove and retry.
+            let _ = fs::remove_file(socket_path);
+            UnixListener::bind(socket_path).map_err(|error| error.to_string())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 async fn run_listener(
     app_handle: AppHandle,
     control: Arc<McpControl>,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<(), String> {
-    let listener = UnixListener::bind(&control.socket_path).map_err(|error| error.to_string())?;
+    let listener = bind_listener(&control.socket_path).await?;
 
     loop {
         if *shutdown_rx.borrow() {
