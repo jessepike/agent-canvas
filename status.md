@@ -1,10 +1,39 @@
 ---
 project: agent-canvas
-updated: 2026-05-21
-stage: v0.3.0 released
+updated: 2026-05-22
+stage: v0.5 in progress (Interaction Protocol) + UI/identity consolidation
 ---
 
 # AgentCanvas — Status
+
+## Consolidation Pass (2026-05-22)
+
+Triggered by "we might be overdoing the panes" — the agent panel had accumulated cruft
+(5× `default·unknown` ghost cards, the same agent messages shown twice, a spurious
+`os error 2` banner). Diagnosed as bugs compounding, not a bad concept. Shipped four fixes:
+
+- `bd6169a` fix(ui): removed the duplicate main-reader sticky message stack — Agent Center →
+  Messages is now the single persistent home (right pane auto-expands on arrival); and stopped
+  parking stale-focus "os error 2" in the global error banner.
+- `2537ef9` fix(mcp): shim now injects `clientInfo.agentCanvas` on `initialize` (unique
+  per-process `session_id` + project from cwd + `AGENTCANVAS_*` overrides) — kills the
+  `unknown-session` ghost pileup at the source. App-side `retire_superseded_sessions` retires
+  superseded/legacy-ghost rows on connect (D10-safe). Docs updated.
+- `d0e0c47` fix(mcp): `bind_listener` clears a stale socket file before bind so a cold restart
+  re-listens (was failing AddrInUse silently).
+
+Tests: 78 app + 6 shim green. Direct-launch verified: socket binds, startup sweep → 0 live
+sessions (ghosts cleared). Debug shim + release `.app` rebuilt/installed on host.
+
+**OPEN BLOCKER (pre-existing, not from this pass):** the release `.app` launched via `open`
+does NOT start the MCP server — `init_mcp_server` is gated behind `bootstrap_error()`, and a
+reinstalled `.app` loses TCC Documents access, so canvas-root bootstrap fails → no socket.
+Direct terminal launch works (inherits granted TCC). Fix paths captured in BACKLOG:
+[startup/mcp-gating] (proposal: decouple socket from bootstrap — needs green light),
+[startup/tcc] (re-grant Documents access after reinstall), [install-release/restart]
+(`open` re-activates stale instance instead of loading new binary). Next session: get the
+release app to bind under normal launch (approve TCC prompt or decouple), then run the
+decision-set round-trip verification that's still pending (interaction `1aa6be5b…`).
 
 ## v0.3.0 Release (2026-05-21)
 
