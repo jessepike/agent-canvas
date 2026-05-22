@@ -24,6 +24,13 @@ Status: `todo` / `in-progress` / `blocked` / `done` / `cut`.
 - todo — Positional comments on PNG and PDF (Word/GDocs-style region anchors). PNG: click-to-pin and drag-to-rectangle, new anchor `png_region { x_pct, y_pct, w_pct?, h_pct? }`, pins rendered as numbered overlay. PDF: swap `<object>` to `pdf.js` so we control the canvas, new anchor `pdf_region { page, x_pct, y_pct, w_pct?, h_pct? }`. Slice 3 added `file_level` as the floor; this slice adds the real model. Lighter version: PNG-region-only + `pdf_page` anchor (page number, no region), defer pdf.js to a later slice.
 - done — Flaky vellum-core `watch_emits_event_on_modify` test on macOS host. Resolved by normalizing watch paths and adding a lightweight snapshot poll fallback on the existing 200ms watcher cadence.
 
+## v0.4 follow-ups (captured during v0.4 build)
+
+- todo — [mcp-lock] Move `window.emit` out of the db-lock scope in `add_comment` and `notify_user` (mcp/tools.rs). Same class as the fixed open/attach deadlock (commit 95261f6) but NOT a hang — they emit while the dispatcher holds `state.db`, yet never re-lock `db`. Gate them into `needs_post_lock_side_effects` and run the emit post-lock. Latent main-thread risk only.
+- todo — [preview] Make the rendered Markdown view re-parse the live edit buffer (debounced) so preview reflects unsaved edits. Single-pane toggle only — NO side-by-side (owner decision: less clutter). Retire the "Rendered-view editing lands in v0.3" banner. Confirm whether the MD parser is callable client-side or only via Rust IPC (decides instant vs round-trip). Scheduled after default-opener.
+- todo — [send] Allow Send-to-agent to target any *connected* MCP session, not only one already attached to the current file. Today `sendCurrentArtifact` falls back to clipboard unless `attachedAgentOptions.length > 0` (App.tsx:1259). Relax the gate / auto-attach on send so the user can originate a handoff to a live agent. Core to the agent loop.
+- todo — [ui-types] Extract the `mode` union (`"inbox" | "drafts" | "project" | "archive" | "pinned"`) to a shared type alias. Minor.
+
 ## v0.3 Spinoffs
 
 - todo — [v0.3-slice2-spinoff] Replace the `ts-rs` warning-prone `CommentAnchor` export with an explicit generated-type strategy or custom TS binding so `serde(skip_serializing_if)` stays warning-free while preserving legacy sidecar output.
