@@ -2248,3 +2248,303 @@ button:hover {
   overflow: auto;
   padding: 6px 10px 10px;
 }
+
+/* ── Slice 0.5: Interaction protocol UI ─────────────────────────────────── */
+
+/* Interaction rows in Agent Center */
+.agent-interactions-list {
+  display: grid;
+  gap: 4px;
+  padding: 4px 10px 8px;
+}
+
+.agent-interactions-header {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 4px;
+}
+
+.interaction-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-window);
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text);
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.interaction-row:hover {
+  background: var(--hover-bg);
+  border-color: var(--border);
+}
+
+.interaction-row.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.interaction-class-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--pending-bg);
+  color: var(--pending-deep);
+  border: 1px solid var(--pending-border);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.interaction-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.interaction-status {
+  font-size: 10px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* Interaction form pane (content area) */
+.interaction-form-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-doc);
+}
+
+.interaction-form-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-titlebar-top);
+  flex-shrink: 0;
+}
+
+.interaction-form-title {
+  flex: 1;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.interaction-close-btn {
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.interaction-close-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.interaction-form-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+/* DecisionSetForm */
+.decision-set-form {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  max-width: 680px;
+}
+
+.decision-question {
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 14px 16px 12px;
+  margin: 0;
+  background: var(--bg-window);
+}
+
+.decision-question-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 0;
+  margin-bottom: 6px;
+}
+
+.decision-question-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 12px;
+}
+
+.decision-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.decision-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  gap: 2px 8px;
+  align-items: start;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+  background: var(--bg-sidebar);
+}
+
+.decision-option:hover {
+  background: var(--hover-bg);
+  border-color: var(--border);
+}
+
+.decision-option.selected {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.decision-option input[type="radio"],
+.decision-option input[type="checkbox"] {
+  grid-row: 1;
+  grid-column: 1;
+  margin-top: 2px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.decision-option-label {
+  grid-row: 1;
+  grid-column: 2;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.decision-recommended-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--pin-soft);
+  color: var(--pin);
+  border: 1px solid var(--pending-border);
+  letter-spacing: 0.04em;
+}
+
+.decision-option-description {
+  grid-row: 2;
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.decision-note-input {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  background: var(--bg-window);
+  color: var(--text);
+  box-sizing: border-box;
+  margin-top: 2px;
+}
+
+.decision-note-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.decision-form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.interaction-dismiss-btn {
+  color: var(--text-secondary);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 5px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.interaction-dismiss-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.interaction-draft-btn {
+  background: var(--bg-window);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 5px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.interaction-draft-btn:hover {
+  background: var(--hover-bg);
+}
+
+.interaction-submit-btn {
+  /* inherits .primary styles */
+}
+
+.interaction-error {
+  color: var(--diff-rem-text);
+  font-size: 12px;
+  background: var(--diff-rem-bg);
+  padding: 6px 10px;
+  border-radius: 5px;
+  margin: 0;
+}
+
+.interaction-unsupported {
+  padding: 20px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.interaction-unsupported p {
+  margin: 0 0 16px;
+}
+
+.interaction-form-actions {
+  display: flex;
+  gap: 8px;
+}

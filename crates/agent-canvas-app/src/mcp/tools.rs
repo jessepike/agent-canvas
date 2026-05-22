@@ -14,7 +14,7 @@ use crate::{
 
 use super::sessions::{self, McpSession};
 
-const TOOL_NAMES: [&str; 9] = [
+const TOOL_NAMES: [&str; 10] = [
     "list_artifacts",
     "get_artifact",
     "get_current_focus",
@@ -24,6 +24,7 @@ const TOOL_NAMES: [&str; 9] = [
     "notify_user",
     "attach_artifact",
     "add_comment",
+    "dispatch_interaction",
 ];
 
 pub fn tool_schemas() -> Value {
@@ -64,6 +65,9 @@ pub fn call_tool(
         "notify_user" => notify_user(conn, session, arguments),
         "attach_artifact" => attach_artifact(conn, paths, session, app_handle, arguments),
         "add_comment" => add_comment(conn, session, app_handle, arguments),
+        // dispatch_interaction: DB insert happens here (under the lock); window/emit post-lock
+        // via dispatch_interaction's gate in handle_tools_call (lock discipline).
+        "dispatch_interaction" => dispatch_interaction(conn, session, arguments),
         _ => Err(json!({
             "code": -32601,
             "message": "unknown tool"
@@ -376,7 +380,20 @@ fn get_comments(arguments: Value) -> Result<Value, Value> {
     Ok(tool_result(json!({ "comments": comments })))
 }
 
-fn get_user_messages(
+/// get_user_messages — v1.1.0 protocol shape.
+///
+/// Returns `status IN (submitted, draft)` interactions for the caller's session.
+/// Each element: `{ interaction_id, ts, payload: { §4 verbatim } }`.
+/// On return, sets `read_at` for rows not yet read (INSIDE the db lock — caller must
+/// emit `interaction.read` + `messages-changed` POST-lock).
+///
+/// The `since` parameter filters by `responded_at` epoch (integer, for backward compat
+/// with existing MCP clients that pass an epoch integer).
+///
+/// Returns: `{ messages: [...], read_interaction_ids: [...] }` — the extra field carries
+/// which ids need post-lock lifecycle emits. Canvas MUST NOT expose `read_interaction_ids`
+/// to MCP clients; it is consumed by `handle_tools_call` and stripped before sending.
+pub fn get_user_messages(
     conn: &Connection,
     session_id: Option<&str>,
     arguments: Value,
@@ -384,34 +401,152 @@ fn get_user_messages(
     let session_id =
         session_id.ok_or_else(|| rpc_error(-32600, "initialize required".to_owned()))?;
     let since = arguments.get("since").and_then(Value::as_i64);
-    let mut sql = "SELECT id, session_id, path, note, action_verb, created_at FROM user_messages WHERE session_id = ?1".to_owned();
-    if since.is_some() {
-        sql.push_str(" AND created_at >= ?2");
-    }
-    sql.push_str(" ORDER BY created_at ASC, id ASC");
-    let mut statement = conn
-        .prepare(&sql)
-        .map_err(|error| rpc_error(-32603, error.to_string()))?;
+    let now_ts = unix_now();
 
-    let mut values = vec![session_id.to_owned()];
-    if let Some(since) = since {
-        values.push(since.to_string());
-    }
-    let messages = statement
-        .query_map(params_from_iter(values), |row| {
-            Ok(json!({
-                "id": row.get::<_, String>(0)?,
-                "session_id": row.get::<_, String>(1)?,
-                "path": row.get::<_, String>(2)?,
-                "note": row.get::<_, Option<String>>(3)?,
-                "action_verb": row.get::<_, Option<String>>(4)?,
-                "created_at": row.get::<_, i64>(5)?,
+    // Fetch submitted/draft interactions for this session.
+    let interactions =
+        sessions::get_interactions_submitted_for_session(conn, session_id, since)
+            .map_err(|error| rpc_error(-32603, error))?;
+
+    // Mark read_at for rows not yet read, INSIDE the lock.
+    // We collect the ids that were newly marked so handle_tools_call can emit post-lock.
+    let newly_read =
+        sessions::set_interactions_read_at(conn, session_id, now_ts)
+            .map_err(|error| rpc_error(-32603, error))?;
+
+    // Build the §5 / v1.1.0 wire elements.
+    let messages: Vec<Value> = interactions
+        .into_iter()
+        .filter_map(|row| {
+            // Parse stored response_json to get the §4 payload.
+            let payload: Value = row.response_json.as_deref()
+                .and_then(|json| serde_json::from_str(json).ok())
+                .unwrap_or(Value::Null);
+
+            if !payload.is_object() {
+                return None; // skip malformed
+            }
+
+            // submitted_at is stored verbatim in response_json.
+            let ts = payload
+                .get("submitted_at")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+
+            // wrapper interaction_id MUST equal payload.interaction_id (spec §5).
+            Some(json!({
+                "interaction_id": row.interaction_id,
+                "ts": ts,
+                "payload": payload
             }))
         })
-        .map_err(|error| rpc_error(-32603, error.to_string()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| rpc_error(-32603, error.to_string()))?;
-    Ok(tool_result(json!({ "messages": messages })))
+        .collect();
+
+    // Pass read ids back as a side-channel for post-lock emit (stripped by caller before MCP send).
+    let read_ids: Vec<Value> = newly_read
+        .iter()
+        .map(|(id, trace_id, class)| json!({
+            "interaction_id": id,
+            "trace_id": trace_id,
+            "class": class
+        }))
+        .collect();
+
+    Ok(tool_result(json!({
+        "messages": messages,
+        "_read_lifecycle": read_ids
+    })))
+}
+
+/// Returns `(artifact_path, artifact_inline)` or an error.
+fn validate_artifact_source(arguments: &Value, class: &str) -> Result<(Option<String>, Option<String>), Value> {
+    let artifact_path = arguments.get("artifact_path").and_then(Value::as_str).map(str::to_owned);
+    let artifact_inline = arguments.get("artifact_inline").and_then(Value::as_str).map(str::to_owned);
+    match (&artifact_path, &artifact_inline) {
+        (Some(_), Some(_)) => Err(rpc_error(-32602, "artifact_path and artifact_inline are mutually exclusive".to_owned())),
+        (None, Some(_)) if class != "visual-artifact" => Err(rpc_error(-32602, "artifact_inline is only valid for visual-artifact".to_owned())),
+        _ => Ok((artifact_path, artifact_inline)),
+    }
+}
+
+/// dispatch_interaction — agent → Canvas.
+///
+/// Validates the §3 envelope, inserts a row (status=pending), stores the raw envelope
+/// in request_json. Returns `{ dispatched: true, interaction_id }`.
+/// Window raise + lifecycle emit happen post-lock in handle_tools_call.
+pub fn dispatch_interaction(
+    conn: &Connection,
+    session: Option<&McpSession>,
+    arguments: Value,
+) -> Result<Value, Value> {
+    let session = session.ok_or_else(|| rpc_error(-32600, "initialize required".to_owned()))?;
+
+    // Required fields.
+    let interaction_id = arguments
+        .get("interaction_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| rpc_error(-32602, "interaction_id is required".to_owned()))?
+        .to_owned();
+
+    let class = arguments
+        .get("class")
+        .and_then(Value::as_str)
+        .ok_or_else(|| rpc_error(-32602, "class is required".to_owned()))?;
+
+    // Validate class.
+    match class {
+        "decision-set" | "document-review" | "approval-gate" | "visual-artifact" => {}
+        other => {
+            return Err(rpc_error(
+                -32602,
+                format!("unknown interaction class: {other}; expected one of decision-set, document-review, approval-gate, visual-artifact"),
+            ))
+        }
+    }
+
+    // decision-set requires questions[].
+    if class == "decision-set" {
+        let questions = arguments.get("questions").and_then(Value::as_array);
+        match questions {
+            None => return Err(rpc_error(-32602, "decision-set requires questions[]".to_owned())),
+            Some(q) if q.is_empty() => return Err(rpc_error(-32602, "decision-set questions[] must not be empty".to_owned())),
+            _ => {}
+        }
+    }
+
+    // Validate artifact source (mutually exclusive; inline only for visual-artifact).
+    let (artifact_path, artifact_inline) = validate_artifact_source(&arguments, class)?;
+
+    let title = arguments.get("title").and_then(Value::as_str).map(str::to_owned);
+    let trace_id = arguments.get("trace_id").and_then(Value::as_str).map(str::to_owned);
+    let now_ts = unix_now();
+
+    sessions::insert_interaction(
+        conn,
+        &interaction_id,
+        &session.session_id,
+        class,
+        title.as_deref(),
+        artifact_path.as_deref(),
+        artifact_inline.as_deref(),
+        trace_id.as_deref(),
+        &serde_json::to_string(&arguments).unwrap_or_default(),
+        now_ts,
+    )
+    .map_err(|error| rpc_error(-32603, error))?;
+
+    Ok(tool_result(json!({
+        "dispatched": true,
+        "interaction_id": interaction_id,
+        // Pass trace_id and class as side-channel for post-lock lifecycle emit.
+        // Stripped before MCP send by handle_tools_call.
+        "_dispatch_meta": {
+            "interaction_id": interaction_id,
+            "trace_id": trace_id,
+            "class": class
+        }
+    })))
 }
 
 fn rpc_error(code: i64, message: String) -> Value {
@@ -568,7 +703,7 @@ fn tool_schema(name: &str) -> Value {
         }),
         "get_user_messages" => json!({
             "name": "get_user_messages",
-            "description": "Return Send-back messages targeted at this session, optionally since an epoch-second timestamp.",
+            "description": "Return structured interaction responses for this session (protocol v1.1.0). Each element: { interaction_id, ts (ISO-8601 Z), payload: { §4 return contract } }. Sets read_at on returned rows. Filter with since (epoch-second integer).",
             "inputSchema": {
                 "type": "object",
                 "properties": { "since": { "type": "integer" } },
@@ -650,6 +785,55 @@ fn tool_schema(name: &str) -> Value {
                     "body": { "type": "string" }
                 },
                 "required": ["path", "anchor", "body"],
+                "additionalProperties": false
+            }
+        }),
+        "dispatch_interaction" => json!({
+            "name": "dispatch_interaction",
+            "description": "Dispatch a typed interaction (decision-set, document-review, approval-gate, visual-artifact) to the Canvas operator. Canvas renders the class-specific widget and returns a structured response via get_user_messages. Protocol v1.1.0.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "interaction_id": { "type": "string", "description": "Unique ID for this interaction; correlates request <-> response." },
+                    "class": {
+                        "type": "string",
+                        "enum": ["decision-set", "document-review", "approval-gate", "visual-artifact"],
+                        "description": "Interaction class."
+                    },
+                    "title": { "type": "string", "description": "Optional display title." },
+                    "artifact_path": { "type": "string", "description": "Absolute path to a .md/.html file (mutually exclusive with artifact_inline)." },
+                    "artifact_inline": { "type": "string", "description": "Inline HTML string; visual-artifact only (mutually exclusive with artifact_path)." },
+                    "questions": {
+                        "type": "array",
+                        "description": "Required for decision-set. AskUserQuestion-shaped questions.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question_id": { "type": "string" },
+                                "question": { "type": "string" },
+                                "header": { "type": "string" },
+                                "multiSelect": { "type": "boolean" },
+                                "options": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "key": { "type": "string" },
+                                            "label": { "type": "string" },
+                                            "description": { "type": "string" },
+                                            "recommended": { "type": "boolean" }
+                                        },
+                                        "required": ["key", "label"]
+                                    }
+                                }
+                            },
+                            "required": ["question_id", "question", "options"]
+                        }
+                    },
+                    "fallback": { "type": "string" },
+                    "trace_id": { "type": "string", "description": "Links to the handoff-event boundary record; echoed to response." }
+                },
+                "required": ["interaction_id", "class"],
                 "additionalProperties": false
             }
         }),

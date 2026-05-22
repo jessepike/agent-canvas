@@ -758,3 +758,110 @@ export async function acknowledgeAgentMessage(id: string): Promise<void> {
     throw ipcError("acknowledge_agent_message", caught);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Slice 0.5 — Interaction protocol (protocol v1.1.0)
+// ---------------------------------------------------------------------------
+
+/** AskUserQuestion-shaped option (§3 envelope). */
+export const InteractionOption = z
+  .object({
+    key: z.string(),
+    label: z.string(),
+    description: z.string().optional(),
+    recommended: z.boolean().optional()
+  })
+  .passthrough();
+export type InteractionOption = z.infer<typeof InteractionOption>;
+
+/** AskUserQuestion-shaped question (§3 envelope). */
+export const InteractionQuestion = z
+  .object({
+    question_id: z.string(),
+    question: z.string(),
+    header: z.string().optional(),
+    multiSelect: z.boolean().optional(),
+    options: z.array(InteractionOption)
+  })
+  .passthrough();
+export type InteractionQuestion = z.infer<typeof InteractionQuestion>;
+
+/** A dispatched interaction row as returned by list_interactions / get_interaction. */
+export const Interaction = z
+  .object({
+    interaction_id: z.string(),
+    session_id: z.string(),
+    class: z.enum(["decision-set", "document-review", "approval-gate", "visual-artifact"]),
+    title: z.string().nullable(),
+    artifact_path: z.string().nullable(),
+    artifact_inline: z.string().nullable(),
+    trace_id: z.string().nullable(),
+    request_json: z.string(),
+    status: z.enum(["pending", "submitted", "draft", "dismissed"]),
+    response_json: z.string().nullable(),
+    created_at: z.number(),
+    responded_at: z.number().nullable(),
+    read_at: z.number().nullable()
+  })
+  .strict();
+export type Interaction = z.infer<typeof Interaction>;
+
+/** §4 decision-set response entry. */
+export const DecisionSetResponse = z.object({
+  question_id: z.string(),
+  selected: z.array(z.string()),
+  note: z.string().optional()
+});
+export type DecisionSetResponse = z.infer<typeof DecisionSetResponse>;
+
+/** §4 response payload (common envelope fields). */
+export const InteractionResponsePayload = z
+  .object({
+    interaction_id: z.string(),
+    class: z.enum(["decision-set", "document-review", "approval-gate", "visual-artifact"]),
+    artifact_path: z.string().nullable().optional(),
+    status: z.enum(["submitted", "draft", "dismissed"]),
+    submitted_at: z.string(), // ISO-8601 Z
+    // decision-set
+    responses: z.array(DecisionSetResponse).optional(),
+    // approval-gate
+    decision: z.string().optional(),
+    reason: z.string().optional(),
+    // document-review / visual-artifact
+    comments: z.array(z.unknown()).optional(),
+    edits: z.array(z.unknown()).optional()
+  })
+  .passthrough();
+export type InteractionResponsePayload = z.infer<typeof InteractionResponsePayload>;
+
+export async function listInteractions(): Promise<Interaction[]> {
+  try {
+    const result = await invoke<unknown>("list_interactions");
+    return z.array(Interaction).parse(result);
+  } catch (caught) {
+    throw ipcError("list_interactions", caught);
+  }
+}
+
+export async function getInteraction(interactionId: string): Promise<Interaction | null> {
+  try {
+    const result = await invoke<unknown>("get_interaction", { interactionId });
+    return Interaction.nullable().parse(result);
+  } catch (caught) {
+    throw ipcError("get_interaction", caught);
+  }
+}
+
+export async function submitInteractionResponse(
+  interactionId: string,
+  payload: InteractionResponsePayload
+): Promise<void> {
+  try {
+    await invoke<unknown>("submit_interaction_response", {
+      interactionId,
+      payload
+    });
+  } catch (caught) {
+    throw ipcError("submit_interaction_response", caught);
+  }
+}

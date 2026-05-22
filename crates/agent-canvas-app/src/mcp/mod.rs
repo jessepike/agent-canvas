@@ -410,6 +410,74 @@ fn handle_initialize_with_conn(
     )
 }
 
+/// Return the current time as ISO-8601 UTC with trailing `Z` (protocol §4 rule 6).
+fn iso8601_now() -> String {
+    use std::time::SystemTime;
+    let secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    epoch_secs_to_iso8601(secs)
+}
+
+pub(crate) fn epoch_secs_to_iso8601(secs: u64) -> String {
+    let days = secs / 86400;
+    let time_of_day = secs % 86400;
+    let hh = time_of_day / 3600;
+    let mm = (time_of_day % 3600) / 60;
+    let ss = time_of_day % 60;
+    // Days since Unix epoch → calendar date (Gregorian, civil-proleptic algorithm).
+    // Works for all dates from 1970 onwards (z is always positive for unix timestamps).
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let yr = if m <= 2 { y + 1 } else { y };
+    format!("{yr:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+}
+
+/// Remove internal side-channel fields that handlers smuggle through the tool result so the
+/// dispatcher can act on them post-lock (`_dispatch_meta` for dispatch_interaction,
+/// `_read_lifecycle` for get_user_messages). These are NEVER part of the protocol contract and
+/// must not reach the agent. Cleans both `structuredContent` and the mirrored `content[0].text`.
+/// Pure (no AppHandle) so the wire-contract guarantee is unit-testable.
+fn strip_internal_side_channels(name: &str, rpc_response: &mut Value) {
+    let key = match name {
+        "dispatch_interaction" => "_dispatch_meta",
+        "get_user_messages" => "_read_lifecycle",
+        _ => return,
+    };
+    let removed = rpc_response
+        .get_mut("result")
+        .and_then(|r| r.get_mut("structuredContent"))
+        .and_then(Value::as_object_mut)
+        .map(|sc| sc.remove(key).is_some())
+        .unwrap_or(false);
+    if !removed {
+        return;
+    }
+    // Rebuild content[0].text from the cleaned structuredContent so the text mirror matches.
+    if let Some(sc_clean) = rpc_response
+        .get("result")
+        .and_then(|r| r.get("structuredContent"))
+        .cloned()
+    {
+        if let Some(text) = rpc_response
+            .get_mut("result")
+            .and_then(|r| r.get_mut("content"))
+            .and_then(|c| c.get_mut(0))
+            .and_then(|c| c.get_mut("text"))
+        {
+            *text = Value::String(serde_json::to_string(&sc_clean).unwrap_or_default());
+        }
+    }
+}
+
 fn handle_tools_call(
     app_handle: &AppHandle,
     id: Value,
@@ -442,9 +510,9 @@ fn handle_tools_call(
     // the guard has been released.
     // notify_user now does only DB work (insert row) under the lock; the Tauri
     // emit runs post-lock, same pattern as open_artifact / attach_artifact.
-    let needs_post_lock_side_effects = matches!(name, "open_artifact" | "attach_artifact" | "notify_user");
+    let needs_post_lock_side_effects = matches!(name, "open_artifact" | "attach_artifact" | "notify_user" | "dispatch_interaction" | "get_user_messages");
 
-    let (rpc_response, open_path, notify_payload) = {
+    let (mut rpc_response, open_path, notify_payload, dispatch_meta, read_lifecycle) = {
         let conn = match state.db.lock() {
             Ok(conn) => conn,
             Err(_) => return rpc_error(id, -32603, "state db lock poisoned"),
@@ -482,14 +550,39 @@ fn handle_tools_call(
         } else {
             None
         };
-        (response, open_path, notify_payload)
+        // For dispatch_interaction: extract the internal _dispatch_meta side-channel.
+        let dispatch_meta = if name == "dispatch_interaction" {
+            response
+                .get("result")
+                .and_then(|r| r.get("structuredContent"))
+                .and_then(|sc| sc.get("_dispatch_meta"))
+                .cloned()
+        } else {
+            None
+        };
+        // For get_user_messages: extract the _read_lifecycle side-channel.
+        let read_lifecycle = if name == "get_user_messages" {
+            response
+                .get("result")
+                .and_then(|r| r.get("structuredContent"))
+                .and_then(|sc| sc.get("_read_lifecycle"))
+                .and_then(Value::as_array)
+                .cloned()
+        } else {
+            None
+        };
+        (response, open_path, notify_payload, dispatch_meta, read_lifecycle)
         // `conn` (the MutexGuard) is dropped here at the end of this block.
     };
+
+    // Strip internal side-channel fields (_dispatch_meta / _read_lifecycle) from the MCP
+    // response before it reaches the agent — they are never part of the protocol contract.
+    strip_internal_side_channels(name, &mut rpc_response);
 
     // Side-effects that must NOT run while the db guard is held.
     if needs_post_lock_side_effects && rpc_response.get("result").is_some() {
         // Resync the watcher now that the db lock is free (open_artifact / attach_artifact).
-        if name != "notify_user" {
+        if matches!(name, "open_artifact" | "attach_artifact") {
             let _ = resync_watcher_from_db(&state);
         }
 
@@ -514,6 +607,59 @@ fn handle_tools_call(
             if let Some(window) = app_handle.get_webview_window("main") {
                 let _ = window.emit("agentcanvas://notify-user", &notify_args);
                 let _ = window.emit("agentcanvas://messages-changed", json!({}));
+            }
+        }
+
+        // For dispatch_interaction: raise the window, emit lifecycle event + interaction-dispatched.
+        if let Some(meta) = dispatch_meta {
+            let interaction_id = meta.get("interaction_id").and_then(Value::as_str).unwrap_or("").to_owned();
+            let trace_id = meta.get("trace_id").cloned().unwrap_or(Value::Null);
+            let class = meta.get("class").and_then(Value::as_str).unwrap_or("").to_owned();
+            let ts = iso8601_now();
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+                // Lifecycle event for §5.1.
+                let _ = window.emit(
+                    "agentcanvas://interaction.dispatched",
+                    json!({
+                        "interaction_id": interaction_id,
+                        "class": class,
+                        "trace_id": trace_id,
+                        "ts": ts
+                    }),
+                );
+                // Also emit interaction-dispatched for the UI to open the form.
+                let _ = window.emit(
+                    "agentcanvas://interaction-dispatched",
+                    json!({ "interaction_id": interaction_id }),
+                );
+                // Ping the notification channel (reuse existing messages-changed).
+                let _ = window.emit("agentcanvas://messages-changed", json!({}));
+            }
+        }
+
+        // For get_user_messages: emit interaction.read lifecycle events post-lock.
+        if let Some(read_ids) = read_lifecycle {
+            let ts = iso8601_now();
+            if let Some(window) = app_handle.get_webview_window("main") {
+                for item in &read_ids {
+                    let interaction_id = item.get("interaction_id").and_then(Value::as_str).unwrap_or("");
+                    let trace_id = item.get("trace_id").cloned().unwrap_or(Value::Null);
+                    let class = item.get("class").and_then(Value::as_str).unwrap_or("");
+                    let _ = window.emit(
+                        "agentcanvas://interaction.read",
+                        json!({
+                            "interaction_id": interaction_id,
+                            "trace_id": trace_id,
+                            "class": class,
+                            "ts": ts
+                        }),
+                    );
+                }
+                if !read_ids.is_empty() {
+                    let _ = window.emit("agentcanvas://messages-changed", json!({}));
+                }
             }
         }
     }
@@ -560,6 +706,7 @@ fn handle_tools_call_with_conn(
         }
     }
 }
+
 
 fn handle_subscribe(
     control: &McpControl,
@@ -689,13 +836,14 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_nine_tools_with_input_schemas() {
+    fn tools_list_returns_ten_tools_with_input_schemas() {
         let response = rpc_result(json!(3), json!({ "tools": tools::tool_schemas() }));
 
         let tools = response["result"]["tools"].as_array().expect("tools");
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 10);
         assert!(tools.iter().all(|tool| tool.get("inputSchema").is_some()));
         assert!(tools.iter().any(|tool| tool["name"] == "add_comment"));
+        assert!(tools.iter().any(|tool| tool["name"] == "dispatch_interaction"));
     }
 
     #[test]
@@ -908,18 +1056,39 @@ mod tests {
     }
 
     #[test]
-    fn get_user_messages_filters_by_session_id() {
+    fn get_user_messages_v1_1_0_returns_interactions_not_user_messages() {
+        // get_user_messages now returns submitted/draft interactions (protocol v1.1.0),
+        // not the legacy user_messages rows.
         let (conn, paths, _temp) = test_state();
+
+        // Insert a submitted interaction for s1 with a valid §4 response_json.
+        let now = unix_now();
         conn.execute(
-            "INSERT INTO user_messages(id, session_id, path, note, action_verb, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params!["m1", "s1", "/x.md", "note", "Review", 10],
+            r#"INSERT INTO interactions(interaction_id, session_id, class, request_json, status, response_json, created_at, responded_at)
+               VALUES (?1, ?2, ?3, ?4, 'submitted', ?5, ?6, ?6)"#,
+            rusqlite::params![
+                "iid-1",
+                "s1",
+                "decision-set",
+                r#"{"interaction_id":"iid-1","class":"decision-set","questions":[]}"#,
+                r#"{"interaction_id":"iid-1","class":"decision-set","artifact_path":null,"status":"submitted","submitted_at":"2026-05-22T12:00:00Z","responses":[]}"#,
+                now
+            ],
         )
-        .expect("insert m1");
+        .expect("insert interaction s1");
         conn.execute(
-            "INSERT INTO user_messages(id, session_id, path, note, action_verb, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params!["m2", "s2", "/x.md", "other", "Review", 20],
+            r#"INSERT INTO interactions(interaction_id, session_id, class, request_json, status, response_json, created_at, responded_at)
+               VALUES (?1, ?2, ?3, ?4, 'submitted', ?5, ?6, ?6)"#,
+            rusqlite::params![
+                "iid-2",
+                "s2",
+                "decision-set",
+                r#"{"interaction_id":"iid-2","class":"decision-set","questions":[]}"#,
+                r#"{"interaction_id":"iid-2","class":"decision-set","artifact_path":null,"status":"submitted","submitted_at":"2026-05-22T12:01:00Z","responses":[]}"#,
+                now
+            ],
         )
-        .expect("insert m2");
+        .expect("insert interaction s2");
 
         let response = handle_tools_call_with_conn(
             json!(13),
@@ -934,11 +1103,63 @@ mod tests {
         let messages = response["result"]["structuredContent"]["messages"]
             .as_array()
             .expect("messages");
+        // Only s1's interaction should be returned.
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0]["id"], "m1");
-        // Guard against the array-vs-record regression: structuredContent must
-        // be a JSON object so real MCP clients can deserialize it.
+        // Wrapper-level interaction_id.
+        assert_eq!(messages[0]["interaction_id"], "iid-1");
+        // ts mirrors submitted_at.
+        assert_eq!(messages[0]["ts"], "2026-05-22T12:00:00Z");
+        // payload must be a §4 object with matching interaction_id.
+        assert!(messages[0]["payload"].is_object());
+        assert_eq!(messages[0]["payload"]["interaction_id"], "iid-1");
+        assert_eq!(messages[0]["payload"]["class"], "decision-set");
+        // _read_lifecycle side-channel is present in handle_tools_call_with_conn output
+        // (it carries read IDs for post-lock lifecycle emits); stripped by handle_tools_call.
+        // structuredContent must be an object (regression guard).
         assert!(response["result"]["structuredContent"].is_object());
+    }
+
+    #[test]
+    fn strip_internal_side_channels_removes_fields_from_wire() {
+        // get_user_messages: _read_lifecycle must be gone from both structuredContent and text.
+        let mut resp = json!({
+            "result": {
+                "structuredContent": {
+                    "messages": [],
+                    "_read_lifecycle": [{ "interaction_id": "x" }]
+                },
+                "content": [{
+                    "type": "text",
+                    "text": "{\"messages\":[],\"_read_lifecycle\":[{\"interaction_id\":\"x\"}]}"
+                }]
+            }
+        });
+        strip_internal_side_channels("get_user_messages", &mut resp);
+        assert!(resp["result"]["structuredContent"]["_read_lifecycle"].is_null());
+        assert!(resp["result"]["structuredContent"]["messages"].is_array());
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            !text.contains("_read_lifecycle"),
+            "content text mirror must not leak the side-channel: {text}"
+        );
+
+        // dispatch_interaction: _dispatch_meta must be gone too.
+        let mut resp2 = json!({
+            "result": {
+                "structuredContent": { "dispatched": true, "_dispatch_meta": { "x": 1 } },
+                "content": [{ "type": "text", "text": "{\"dispatched\":true,\"_dispatch_meta\":{\"x\":1}}" }]
+            }
+        });
+        strip_internal_side_channels("dispatch_interaction", &mut resp2);
+        assert!(resp2["result"]["structuredContent"]["_dispatch_meta"].is_null());
+        assert_eq!(resp2["result"]["structuredContent"]["dispatched"], json!(true));
+        assert!(!resp2["result"]["content"][0]["text"].as_str().unwrap().contains("_dispatch_meta"));
+
+        // Unrelated tool: untouched.
+        let mut resp3 = json!({ "result": { "structuredContent": { "ok": true } } });
+        let before = resp3.clone();
+        strip_internal_side_channels("get_artifact", &mut resp3);
+        assert_eq!(resp3, before);
     }
 
     #[test]
@@ -1787,5 +2008,218 @@ mod tests {
             )
             .expect("count missing");
         assert_eq!(missing, 0, "unknown session must not be found");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Slice 0.5 — Interaction protocol tests
+    // ---------------------------------------------------------------------------
+
+    /// dispatch_interaction → row inserted with status=pending.
+    #[test]
+    fn dispatch_interaction_inserts_pending_row() {
+        let (conn, paths, _temp) = test_state();
+        let session = test_session("agent-1");
+
+        let response = handle_tools_call_with_conn(
+            json!(100),
+            json!({
+                "name": "dispatch_interaction",
+                "arguments": {
+                    "interaction_id": "test-uuid-1",
+                    "class": "decision-set",
+                    "title": "Where should logs go?",
+                    "trace_id": "trace-abc",
+                    "questions": [{
+                        "question_id": "q1",
+                        "question": "Pick log location",
+                        "options": [{"key": "central", "label": "One central file"}]
+                    }]
+                }
+            }),
+            &conn,
+            &paths,
+            None,
+            Some(&session),
+            None,
+        );
+
+        assert!(response.get("error").is_none(), "should not error: {:?}", response);
+        assert_eq!(response["result"]["structuredContent"]["dispatched"], true);
+        assert_eq!(response["result"]["structuredContent"]["interaction_id"], "test-uuid-1");
+        // _dispatch_meta is present in handle_tools_call_with_conn (internal side-channel);
+        // it is stripped by handle_tools_call (the public MCP path).
+        assert!(!response["result"]["structuredContent"]["_dispatch_meta"].is_null());
+
+        // DB row must exist with status=pending.
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM interactions WHERE interaction_id = 'test-uuid-1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("interaction row");
+        assert_eq!(status, "pending");
+    }
+
+    /// dispatch_interaction — missing interaction_id returns error.
+    #[test]
+    fn dispatch_interaction_missing_id_returns_error() {
+        let (conn, paths, _temp) = test_state();
+        let session = test_session("agent-1");
+
+        let response = handle_tools_call_with_conn(
+            json!(101),
+            json!({"name":"dispatch_interaction","arguments":{"class":"decision-set","questions":[{"question_id":"q1","question":"?","options":[{"key":"a","label":"A"}]}]}}),
+            &conn,
+            &paths,
+            None,
+            Some(&session),
+            None,
+        );
+        assert!(response.get("error").is_some());
+    }
+
+    /// dispatch_interaction — unknown class returns error.
+    #[test]
+    fn dispatch_interaction_unknown_class_returns_error() {
+        let (conn, paths, _temp) = test_state();
+        let session = test_session("agent-1");
+
+        let response = handle_tools_call_with_conn(
+            json!(102),
+            json!({"name":"dispatch_interaction","arguments":{"interaction_id":"uuid-x","class":"bogus"}}),
+            &conn,
+            &paths,
+            None,
+            Some(&session),
+            None,
+        );
+        assert!(response.get("error").is_some());
+    }
+
+    /// dispatch_interaction — decision-set without questions[] returns error.
+    #[test]
+    fn dispatch_interaction_decision_set_without_questions_returns_error() {
+        let (conn, paths, _temp) = test_state();
+        let session = test_session("agent-1");
+
+        let response = handle_tools_call_with_conn(
+            json!(103),
+            json!({"name":"dispatch_interaction","arguments":{"interaction_id":"uuid-y","class":"decision-set"}}),
+            &conn,
+            &paths,
+            None,
+            Some(&session),
+            None,
+        );
+        assert!(response.get("error").is_some());
+    }
+
+    /// get_user_messages → returns v1.1.0 wrapper: { interaction_id, ts, payload }.
+    /// payload.interaction_id must equal wrapper.interaction_id (spec §5).
+    #[test]
+    fn get_user_messages_returns_v1_1_0_wrapped_shape() {
+        let (conn, paths, _temp) = test_state();
+        let now = unix_now();
+
+        conn.execute(
+            r#"INSERT INTO interactions(interaction_id, session_id, class, request_json, status, response_json, created_at, responded_at)
+               VALUES ('iid-wrap', 's1', 'approval-gate', '{}', 'submitted', ?, ?, ?)"#,
+            rusqlite::params![
+                r#"{"interaction_id":"iid-wrap","class":"approval-gate","artifact_path":null,"status":"submitted","submitted_at":"2026-05-22T10:00:00Z","decision":"approve","reason":""}"#,
+                now,
+                now
+            ],
+        ).expect("insert");
+
+        let response = handle_tools_call_with_conn(
+            json!(104),
+            json!({"name":"get_user_messages","arguments":{}}),
+            &conn,
+            &paths,
+            None,
+            Some(&test_session("s1")),
+            None,
+        );
+
+        let msgs = response["result"]["structuredContent"]["messages"]
+            .as_array()
+            .expect("messages");
+        assert_eq!(msgs.len(), 1);
+        // Wrapper fields.
+        assert_eq!(msgs[0]["interaction_id"], "iid-wrap");
+        assert_eq!(msgs[0]["ts"], "2026-05-22T10:00:00Z");
+        // payload must be an object.
+        assert!(msgs[0]["payload"].is_object(), "payload must be an object");
+        // payload.interaction_id == wrapper interaction_id (spec §5 normative).
+        assert_eq!(msgs[0]["payload"]["interaction_id"], msgs[0]["interaction_id"]);
+        // structuredContent must be an object.
+        assert!(response["result"]["structuredContent"].is_object());
+    }
+
+    /// get_user_messages → read_at is set exactly once (idempotent on second call).
+    #[test]
+    fn get_user_messages_sets_read_at_once() {
+        let (conn, paths, _temp) = test_state();
+        let now = unix_now();
+
+        conn.execute(
+            r#"INSERT INTO interactions(interaction_id, session_id, class, request_json, status, response_json, created_at, responded_at)
+               VALUES ('iid-readonce', 's1', 'decision-set', '{}', 'submitted', ?, ?, ?)"#,
+            rusqlite::params![
+                r#"{"interaction_id":"iid-readonce","class":"decision-set","artifact_path":null,"status":"submitted","submitted_at":"2026-05-22T11:00:00Z","responses":[]}"#,
+                now, now
+            ],
+        ).expect("insert");
+
+        // First call sets read_at.
+        let _ = handle_tools_call_with_conn(
+            json!(105),
+            json!({"name":"get_user_messages","arguments":{}}),
+            &conn, &paths, None,
+            Some(&test_session("s1")),
+            None,
+        );
+        let read_at_first: Option<i64> = conn
+            .query_row(
+                "SELECT read_at FROM interactions WHERE interaction_id = 'iid-readonce'",
+                [], |row| row.get(0),
+            ).expect("row");
+        assert!(read_at_first.is_some(), "read_at should be set after first call");
+
+        // Second call must NOT change read_at.
+        let _ = handle_tools_call_with_conn(
+            json!(106),
+            json!({"name":"get_user_messages","arguments":{}}),
+            &conn, &paths, None,
+            Some(&test_session("s1")),
+            None,
+        );
+        let read_at_second: Option<i64> = conn
+            .query_row(
+                "SELECT read_at FROM interactions WHERE interaction_id = 'iid-readonce'",
+                [], |row| row.get(0),
+            ).expect("row");
+        assert_eq!(read_at_first, read_at_second, "read_at must not change on second read");
+    }
+
+    /// iso8601_now produces a well-formed timestamp.
+    #[test]
+    fn iso8601_now_is_well_formed() {
+        let ts = iso8601_now();
+        assert!(ts.ends_with('Z'), "must end with Z: {ts}");
+        assert_eq!(ts.len(), 20, "expected len 20 (YYYY-MM-DDTHH:MM:SSZ): {ts}");
+        assert!(ts.contains('T'), "must contain T: {ts}");
+    }
+
+    /// epoch_secs_to_iso8601 sanity check.
+    #[test]
+    fn epoch_secs_to_iso8601_known_date() {
+        // 2026-05-22T00:00:00Z = 1779408000 unix seconds.
+        let ts = epoch_secs_to_iso8601(1779408000);
+        assert_eq!(ts, "2026-05-22T00:00:00Z");
+        // Unix epoch itself.
+        let ts2 = epoch_secs_to_iso8601(0);
+        assert_eq!(ts2, "1970-01-01T00:00:00Z");
     }
 }

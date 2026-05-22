@@ -1116,6 +1116,133 @@ fn acknowledge_agent_message(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Slice 0.5 — Interaction commands (Tauri frontend ↔ backend)
+// ---------------------------------------------------------------------------
+
+/// Return all pending/draft interactions (for the UI to render).
+#[tauri::command]
+fn list_interactions(
+    state: tauri::State<AppState>,
+) -> Result<Vec<mcp::sessions::Interaction>, String> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    mcp::sessions::list_interactions_pending(&conn)
+}
+
+/// Get a single interaction by id.
+#[tauri::command]
+fn get_interaction(
+    state: tauri::State<AppState>,
+    interaction_id: String,
+) -> Result<Option<mcp::sessions::Interaction>, String> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "state db lock poisoned".to_owned())?;
+    mcp::sessions::get_interaction(&conn, &interaction_id)
+}
+
+/// Submit (or save-draft / dismiss) an operator response to an interaction.
+/// `payload` is the §4 JSON object (must include `interaction_id` matching the request).
+#[tauri::command]
+fn submit_interaction_response(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    interaction_id: String,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    // Validate that payload.interaction_id matches.
+    let payload_id = payload
+        .get("interaction_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if payload_id != interaction_id {
+        return Err(format!(
+            "payload.interaction_id ({payload_id}) does not match interaction_id ({interaction_id})"
+        ));
+    }
+
+    let status = payload
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("submitted");
+
+    // Validate status.
+    match status {
+        "submitted" | "draft" | "dismissed" => {}
+        other => return Err(format!("invalid status: {other}")),
+    }
+
+    let response_json =
+        serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    let now_ts = unix_now();
+
+    let (lifecycle_event, class_val, trace_id_val) = {
+        let conn = state
+            .db
+            .lock()
+            .map_err(|_| "state db lock poisoned".to_owned())?;
+
+        let result = mcp::sessions::submit_interaction(
+            &conn,
+            &interaction_id,
+            status,
+            &response_json,
+            now_ts,
+        )?;
+
+        match result {
+            None => return Err(format!("interaction not found: {interaction_id}")),
+            Some((class, trace_id)) => {
+                let event = if status == "dismissed" {
+                    "agentcanvas://interaction.dismissed"
+                } else {
+                    "agentcanvas://interaction.responded"
+                };
+                (event, class, trace_id)
+            }
+        }
+        // db guard drops here — emits run post-lock.
+    };
+
+    // Post-lock: emit lifecycle event + messages-changed.
+    let ts = {
+        // Reuse payload.submitted_at if present (canonical per spec §4 rule 6), else now.
+        payload
+            .get("submitted_at")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| iso8601_now_main())
+    };
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.emit(
+            lifecycle_event,
+            serde_json::json!({
+                "interaction_id": interaction_id,
+                "trace_id": trace_id_val,
+                "class": class_val,
+                "status": status,
+                "ts": ts
+            }),
+        );
+        let _ = window.emit("agentcanvas://messages-changed", serde_json::json!({}));
+    }
+    Ok(())
+}
+
+/// ISO-8601 UTC helper for Tauri commands.
+fn iso8601_now_main() -> String {
+    use std::time::SystemTime;
+    let secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    mcp::epoch_secs_to_iso8601(secs)
+}
+
 #[tauri::command]
 fn install_mcp_for_claude_code() -> Result<InstallResult, String> {
     let config_path = home_dir()?.join(".claude.json");
@@ -1958,6 +2085,7 @@ fn initialize_state_db(db: &Connection, legacy_canvas_root: &Path) -> Result<(),
     mcp::sessions::migrate_user_messages(db)?;
     mcp::sessions::migrate_session_attachments(db)?;
     mcp::sessions::migrate_agent_messages(db)?;
+    mcp::sessions::migrate_interactions(db)?;
     add_column_if_missing(
         db,
         "files",
@@ -2976,6 +3104,10 @@ fn main() {
             // Slice 7
             list_agent_messages,
             acknowledge_agent_message,
+            // Slice 0.5 — Interactions
+            list_interactions,
+            get_interaction,
+            submit_interaction_response,
             install_mcp_for_claude_code,
             install_mcp_for_codex,
             install_mcp_for_cursor,

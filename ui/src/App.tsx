@@ -65,12 +65,18 @@ import {
   untrackFile,
   updateSidecarComments,
   writeDocument,
+  listInteractions,
+  getInteraction,
+  submitInteractionResponse,
   type ActionTemplate,
   type AgentMessage,
   type BootstrapInfo,
   type AgentSession,
   type ConflictStrategy,
   type FileMetadata,
+  type Interaction,
+  type InteractionQuestion,
+  type InteractionResponsePayload,
   type PersonaRegistry,
   type RecentEntry,
   type SessionAttachment
@@ -252,6 +258,10 @@ export default function App() {
   const [handoffToastAction, setHandoffToastAction] = useState<NotifyUserPayload["action"]>(null);
   // Slice 7: persistent agent messages (sticky until acknowledged).
   const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
+  // Slice 0.5: pending/active interactions (typed rendering).
+  const [pendingInteractions, setPendingInteractions] = useState<Interaction[]>([]);
+  // Currently-open interaction form in the content pane.
+  const [activeInteractionId, setActiveInteractionId] = useState<string | null>(null);
   const [sendPopoverOpen, setSendPopoverOpen] = useState(false);
   const [showAgentPicker, setShowAgentPicker] = useState(false);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
@@ -1137,22 +1147,40 @@ export default function App() {
       .catch(() => { /* best-effort */ });
   }, []);
 
+  // Slice 0.5: refresh pending interactions.
+  const refreshInteractions = useCallback(() => {
+    void listInteractions()
+      .then(setPendingInteractions)
+      .catch(() => { /* best-effort */ });
+  }, []);
+
   // notify-user event: the backend now persists the message before emitting.
   // On arrival, refresh the persisted list (sticky stack) instead of auto-dismissing.
   // Kept in a stable effect (no artifact dep) so the listener is never torn down.
   useEffect(() => {
     refreshAgentMessages();
+    refreshInteractions();
     const unlistenNotify = listen<NotifyUserPayload>("agentcanvas://notify-user", () => {
       refreshAgentMessages();
     });
     const unlistenMessagesChanged = listen("agentcanvas://messages-changed", () => {
       refreshAgentMessages();
+      refreshInteractions();
     });
+    // Slice 0.5: open the interaction form when a dispatch arrives.
+    const unlistenInteractionDispatched = listen<{ interaction_id: string }>(
+      "agentcanvas://interaction-dispatched",
+      (event) => {
+        refreshInteractions();
+        setActiveInteractionId(event.payload.interaction_id);
+      }
+    );
     return () => {
       void unlistenNotify.then((dispose) => dispose());
       void unlistenMessagesChanged.then((dispose) => dispose());
+      void unlistenInteractionDispatched.then((dispose) => dispose());
     };
-  // refreshAgentMessages is stable (useCallback with no deps); omitting from deps is intentional.
+  // refreshAgentMessages / refreshInteractions are stable (useCallback with no deps).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // no deps — listener is stable for the lifetime of the app
 
@@ -2807,7 +2835,35 @@ export default function App() {
                 ))}
               </div>
             ) : null}
-            {multiSelectActive ? (
+            {/* Slice 0.5: interaction form — takes priority over artifact view when open */}
+            {activeInteractionId ? (() => {
+              const interaction = pendingInteractions.find((i) => i.interaction_id === activeInteractionId);
+              if (!interaction) return null;
+              return (
+                <InteractionFormPane
+                  interaction={interaction}
+                  onSubmit={async (payload) => {
+                    await submitInteractionResponse(interaction.interaction_id, payload);
+                    setActiveInteractionId(null);
+                    refreshInteractions();
+                  }}
+                  onDismiss={async () => {
+                    const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+                    await submitInteractionResponse(interaction.interaction_id, {
+                      interaction_id: interaction.interaction_id,
+                      class: interaction.class,
+                      artifact_path: interaction.artifact_path ?? null,
+                      status: "dismissed",
+                      submitted_at: now
+                    });
+                    setActiveInteractionId(null);
+                    refreshInteractions();
+                  }}
+                  onClose={() => setActiveInteractionId(null)}
+                />
+              );
+            })() : null}
+            {!activeInteractionId && (multiSelectActive ? (
               <MultiSelectPlaceholder
                 files={selectedFileMetadatas}
                 count={selectedPaths.size}
@@ -2923,7 +2979,7 @@ export default function App() {
                 <h1>{isOpening ? "Opening..." : "Select a file."}</h1>
                 <p>Drop Markdown or HTML artifacts into the AgentCanvas inbox and rescan.</p>
               </article>
-            )}
+            ))}
             {error ? <p className="error-banner">{error}</p> : null}
             {annotationSelection?.kind === "text" && artifact?.kind === "md" && editMode ? (
               <AnnotationToolbar selection={annotationSelection} onFormat={applyAnnotationFormat} onComment={openCommentDialog} />
@@ -3094,6 +3150,29 @@ export default function App() {
                       </article>
                     ))}
                   </div>
+                  {/* Agent Center — Section 1b: Pending Interactions (Slice 0.5) */}
+                  {pendingInteractions.length > 0 ? (
+                    <>
+                      <div className="agent-panel-header agent-interactions-header">
+                        <span>Interactions</span>
+                        <span className="agent-messages-count">{pendingInteractions.length}</span>
+                      </div>
+                      <div className="agent-interactions-list">
+                        {pendingInteractions.map((interaction) => (
+                          <button
+                            key={interaction.interaction_id}
+                            type="button"
+                            className={`interaction-row ${activeInteractionId === interaction.interaction_id ? "active" : ""}`}
+                            onClick={() => setActiveInteractionId(interaction.interaction_id)}
+                          >
+                            <span className="interaction-class-badge">{interaction.class}</span>
+                            <span className="interaction-title">{interaction.title ?? interaction.class}</span>
+                            <span className="interaction-status">{interaction.status}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
                   {/* Agent Center — Section 2: Messages (same set as the sticky stack) */}
                   {agentMessages.length > 0 ? (
                     <>
@@ -4280,6 +4359,239 @@ function AgentMessageBanner({
         </button>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Slice 0.5 — Interaction form pane
+// ---------------------------------------------------------------------------
+
+type InteractionFormPaneProps = {
+  interaction: Interaction;
+  onSubmit: (payload: InteractionResponsePayload) => Promise<void>;
+  onDismiss: () => Promise<void>;
+  onClose: () => void;
+};
+
+function InteractionFormPane({ interaction, onSubmit, onDismiss, onClose }: InteractionFormPaneProps) {
+  let requestEnvelope: Record<string, unknown> = {};
+  try {
+    requestEnvelope = JSON.parse(interaction.request_json) as Record<string, unknown>;
+  } catch {
+    // ignore parse errors
+  }
+
+  return (
+    <div className="interaction-form-pane">
+      <div className="interaction-form-header">
+        <span className="interaction-class-badge">{interaction.class}</span>
+        <h2 className="interaction-form-title">{interaction.title ?? interaction.class}</h2>
+        <button type="button" className="interaction-close-btn" onClick={onClose} aria-label="Close">
+          ×
+        </button>
+      </div>
+      <div className="interaction-form-body">
+        {interaction.class === "decision-set" ? (
+          <DecisionSetForm
+            interactionId={interaction.interaction_id}
+            interactionClass={interaction.class}
+            artifactPath={interaction.artifact_path}
+            questions={(requestEnvelope.questions as InteractionQuestion[] | undefined) ?? []}
+            onSubmit={onSubmit}
+            onDismiss={onDismiss}
+          />
+        ) : (
+          <div className="interaction-unsupported">
+            <p>Renderer for <strong>{interaction.class}</strong> interactions is coming in a future slice.</p>
+            <div className="interaction-form-actions">
+              <button type="button" onClick={onDismiss}>Dismiss</button>
+              <button type="button" onClick={onClose}>Close</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Slice 0.5 — DecisionSetForm (decision-set class renderer)
+// ---------------------------------------------------------------------------
+
+type DecisionSetFormProps = {
+  interactionId: string;
+  interactionClass: Interaction["class"];
+  artifactPath: string | null;
+  questions: InteractionQuestion[];
+  onSubmit: (payload: InteractionResponsePayload) => Promise<void>;
+  onDismiss: () => Promise<void>;
+};
+
+function DecisionSetForm({
+  interactionId,
+  interactionClass,
+  artifactPath,
+  questions,
+  onSubmit,
+  onDismiss
+}: DecisionSetFormProps) {
+  // Per-question state: Map<question_id, { selected: Set<key>, note: string }>
+  const [answers, setAnswers] = useState<Map<string, { selected: Set<string>; note: string }>>(() => new Map());
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  function getAnswer(questionId: string) {
+    return answers.get(questionId) ?? { selected: new Set<string>(), note: "" };
+  }
+
+  function toggleOption(questionId: string, key: string, multiSelect: boolean) {
+    setAnswers((current) => {
+      const next = new Map(current);
+      const prev = next.get(questionId) ?? { selected: new Set<string>(), note: "" };
+      const selected = new Set(prev.selected);
+      if (multiSelect) {
+        if (selected.has(key)) {
+          selected.delete(key);
+        } else {
+          selected.add(key);
+        }
+      } else {
+        // radio: clear others, set this one
+        selected.clear();
+        selected.add(key);
+      }
+      next.set(questionId, { ...prev, selected });
+      return next;
+    });
+  }
+
+  function setNote(questionId: string, note: string) {
+    setAnswers((current) => {
+      const next = new Map(current);
+      const prev = next.get(questionId) ?? { selected: new Set<string>(), note: "" };
+      next.set(questionId, { ...prev, note });
+      return next;
+    });
+  }
+
+  function buildPayload(status: "submitted" | "draft"): InteractionResponsePayload {
+    const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    // Build responses[]: OMIT questions with no answer (spec §4 rule 2).
+    const responses = questions
+      .map((q) => {
+        const answer = answers.get(q.question_id);
+        if (!answer || answer.selected.size === 0) return null;
+        return {
+          question_id: q.question_id,
+          selected: Array.from(answer.selected), // option keys, not labels
+          ...(answer.note.trim() ? { note: answer.note.trim() } : {})
+        };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null);
+
+    return {
+      interaction_id: interactionId,
+      class: interactionClass,
+      artifact_path: artifactPath ?? null,
+      status,
+      submitted_at: now,
+      responses
+    };
+  }
+
+  async function handleSubmit(status: "submitted" | "draft") {
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      await onSubmit(buildPayload(status));
+    } catch (caught) {
+      setSubmitError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <form
+      className="decision-set-form"
+      onSubmit={(e) => { e.preventDefault(); void handleSubmit("submitted"); }}
+    >
+      {questions.map((q) => {
+        const isMulti = q.multiSelect === true;
+        const answer = getAnswer(q.question_id);
+        return (
+          <fieldset key={q.question_id} className="decision-question">
+            {q.header ? <legend className="decision-question-header">{q.header}</legend> : null}
+            <p className="decision-question-text">{q.question}</p>
+            <div className="decision-options">
+              {q.options.map((opt) => {
+                const checked = answer.selected.has(opt.key);
+                const inputType = isMulti ? "checkbox" : "radio";
+                const inputId = `${interactionId}-${q.question_id}-${opt.key}`;
+                return (
+                  <label
+                    key={opt.key}
+                    className={`decision-option ${checked ? "selected" : ""}`}
+                    htmlFor={inputId}
+                  >
+                    <input
+                      id={inputId}
+                      type={inputType}
+                      name={isMulti ? undefined : `${interactionId}-${q.question_id}`}
+                      checked={checked}
+                      onChange={() => toggleOption(q.question_id, opt.key, isMulti)}
+                    />
+                    <span className="decision-option-label">
+                      {opt.label}
+                      {opt.recommended ? (
+                        <span className="decision-recommended-badge" title="Recommended">HINT</span>
+                      ) : null}
+                    </span>
+                    {opt.description ? (
+                      <span className="decision-option-description">{opt.description}</span>
+                    ) : null}
+                  </label>
+                );
+              })}
+            </div>
+            <input
+              className="decision-note-input"
+              type="text"
+              placeholder="Note (optional)"
+              value={answer.note}
+              onChange={(e) => setNote(q.question_id, e.target.value)}
+              aria-label={`Note for: ${q.question}`}
+            />
+          </fieldset>
+        );
+      })}
+      {submitError ? <p className="interaction-error">{submitError}</p> : null}
+      <div className="decision-form-actions">
+        <button
+          type="button"
+          className="interaction-dismiss-btn"
+          disabled={isSubmitting}
+          onClick={() => void onDismiss()}
+        >
+          Dismiss
+        </button>
+        <button
+          type="button"
+          className="interaction-draft-btn"
+          disabled={isSubmitting}
+          onClick={() => void handleSubmit("draft")}
+        >
+          Save draft
+        </button>
+        <button
+          type="submit"
+          className="primary interaction-submit-btn"
+          disabled={isSubmitting}
+        >
+          {isSubmitting ? "Submitting…" : "Submit"}
+        </button>
+      </div>
+    </form>
   );
 }
 

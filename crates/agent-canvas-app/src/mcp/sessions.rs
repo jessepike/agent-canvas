@@ -170,6 +170,26 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 CREATE INDEX IF NOT EXISTS idx_agent_messages_ack ON agent_messages(acknowledged_at);
 "#;
 
+pub const INTERACTIONS_MIGRATION_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS interactions (
+  interaction_id  TEXT PRIMARY KEY,
+  session_id      TEXT NOT NULL,
+  class           TEXT NOT NULL,
+  title           TEXT,
+  artifact_path   TEXT,
+  artifact_inline TEXT,
+  trace_id        TEXT,
+  request_json    TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'pending',
+  response_json   TEXT,
+  created_at      INTEGER NOT NULL,
+  responded_at    INTEGER,
+  read_at         INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_interactions_session_status ON interactions(session_id, status);
+CREATE INDEX IF NOT EXISTS idx_interactions_id ON interactions(interaction_id);
+"#;
+
 pub const SESSION_ATTACHMENTS_MIGRATION_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS session_attachments (
   session_id  TEXT NOT NULL,
@@ -249,6 +269,233 @@ pub fn migrate_agent_messages(conn: &Connection) -> Result<(), String> {
 pub fn migrate_session_attachments(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(SESSION_ATTACHMENTS_MIGRATION_SQL)
         .map_err(|error| error.to_string())
+}
+
+pub fn migrate_interactions(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(INTERACTIONS_MIGRATION_SQL)
+        .map_err(|error| error.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Interaction struct + DB helpers
+// ---------------------------------------------------------------------------
+
+/// A dispatched interaction row, used for list_interactions / get_interaction.
+#[derive(Debug, Clone, Serialize)]
+pub struct Interaction {
+    pub interaction_id: String,
+    pub session_id: String,
+    pub class: String,
+    pub title: Option<String>,
+    pub artifact_path: Option<String>,
+    pub artifact_inline: Option<String>,
+    pub trace_id: Option<String>,
+    pub request_json: String,
+    pub status: String,
+    pub response_json: Option<String>,
+    pub created_at: i64,
+    pub responded_at: Option<i64>,
+    pub read_at: Option<i64>,
+}
+
+pub fn insert_interaction(
+    conn: &Connection,
+    interaction_id: &str,
+    session_id: &str,
+    class: &str,
+    title: Option<&str>,
+    artifact_path: Option<&str>,
+    artifact_inline: Option<&str>,
+    trace_id: Option<&str>,
+    request_json: &str,
+    created_at: i64,
+) -> Result<(), String> {
+    conn.execute(
+        r#"
+        INSERT INTO interactions(
+          interaction_id, session_id, class, title, artifact_path, artifact_inline,
+          trace_id, request_json, status, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9)
+        "#,
+        params![
+            interaction_id,
+            session_id,
+            class,
+            title,
+            artifact_path,
+            artifact_inline,
+            trace_id,
+            request_json,
+            created_at
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub fn get_interaction(conn: &Connection, interaction_id: &str) -> Result<Option<Interaction>, String> {
+    let result = conn.query_row(
+        r#"
+        SELECT interaction_id, session_id, class, title, artifact_path, artifact_inline,
+               trace_id, request_json, status, response_json, created_at, responded_at, read_at
+        FROM interactions WHERE interaction_id = ?1
+        "#,
+        params![interaction_id],
+        |row| {
+            Ok(Interaction {
+                interaction_id: row.get(0)?,
+                session_id: row.get(1)?,
+                class: row.get(2)?,
+                title: row.get(3)?,
+                artifact_path: row.get(4)?,
+                artifact_inline: row.get(5)?,
+                trace_id: row.get(6)?,
+                request_json: row.get(7)?,
+                status: row.get(8)?,
+                response_json: row.get(9)?,
+                created_at: row.get(10)?,
+                responded_at: row.get(11)?,
+                read_at: row.get(12)?,
+            })
+        },
+    );
+    match result {
+        Ok(row) => Ok(Some(row)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+pub fn list_interactions_pending(conn: &Connection) -> Result<Vec<Interaction>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT interaction_id, session_id, class, title, artifact_path, artifact_inline,
+                   trace_id, request_json, status, response_json, created_at, responded_at, read_at
+            FROM interactions
+            WHERE status IN ('pending', 'draft')
+            ORDER BY created_at ASC, interaction_id ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    stmt.query_map([], |row| {
+        Ok(Interaction {
+            interaction_id: row.get(0)?,
+            session_id: row.get(1)?,
+            class: row.get(2)?,
+            title: row.get(3)?,
+            artifact_path: row.get(4)?,
+            artifact_inline: row.get(5)?,
+            trace_id: row.get(6)?,
+            request_json: row.get(7)?,
+            status: row.get(8)?,
+            response_json: row.get(9)?,
+            created_at: row.get(10)?,
+            responded_at: row.get(11)?,
+            read_at: row.get(12)?,
+        })
+    })
+    .map_err(|error| error.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|error| error.to_string())
+}
+
+/// Mark `read_at` for interactions not yet read. Returns the updated rows.
+/// Called inside a DB lock; emits must happen post-lock.
+pub fn set_interactions_read_at(
+    conn: &Connection,
+    session_id: &str,
+    now_ts: i64,
+) -> Result<Vec<(String, Option<String>, String)>, String> {
+    // Fetch rows that will be updated (read_at IS NULL).
+    let mut stmt = conn
+        .prepare(
+            "SELECT interaction_id, trace_id, class FROM interactions WHERE session_id = ?1 AND status IN ('submitted','draft') AND read_at IS NULL"
+        )
+        .map_err(|e| e.to_string())?;
+    let rows: Vec<(String, Option<String>, String)> = stmt
+        .query_map(params![session_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    // Update them.
+    conn.execute(
+        "UPDATE interactions SET read_at = ?2 WHERE session_id = ?1 AND status IN ('submitted','draft') AND read_at IS NULL",
+        params![session_id, now_ts],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+pub fn get_interactions_submitted_for_session(
+    conn: &Connection,
+    session_id: &str,
+    since_epoch: Option<i64>,
+) -> Result<Vec<Interaction>, String> {
+    let mut sql = String::from(
+        r#"
+        SELECT interaction_id, session_id, class, title, artifact_path, artifact_inline,
+               trace_id, request_json, status, response_json, created_at, responded_at, read_at
+        FROM interactions
+        WHERE session_id = ?1 AND status IN ('submitted','draft')
+        "#,
+    );
+    let mut values: Vec<rusqlite::types::Value> = vec![session_id.to_owned().into()];
+    if let Some(since) = since_epoch {
+        sql.push_str(" AND responded_at >= ?2");
+        values.push(since.into());
+    }
+    sql.push_str(" ORDER BY responded_at ASC, interaction_id ASC");
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    stmt.query_map(rusqlite::params_from_iter(values), |row| {
+        Ok(Interaction {
+            interaction_id: row.get(0)?,
+            session_id: row.get(1)?,
+            class: row.get(2)?,
+            title: row.get(3)?,
+            artifact_path: row.get(4)?,
+            artifact_inline: row.get(5)?,
+            trace_id: row.get(6)?,
+            request_json: row.get(7)?,
+            status: row.get(8)?,
+            response_json: row.get(9)?,
+            created_at: row.get(10)?,
+            responded_at: row.get(11)?,
+            read_at: row.get(12)?,
+        })
+    })
+    .map_err(|e| e.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|e| e.to_string())
+}
+
+/// Set interaction status + response + responded_at. Returns (trace_id, class) for lifecycle emit.
+pub fn submit_interaction(
+    conn: &Connection,
+    interaction_id: &str,
+    status: &str,
+    response_json: &str,
+    responded_at: i64,
+) -> Result<Option<(String, Option<String>)>, String> {
+    let result = conn.query_row(
+        "SELECT trace_id, class FROM interactions WHERE interaction_id = ?1",
+        params![interaction_id],
+        |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
+    );
+    match result {
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+        Ok(_) => {}
+    }
+    let (trace_id, class) = result.unwrap();
+    conn.execute(
+        "UPDATE interactions SET status = ?2, response_json = ?3, responded_at = ?4 WHERE interaction_id = ?1",
+        params![interaction_id, status, response_json, responded_at],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(Some((class, trace_id)))
 }
 
 pub fn insert_agent_session(
