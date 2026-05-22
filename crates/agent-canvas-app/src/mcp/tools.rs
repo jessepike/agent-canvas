@@ -8,9 +8,8 @@ use uuid::Uuid;
 use vellum_core::sidecar::{self, Comment, CommentAnchor, IdentityMap};
 
 use crate::{
-    AgentCanvasPaths, AppState, ensure_regular_file, hydrate_file_state, metadata_for_file,
-    path_safe_for_canvas, resync_watcher_from_db, unix_now, upsert_file_state,
-    vault_root_for_absolute_doc,
+    AgentCanvasPaths, ensure_regular_file, hydrate_file_state, metadata_for_file,
+    path_safe_for_canvas, unix_now, upsert_file_state, vault_root_for_absolute_doc,
 };
 
 use super::sessions::{self, McpSession};
@@ -158,7 +157,7 @@ fn list_artifacts(
 fn open_artifact(
     conn: &Connection,
     paths: &AgentCanvasPaths,
-    app_handle: Option<&AppHandle>,
+    _app_handle: Option<&AppHandle>,
     arguments: Value,
 ) -> Result<Value, Value> {
     let path = required_path(&arguments)?;
@@ -176,21 +175,9 @@ fn open_artifact(
         .map_err(|error| rpc_error(-32603, error.to_string()))?;
     }
 
-    if let Some(app_handle) = app_handle {
-        if let Some(window) = app_handle.get_webview_window("main") {
-            let _ = window.show();
-            let _ = window.set_focus();
-            let _ = window.emit(
-                "agentcanvas://focus-and-open",
-                json!({ "path": path_string }),
-            );
-        }
-        let state = app_handle.state::<AppState>();
-        if let Ok(mut current_focus) = state.current_focus.lock() {
-            *current_focus = Some(path_string.clone());
-        }
-        let _ = resync_watcher_from_db(&state);
-    }
+    // NOTE: watcher resync, window.show/set_focus/emit, and current_focus update are NOT
+    // performed here.  They run in the dispatcher (mcp/mod.rs handle_tools_call) AFTER
+    // the db MutexGuard has been dropped, to prevent the reentrant-lock deadlock.
 
     Ok(tool_result(json!({
         "tracked": true,
@@ -202,7 +189,7 @@ fn attach_artifact(
     conn: &Connection,
     paths: &AgentCanvasPaths,
     session: Option<&McpSession>,
-    app_handle: Option<&AppHandle>,
+    _app_handle: Option<&AppHandle>,
     arguments: Value,
 ) -> Result<Value, Value> {
     let session = session.ok_or_else(|| rpc_error(-32600, "initialize required".to_owned()))?;
@@ -227,10 +214,9 @@ fn attach_artifact(
         )
         .map_err(|error| rpc_error(-32603, error.to_string()))?;
     }
-    if let Some(app_handle) = app_handle {
-        let state = app_handle.state::<AppState>();
-        let _ = resync_watcher_from_db(&state);
-    }
+    // NOTE: watcher resync is NOT performed here.  It runs in the dispatcher
+    // (mcp/mod.rs handle_tools_call) AFTER the db MutexGuard has been dropped,
+    // to prevent the reentrant-lock deadlock.
     Ok(tool_result(json!({ "attached": true })))
 }
 

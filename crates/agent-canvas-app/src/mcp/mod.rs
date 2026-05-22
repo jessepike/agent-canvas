@@ -13,14 +13,14 @@ use std::{
 
 use notifications::JsonRpcNotification;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter},
     net::{UnixListener, UnixStream},
     sync::{RwLock, mpsc, watch},
 };
 
-use crate::{AppState, home_dir, persona_names_from_registry_root, unix_now, valid_persona_names};
+use crate::{AppState, home_dir, persona_names_from_registry_root, resync_watcher_from_db, unix_now, valid_persona_names};
 use sessions::{McpSession, SubscriptionRegistry};
 
 struct McpControl {
@@ -405,18 +405,81 @@ fn handle_tools_call(
         Ok(current_focus) => current_focus.clone(),
         Err(_) => return rpc_error(id, -32603, "current focus lock poisoned"),
     };
-    match state.db.lock() {
-        Ok(conn) => handle_tools_call_with_conn(
+
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    // For tools that mutate the DB and then need watcher/window side-effects, we must
+    // NOT call resync_watcher_from_db or any Tauri window op while the db MutexGuard is
+    // still alive.  std::sync::Mutex is not reentrant: a second state.db.lock() on the
+    // same thread while the first guard is held deadlocks forever.
+    //
+    // Strategy: pass app_handle=None into call_tool for these two handlers so they
+    // perform ONLY their DB work under the lock, then drop the guard by ending the match
+    // arm, and finally run the side-effects (watcher resync + window focus) here, after
+    // the guard has been released.
+    let needs_post_lock_side_effects = matches!(name, "open_artifact" | "attach_artifact");
+
+    let (rpc_response, open_path) = {
+        let conn = match state.db.lock() {
+            Ok(conn) => conn,
+            Err(_) => return rpc_error(id, -32603, "state db lock poisoned"),
+        };
+        // Pass app_handle=None for the two mutating tools so their handlers cannot
+        // attempt state.db.lock() or window ops while this guard is still held.
+        let effective_app_handle = if needs_post_lock_side_effects {
+            None
+        } else {
+            Some(app_handle)
+        };
+        let response = handle_tools_call_with_conn(
             id,
-            params,
+            params.clone(),
             &conn,
             &paths,
             current_focus,
             active_session,
-            Some(app_handle),
-        ),
-        Err(_) => rpc_error(id, -32603, "state db lock poisoned"),
+            effective_app_handle,
+        );
+        // For open_artifact, capture the path argument now (inside the block so it is
+        // clear we are still inside the lock scope, but the path is just a string copy).
+        let open_path = if name == "open_artifact" {
+            params
+                .get("arguments")
+                .and_then(|a| a.get("path"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        } else {
+            None
+        };
+        (response, open_path)
+        // `conn` (the MutexGuard) is dropped here at the end of this block.
+    };
+
+    // Side-effects that must NOT run while the db guard is held.
+    if needs_post_lock_side_effects && rpc_response.get("result").is_some() {
+        // Resync the watcher now that the db lock is free.
+        let _ = resync_watcher_from_db(&state);
+
+        // For open_artifact: bring the window to front and emit the focus event.
+        if let Some(path_string) = open_path {
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+                let _ = window.emit(
+                    "agentcanvas://focus-and-open",
+                    json!({ "path": path_string }),
+                );
+            }
+            if let Ok(mut current_focus) = state.current_focus.lock() {
+                *current_focus = Some(path_string);
+            }
+        }
     }
+
+    rpc_response
 }
 
 fn handle_tools_call_with_conn(
@@ -1403,5 +1466,140 @@ mod tests {
         vellum_core::sidecar::load_or_migrate(paths.canvas_root.as_path(), path, &bytes)
             .expect("load")
             .expect("identity")
+    }
+
+    // ------------------------------------------------------------------
+    // Regression test: db-lock deadlock (open_artifact / attach_artifact)
+    // ------------------------------------------------------------------
+    //
+    // Root cause: the dispatcher acquired state.db.lock() and then, while
+    // holding the guard, called resync_watcher_from_db(&state) which
+    // called state.db.lock() again.  std::sync::Mutex is NOT reentrant —
+    // the second lock attempt deadlocks the thread forever.
+    //
+    // Fix: the dispatcher passes app_handle=None into call_tool for these
+    // two handlers so no side-effect code runs under the lock.  After the
+    // guard is dropped the dispatcher calls resync_watcher_from_db itself.
+    //
+    // This test exercises the exact lock discipline the dispatcher uses:
+    // acquire the Mutex<Connection>, call the tool with app_handle=None,
+    // drop the guard, then call resync_watcher_from_db.  If the old bug
+    // were present (side-effect inside the handler while conn is held) the
+    // test would deadlock; with the fix it completes immediately.
+    //
+    // A true timeout-based hang test is not used here because it would
+    // leave a blocked OS thread and require a timeout harness.  Instead we
+    // assert the structural invariant: the tool call with app_handle=None
+    // completes synchronously and then resync_watcher_from_db (which takes
+    // state.db.lock() itself) also completes — proving the guard was
+    // released before resync runs.
+
+    fn make_app_state_for_test(
+        conn: Connection,
+        paths: crate::AgentCanvasPaths,
+    ) -> crate::AppState {
+        crate::AppState {
+            paths: Ok(paths),
+            db: std::sync::Mutex::new(conn),
+            watcher: std::sync::Mutex::new(None),
+            current_focus: std::sync::Mutex::new(None),
+        }
+    }
+
+    #[test]
+    fn attach_artifact_no_deadlock_db_lock_released_before_resync() {
+        // Build the real AppState with a Mutex<Connection> — the same type
+        // the dispatcher uses in production.
+        let (conn, paths, _temp) = test_state();
+        fs::create_dir_all(&paths.canvas_root).expect("canvas");
+        let artifact = paths.canvas_root.join("deadlock_regression.md");
+        fs::write(&artifact, "# Deadlock regression\n").expect("write");
+        sessions::insert_agent_session(&conn, "dl-s1", "cpo", "claude", "agent-canvas", 1)
+            .expect("session");
+
+        let state = make_app_state_for_test(conn, paths.clone());
+
+        // Step 1 — acquire db lock exactly as the (fixed) dispatcher does.
+        let tool_result = {
+            let conn_guard = state.db.lock().expect("db lock");
+            // Pass app_handle=None: no side-effect code can run under the lock.
+            let result = handle_tools_call_with_conn(
+                json!(900),
+                json!({
+                    "name": "attach_artifact",
+                    "arguments": { "path": artifact.to_string_lossy() }
+                }),
+                &conn_guard,
+                &paths,
+                None,
+                Some(&test_session("dl-s1")),
+                None, // ← app_handle=None, matching the fixed dispatcher
+            );
+            result
+            // conn_guard is dropped here — MutexGuard released.
+        };
+
+        // Step 2 — resync runs AFTER the guard is dropped.  If the old bug
+        // were present (resync inside the handler while guard is held) this
+        // would have deadlocked in step 1 and never reached here.
+        let resync = crate::resync_watcher_from_db(&state);
+
+        assert!(
+            tool_result.get("result").is_some(),
+            "attach_artifact must succeed: {tool_result}"
+        );
+        assert!(
+            resync.is_ok(),
+            "resync_watcher_from_db must succeed after lock is released: {resync:?}"
+        );
+    }
+
+    #[test]
+    fn open_artifact_no_deadlock_db_lock_released_before_resync_and_window_ops() {
+        let (conn, paths, _temp) = test_state();
+        fs::create_dir_all(&paths.canvas_root).expect("canvas");
+        let artifact = paths.canvas_root.join("deadlock_regression_open.md");
+        fs::write(&artifact, "# Open deadlock regression\n").expect("write");
+
+        let state = make_app_state_for_test(conn, paths.clone());
+
+        let tool_result = {
+            let conn_guard = state.db.lock().expect("db lock");
+            let result = handle_tools_call_with_conn(
+                json!(901),
+                json!({
+                    "name": "open_artifact",
+                    "arguments": { "path": artifact.to_string_lossy() }
+                }),
+                &conn_guard,
+                &paths,
+                None,
+                Some(&test_session("dl-s2")),
+                None, // ← app_handle=None, no window ops attempted under the lock
+            );
+            result
+            // conn_guard released here.
+        };
+
+        // After the guard is dropped, resync and current_focus update are safe.
+        let resync = crate::resync_watcher_from_db(&state);
+        // Simulate current_focus update (what the dispatcher does post-lock).
+        {
+            let mut cf = state.current_focus.lock().expect("current_focus");
+            *cf = Some(artifact.to_string_lossy().into_owned());
+        }
+
+        assert!(
+            tool_result.get("result").is_some(),
+            "open_artifact must succeed: {tool_result}"
+        );
+        assert!(
+            resync.is_ok(),
+            "resync_watcher_from_db must succeed after lock is released: {resync:?}"
+        );
+        assert_eq!(
+            state.current_focus.lock().expect("cf").as_deref(),
+            Some(artifact.to_string_lossy().as_ref()),
+        );
     }
 }

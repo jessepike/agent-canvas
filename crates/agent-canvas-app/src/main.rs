@@ -2696,7 +2696,7 @@ fn tracked_file_exists(app_handle: &tauri::AppHandle, path: &str) -> bool {
     .is_ok()
 }
 
-fn resync_watcher_from_db(state: &AppState) -> Result<(), String> {
+pub(crate) fn resync_watcher_from_db(state: &AppState) -> Result<(), String> {
     let tracked_paths = {
         let conn = state
             .db
