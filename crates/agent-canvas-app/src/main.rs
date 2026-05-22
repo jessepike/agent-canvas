@@ -951,7 +951,19 @@ fn send_back_to_session(
             )
             .map_err(|error| error.to_string())?;
         if attached == 0 {
-            return Err("session is not attached to this artifact".to_owned());
+            // Not yet attached — check whether the session is still live in agent_sessions.
+            let session_exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM agent_sessions WHERE session_id = ?1 AND disconnected_at IS NULL",
+                    params![session_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            if session_exists == 0 {
+                return Err("agent is no longer connected".to_owned());
+            }
+            // Session is live — auto-attach so the send can proceed.
+            mcp::sessions::attach_artifact(&conn, &session_id, &path_string, created_at)?;
         }
         mcp::sessions::insert_user_message(
             &conn,

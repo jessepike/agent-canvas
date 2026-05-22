@@ -230,6 +230,11 @@ async fn handle_connection(app_handle: AppHandle, control: Arc<McpControl>, stre
                 unix_now(),
             );
         }
+        // Notify the frontend so it can refresh the sessions list immediately,
+        // rather than waiting until the next window-focus rescan.
+        if let Some(window) = app_handle.get_webview_window("main") {
+            let _ = window.emit("agentcanvas://sessions-changed", json!({}));
+        }
     }
 }
 
@@ -302,11 +307,14 @@ fn handle_initialize(
     active_session: &mut Option<McpSession>,
 ) -> Value {
     let state = app_handle.state::<AppState>();
-    match state.db.lock() {
+    // All DB work (insert_agent_session) happens inside this block.
+    // The window.emit for sessions-changed runs AFTER the lock is released,
+    // so we capture the flag and session_id first, then emit.
+    let (response, session_connected) = match state.db.lock() {
         Ok(conn) => {
             let response =
                 handle_initialize_with_conn(id, params, &conn, &control.personas, active_session);
-            if response.get("result").is_some()
+            let session_connected = if response.get("result").is_some()
                 && let Some(session) = active_session.as_ref()
             {
                 control.subscriptions.register_default(
@@ -314,11 +322,23 @@ fn handle_initialize(
                     notification_tx,
                     disconnect_tx,
                 );
-            }
-            response
+                true
+            } else {
+                false
+            };
+            (response, session_connected)
+            // `conn` (MutexGuard) is dropped here at the end of this block.
         }
-        Err(_) => rpc_error(id, -32603, "state db lock poisoned"),
+        Err(_) => (rpc_error(id, -32603, "state db lock poisoned"), false),
+    };
+    // Notify the frontend so the sessions panel refreshes immediately.
+    // This runs AFTER the db lock has been released (lock discipline).
+    if session_connected {
+        if let Some(window) = app_handle.get_webview_window("main") {
+            let _ = window.emit("agentcanvas://sessions-changed", json!({}));
+        }
     }
+    response
 }
 
 fn handle_initialize_with_conn(
@@ -1603,5 +1623,101 @@ mod tests {
             state.current_focus.lock().expect("cf").as_deref(),
             Some(artifact.to_string_lossy().as_ref()),
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Task A regression: send_back_to_session auto-attach logic
+    // ------------------------------------------------------------------
+    //
+    // The Tauri command itself can't be invoked in unit tests (no AppHandle),
+    // but the two new DB queries are tested here at the sessions layer to
+    // verify the invariants the command relies on.
+
+    /// A live session with no prior attachment should be discoverable via the
+    /// `agent_sessions WHERE disconnected_at IS NULL` query that the updated
+    /// send_back_to_session uses before auto-attaching.
+    #[test]
+    fn send_back_auto_attach_live_session_is_found() {
+        let (conn, paths, _temp) = test_state();
+        let path = paths.canvas_root.join("auto.md");
+        sessions::insert_agent_session(&conn, "sa1", "cto", "codex", "agent-canvas", 10)
+            .expect("session");
+
+        // No attachment yet — simulate the COUNT(*) from session_attachments.
+        let attached: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_attachments WHERE session_id = ?1 AND path = ?2",
+                rusqlite::params!["sa1", path.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .expect("count attachments");
+        assert_eq!(attached, 0, "precondition: not yet attached");
+
+        // Simulate the new live-session check.
+        let session_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_sessions WHERE session_id = ?1 AND disconnected_at IS NULL",
+                rusqlite::params!["sa1"],
+                |row| row.get(0),
+            )
+            .expect("count sessions");
+        assert_eq!(session_exists, 1, "live session must be found");
+
+        // Auto-attach and then insert user message — both must succeed.
+        sessions::attach_artifact(&conn, "sa1", &path.to_string_lossy(), 11).expect("auto-attach");
+        sessions::insert_user_message(
+            &conn, "sa1", &path.to_string_lossy(), Some("auto note"), Some("Review"), 12,
+        )
+        .expect("user message");
+
+        let msg_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM user_messages WHERE session_id = 'sa1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count messages");
+        assert_eq!(msg_count, 1);
+    }
+
+    /// A disconnected (or unknown) session must NOT be found by the live-session check,
+    /// which should cause the command to return an error.
+    #[test]
+    fn send_back_auto_attach_disconnected_session_returns_error() {
+        let (conn, paths, _temp) = test_state();
+        let path = paths.canvas_root.join("ghost.md");
+        sessions::insert_agent_session(&conn, "sd1", "cpo", "claude", "agent-canvas", 20)
+            .expect("session");
+        // Mark as disconnected.
+        sessions::disconnect_agent_session(&conn, "sd1", 20, 21).expect("disconnect");
+
+        let attached: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_attachments WHERE session_id = ?1 AND path = ?2",
+                rusqlite::params!["sd1", path.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .expect("count attachments");
+        assert_eq!(attached, 0);
+
+        // The live-session check must return 0 for a disconnected session.
+        let session_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_sessions WHERE session_id = ?1 AND disconnected_at IS NULL",
+                rusqlite::params!["sd1"],
+                |row| row.get(0),
+            )
+            .expect("count sessions");
+        assert_eq!(session_exists, 0, "disconnected session must not be found");
+
+        // And for a session that never existed.
+        let missing: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agent_sessions WHERE session_id = ?1 AND disconnected_at IS NULL",
+                rusqlite::params!["never-existed"],
+                |row| row.get(0),
+            )
+            .expect("count missing");
+        assert_eq!(missing, 0, "unknown session must not be found");
     }
 }

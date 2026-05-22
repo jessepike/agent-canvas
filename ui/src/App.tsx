@@ -490,17 +490,26 @@ export default function App() {
     () => attachedSessions.map(attachmentToAgentSession),
     [attachedSessions]
   );
-  const sendRouteSessions = artifact && !multiSelectActive && attachedAgentOptions.length > 0
-    ? attachedAgentOptions
+  // All live MCP sessions that can receive an artifact send (backend auto-attaches if needed).
+  const liveMcpSessions = useMemo(
+    () => sessions.filter((session) => session.is_live),
+    [sessions]
+  );
+  // For a single-artifact send: prefer live MCP sessions (they support direct delivery).
+  // For multi-select or no artifact: fall back to all sessions (clipboard route).
+  const sendRouteSessions = artifact && !multiSelectActive && liveMcpSessions.length > 0
+    ? liveMcpSessions
     : sessions;
+  // isMcpSend is true when the chosen route will go through sendBackToSession.
+  const isMcpSend = artifact && !multiSelectActive && liveMcpSessions.length > 0;
   const sendButtonLabel = useMemo(
     () => sendLabelForSessions(
       sendRouteSessions,
       attachedAgentOptions[0]?.id ?? defaultAgentId,
       multiSelectActive ? selectedPaths.size : undefined,
-      Boolean(artifact && !multiSelectActive && attachedAgentOptions.length > 0)
+      Boolean(isMcpSend)
     ),
-    [artifact, attachedAgentOptions, defaultAgentId, multiSelectActive, selectedPaths.size, sendRouteSessions]
+    [artifact, attachedAgentOptions, defaultAgentId, isMcpSend, multiSelectActive, selectedPaths.size, sendRouteSessions]
   );
   const defaultAgent = useMemo(
     () => sessions.find((session) => session.id === defaultAgentId) ?? null,
@@ -997,19 +1006,6 @@ export default function App() {
       }
       window.focus();
     });
-    const unlistenNotify = listen<NotifyUserPayload>("agentcanvas://notify-user", (event) => {
-      if (disposed) {
-        return;
-      }
-      setHandoffToast(event.payload.message);
-      setHandoffToastBody(event.payload.severity === "info" ? null : event.payload.severity.toUpperCase());
-      setHandoffToastAction(event.payload.action ?? null);
-      window.setTimeout(() => {
-        setHandoffToast((current) => (current === event.payload.message ? null : current));
-        setHandoffToastBody(null);
-        setHandoffToastAction(null);
-      }, 4500);
-    });
     const unlistenComments = listen<FocusAndOpenPayload>("agentcanvas://comments-changed", (event) => {
       if (disposed || artifact?.path !== event.payload.path) {
         return;
@@ -1020,10 +1016,40 @@ export default function App() {
     return () => {
       disposed = true;
       void unlistenFocus.then((dispose) => dispose());
-      void unlistenNotify.then((dispose) => dispose());
       void unlistenComments.then((dispose) => dispose());
     };
   }, [artifact?.path, openArtifact]);
+
+  // notify-user toast: kept in a stable effect (no artifact dep) so the listener
+  // is never torn down while a notification is in-flight on artifact change.
+  useEffect(() => {
+    const unlistenNotify = listen<NotifyUserPayload>("agentcanvas://notify-user", (event) => {
+      setHandoffToast(event.payload.message);
+      setHandoffToastBody(event.payload.severity === "info" ? null : event.payload.severity.toUpperCase());
+      setHandoffToastAction(event.payload.action ?? null);
+      window.setTimeout(() => {
+        setHandoffToast((current) => (current === event.payload.message ? null : current));
+        setHandoffToastBody(null);
+        setHandoffToastAction(null);
+      }, 4500);
+    });
+    return () => {
+      void unlistenNotify.then((dispose) => dispose());
+    };
+  }, []); // no deps — listener is stable for the lifetime of the app
+
+  // sessions-changed: refresh sessions list when an agent connects or disconnects,
+  // so the panel and send picker stay in sync without waiting for window focus.
+  useEffect(() => {
+    const unlistenSessionsChanged = listen("agentcanvas://sessions-changed", () => {
+      void listAgentSessions()
+        .then(setSessions)
+        .catch(() => { /* best-effort */ });
+    });
+    return () => {
+      void unlistenSessionsChanged.then((dispose) => dispose());
+    };
+  }, []); // no deps — stable for app lifetime
 
   useEffect(() => {
     function handleFocus() {
@@ -1366,9 +1392,20 @@ export default function App() {
     if (!artifact && selectedPaths.size <= 1) {
       return;
     }
+    // Refresh sessions and attachments so the picker reflects reality at the moment
+    // the popover opens (agents may have connected or disconnected since last refresh).
+    void Promise.all([
+      listAgentSessions().then(setSessions).catch(() => { /* best-effort */ }),
+      artifact && !multiSelectActive
+        ? sessionAttachmentsForPath(artifact.path).then(setAttachedSessions).catch(() => { /* best-effort */ })
+        : Promise.resolve()
+    ]);
     const defaultIsPreset = ACTION_VERBS.includes(defaultActionVerb as (typeof ACTION_VERBS)[number]);
-    const routeSessions = artifact && selectedPaths.size <= 1 && attachedAgentOptions.length > 0
-      ? attachedAgentOptions
+    // Compute route using the current (pre-refresh) sessions; the picker will re-render
+    // when the state updates from the refresh above.
+    const currentLiveMcp = sessions.filter((s) => s.is_live);
+    const routeSessions = artifact && selectedPaths.size <= 1 && currentLiveMcp.length > 0
+      ? currentLiveMcp
       : sessions;
     const defaultSession = routeSessions.find((session) => session.id === defaultAgentId) ?? routeSessions[0] ?? null;
     const nextSelectedAgent = defaultSession?.id ?? (routeSessions.length === 1 ? routeSessions[0]?.id ?? null : null);
@@ -1378,7 +1415,7 @@ export default function App() {
     setCustomActionVerb(defaultIsPreset ? "" : defaultActionVerb);
     setSendNote("");
     setSendPopoverOpen(true);
-  }, [artifact, attachedAgentOptions, defaultActionVerb, defaultAgentId, selectedPaths.size, sessions]);
+  }, [artifact, defaultActionVerb, defaultAgentId, multiSelectActive, selectedPaths.size, sessions]);
 
   const sendCurrentArtifact = useCallback(async (actionVerb: string, note: string) => {
     if (!artifact && selectedPaths.size <= 1) {
@@ -1386,8 +1423,9 @@ export default function App() {
     }
     const verb = actionVerb.trim() || "Review";
     try {
-      const routeSessions = artifact && selectedPaths.size <= 1 && attachedAgentOptions.length > 0
-        ? attachedAgentOptions
+      const currentLiveMcp = sessions.filter((s) => s.is_live);
+      const routeSessions = artifact && selectedPaths.size <= 1 && currentLiveMcp.length > 0
+        ? currentLiveMcp
         : sessions;
       const routeDefaultAgent = routeSessions.find((session) => session.id === selectedAgentId) ?? routeSessions[0] ?? defaultAgent;
       if (routeSessions.length > 1) {
@@ -1416,8 +1454,13 @@ export default function App() {
         setHandoffToast(message);
         window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3500);
       } else if (artifact) {
-        if (attachedAgentOptions.length > 0 && agent) {
+        // Route to sendBackToSession for any live MCP session (backend auto-attaches if needed).
+        // Fall back to clipboard for manual sessions or when no live sessions are available.
+        if (agent?.is_live) {
           await sendBackToSession(artifact.path, agent.id, note.trim() ? note : null, verb);
+          const message = `Sent back to ${agentSessionLabel(agent)}`;
+          setHandoffToast(message);
+          window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3500);
         } else {
           await sendToClipboard({
             path: artifact.path,
@@ -1425,12 +1468,10 @@ export default function App() {
             note: note.trim() ? note : null,
             action_verb: verb
           });
+          const message = "Copied to clipboard — paste into your Claude / Codex session";
+          setHandoffToast(message);
+          window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3500);
         }
-        const message = attachedAgentOptions.length > 0 && agent
-          ? `Sent back to ${agentSessionLabel(agent)}`
-          : "Copied to clipboard — paste into your Claude / Codex session";
-        setHandoffToast(message);
-        window.setTimeout(() => setHandoffToast((current) => (current === message ? null : current)), 3500);
       }
       if (verb === "Revise" || verb === "Critique") {
         const pathsToMark = selectedPaths.size > 1 ? [...selectedPaths] : artifact ? [artifact.path] : [];
@@ -1445,7 +1486,7 @@ export default function App() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
-  }, [artifact, attachedAgentOptions, defaultAgent, selectedAgentId, selectedPath, selectedPaths, sessions]);
+  }, [artifact, defaultAgent, selectedAgentId, selectedPath, selectedPaths, sessions]);
 
   const setDefaultAgentForProject = useCallback(
     async (session: AgentSession) => {
