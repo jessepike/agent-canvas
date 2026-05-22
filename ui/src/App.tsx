@@ -494,7 +494,14 @@ export default function App() {
       return;
     }
     void setCurrentFocus(selectedPath).catch((caught) => {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      const message = caught instanceof Error ? caught.message : String(caught);
+      // A restored/stale selection pointing at a moved or deleted file is not an actionable
+      // error — rescan-on-focus drops the dead entry. Don't park "os error 2" in the global
+      // banner (this was the spurious bottom-of-screen error in the consolidation report).
+      if (/os error 2|No such file or directory/i.test(message)) {
+        return;
+      }
+      setError(message);
     });
   }, [selectedPath]);
 
@@ -2819,22 +2826,9 @@ export default function App() {
                 ) : null}
               </div>
             ) : null}
-            {/* Slice 7: sticky agent message stack — persists until Acknowledged */}
-            {agentMessages.length > 0 ? (
-              <div className="agent-message-stack">
-                {agentMessages.map((msg) => (
-                  <AgentMessageBanner
-                    key={msg.id}
-                    msg={msg}
-                    personaColors={personaColors}
-                    onOpenArtifact={async (artifactPath) => {
-                      await openExternalPath(artifactPath);
-                    }}
-                    onAcknowledge={() => void handleAcknowledgeMessage(msg.id)}
-                  />
-                ))}
-              </div>
-            ) : null}
+            {/* Agent messages live in a single home: the Agent Center → Messages section
+                (right pane auto-expands on arrival). The former duplicate main-reader
+                sticky stack was removed in the consolidation pass to reclaim reader space. */}
             {/* Slice 0.5: interaction form — takes priority over artifact view when open */}
             {activeInteractionId ? (() => {
               const interaction = pendingInteractions.find((i) => i.interaction_id === activeInteractionId);
