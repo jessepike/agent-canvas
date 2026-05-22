@@ -19,7 +19,7 @@ AgentCanvas v0 implementation. The 12 slices in `BUILD-SPEC-v0.md` are the activ
 
 ## Non-Negotiable Invariants
 
-- Files live under `~/iCloud/AgentCanvas/` backed by the real iCloud Drive path at `~/Library/Mobile Documents/com~apple~CloudDocs/AgentCanvas/`.
+- Files live under `~/Documents/AgentCanvas/` with subfolders `Inbox/`, `MyFiles/`, `Projects/`, `Archive/`. This path is iCloud-synced via Desktop & Documents integration.
 - Files stay plain and source-preserved. No pretty-printing or whitespace normalization.
 - Every save carries `base_hash`; mismatches abort with a conflict banner. No last-write-wins.
 - Watcher events are UI hints only. Correctness comes from rescan-on-focus and stat+hash before save.

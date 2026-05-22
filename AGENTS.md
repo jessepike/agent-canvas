@@ -17,7 +17,7 @@ The build sequence in `BUILD-SPEC-v0.md` is canonical. The earlier Vellum v1.0 e
 
 ## Hard Rules
 
-- Files shown by the app must live under `~/iCloud/AgentCanvas/`, backed by the real iCloud Drive path.
+- Files shown by the app must live under `~/Documents/AgentCanvas/` (subfolders: `Inbox/`, `MyFiles/`, `Projects/`, `Archive/`). This path is iCloud-synced via Desktop & Documents integration.
 - Edits must preserve source bytes except where the user edited.
 - Saves use optimistic concurrency with `base_hash`; mismatches abort.
 - Watcher events are hints. Rescan on focus and before open/save.

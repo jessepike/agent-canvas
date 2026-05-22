@@ -1385,7 +1385,7 @@ fn bootstrap_or_error_state() -> AppState {
 impl AgentCanvasPaths {
     fn resolve() -> Result<Self, String> {
         let home = home_dir()?;
-        let canvas_root = home.join("AgentCanvas");
+        let canvas_root = home.join("Documents").join("AgentCanvas");
         let user_symlink = canvas_root.clone();
         let app_support = home
             .join("Library")
@@ -1415,6 +1415,7 @@ impl AgentCanvasPaths {
         fs::create_dir_all(self.inbox_dir.join("captures")).map_err(|error| error.to_string())?;
         fs::create_dir_all(self.projects_dir.join("Default")).map_err(|error| error.to_string())?;
         fs::create_dir_all(&self.archive_dir).map_err(|error| error.to_string())?;
+        fs::create_dir_all(self.canvas_root.join("MyFiles")).map_err(|error| error.to_string())?;
 
         if let Some(parent) = self.state_db.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -1530,6 +1531,13 @@ fn initialize_state_db(db: &Connection, legacy_canvas_root: &Path) -> Result<(),
         "ALTER TABLE files ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
     )?;
     backfill_file_tags_from_legacy_paths(db, legacy_canvas_root)?;
+    // Also backfill from the secondary legacy root (old ~/AgentCanvas local path).
+    // Guard: only run if this root differs from the primary legacy root passed in.
+    if let Ok(local_legacy) = legacy_local_canvas_root() {
+        if local_legacy != *legacy_canvas_root {
+            backfill_file_tags_from_legacy_paths(db, &local_legacy)?;
+        }
+    }
     Ok(())
 }
 
@@ -1559,6 +1567,10 @@ fn legacy_icloud_canvas_root() -> Result<PathBuf, String> {
         .join("Mobile Documents")
         .join("com~apple~CloudDocs")
         .join("AgentCanvas"))
+}
+
+fn legacy_local_canvas_root() -> Result<PathBuf, String> {
+    Ok(home_dir()?.join("AgentCanvas"))
 }
 
 fn backfill_file_tags_from_legacy_paths(db: &Connection, canvas_root: &Path) -> Result<(), String> {
@@ -2868,5 +2880,20 @@ mod tests {
             "I'm sending you `Archive/report.html` from my AgentCanvas.\n\nContents:\n\n```html\n<h1>Report</h1>\n```\n\nReview for clarity, completeness, and correctness. Flag anything that needs my attention.\n\nAction: Review"
         );
         assert!(!formatted.contains("My note:"));
+    }
+
+    #[test]
+    fn agent_canvas_paths_resolve_uses_documents_subfolder() {
+        let paths = AgentCanvasPaths::resolve().expect("paths resolve");
+        let canvas_root_str = paths.canvas_root.to_string_lossy();
+        assert!(
+            canvas_root_str.ends_with("Documents/AgentCanvas"),
+            "canvas_root should end with Documents/AgentCanvas, got: {canvas_root_str}"
+        );
+        let inbox_str = paths.inbox_dir.to_string_lossy();
+        assert!(
+            inbox_str.ends_with("Documents/AgentCanvas/Inbox"),
+            "inbox_dir should end with Documents/AgentCanvas/Inbox, got: {inbox_str}"
+        );
     }
 }

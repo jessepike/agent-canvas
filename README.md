@@ -2,7 +2,7 @@
 
 AgentCanvas is a local Mac workbench for reviewing, lightly source-editing, and round-tripping artifacts produced by LLM agents. Agents call it through MCP to show the user HTML / Markdown / image outputs; the user reviews, comments, and pushes feedback back through the same channel — no clipboard handoff required.
 
-The canvas lives at `~/iCloud/AgentCanvas/`. Files stay plain bytes; saves are atomic and `base_hash`-guarded; HTML renders in a locked sandbox; persona identity (`persona·agent`) follows every comment and notification.
+The canvas lives at `~/Documents/AgentCanvas/`. Files stay plain bytes; saves are atomic and `base_hash`-guarded; HTML renders in a locked sandbox; persona identity (`persona·agent`) follows every comment and notification.
 
 This repo was formerly Vellum. The old executable-block editor spec is preserved in `legacy/` only for parser, corpus, atomic-save, and Tauri carry-forward.
 
@@ -18,7 +18,7 @@ v0.3 connects AgentCanvas to live agents via MCP. The full agent-loop ships:
 - **File-level comments on every viewer** — Markdown, HTML, PNG, PDF, JSON, TXT all accept `{kind:"file_level"}` anchors. HTML selections add `{kind:"html_selection", start_offset, end_offset, snapshot_text}` with scroll-to-snapshot highlight on reopen.
 - **Agent panel** — live MCP sessions + manual sessions in one list with `persona·agent` chip, green dot when connected, attached artifacts as sub-items, Disconnect button.
 - **One-click client install** — command palette entries for **Install for Claude Code**, **Install for Codex**, **Install for Cursor** — write the MCP shim path to `~/.claude.json`, `~/.codex/config.toml`, `~/.cursor/mcp.json` idempotently, preserving other entries.
-- **Multi-path watcher** — Flavor 2 tracking (`add_path` / `remove_path` / `set_paths`) so files tracked outside `~/iCloud/AgentCanvas/` still drive the push channel.
+- **Multi-path watcher** — Flavor 2 tracking (`add_path` / `remove_path` / `set_paths`) so files tracked outside `~/Documents/AgentCanvas/` still drive the push channel.
 - **Comment count surfacing** — sidebar badge `💬 N` per file row + viewer-toolbar "Comments (N) — add another" label.
 
 See `docs/user-guide.md` for the full agent-loop walkthrough, and `docs/mcp-clients.md` for client install details. The canonical implementation plan is `docs/BUILD-SPEC-v0.3.md`.

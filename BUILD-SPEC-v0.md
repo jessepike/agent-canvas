@@ -55,19 +55,20 @@ These are NOT optional. They're the spine of the product.
 ### A1 — File substrate is iCloud Drive at a fixed path
 
 ```
-~/iCloud/AgentCanvas/
+~/Documents/AgentCanvas/
 ├── Inbox/
 │   └── captures/
+├── MyFiles/
 ├── Projects/
 │   └── {ProjectName}/
 └── Archive/
 ```
 
-The viewer ONLY shows files in this tree. Agents drop artifacts to `Inbox/`. Filing moves files from `Inbox/*` to `Projects/{Name}/`. Other Markdown files on the user's Mac are NOT touched, NOT indexed, NOT shown.
+The viewer ONLY shows files in this tree. Agents drop artifacts to `Inbox/`. User-created files land in `MyFiles/`. Filing moves files from `Inbox/*` to `Projects/{Name}/`. Other Markdown files on the user's Mac are NOT touched, NOT indexed, NOT shown.
 
-If the folder doesn't exist on first launch, the app creates it with sensible defaults (`Projects/Default/`, empty `Inbox/`).
+If the folder doesn't exist on first launch, the app creates it with sensible defaults (`Projects/Default/`, empty `Inbox/`, empty `MyFiles/`).
 
-**Detection:** macOS iCloud Drive lives under `~/Library/Mobile Documents/com~apple~CloudDocs/AgentCanvas/` — but the user-facing path is `~/iCloud/AgentCanvas/`. Use the actual iCloud path; the `~/iCloud` shortcut may not exist. Auto-create a symlink for convenience if it doesn't exist.
+**Detection:** The canvas root is `~/Documents/AgentCanvas/`. This path is iCloud-synced when Desktop & Documents integration is enabled (the default for this Mac). No symlink indirection needed.
 
 ### A2 — Files stay plain. Edits preserve byte-level source.
 
@@ -94,7 +95,7 @@ Tables (suggested):
 For v0, "Send to Claude" copies a formatted payload to the clipboard via `pbcopy`:
 
 ```
-Path: ~/iCloud/AgentCanvas/Inbox/agf-positioning-v3.md
+Path: ~/Documents/AgentCanvas/Inbox/agf-positioning-v3.md
 Project: AGRC
 Persona inferred: cto·claude
 
@@ -228,9 +229,9 @@ Execute in this order. Atomic commits at each completed slice (conventional comm
 
 ### Slice 2 — iCloud substrate + viewer launches against it (~45 min)
 
-1. Implement `~/iCloud/AgentCanvas/` folder bootstrap (create if missing, with `Inbox/captures/`, `Projects/Default/`, `Archive/`).
+1. Implement `~/Documents/AgentCanvas/` folder bootstrap (create if missing, with `Inbox/captures/`, `MyFiles/`, `Projects/Default/`, `Archive/`).
 2. SQLite state DB at `~/Library/Application Support/AgentCanvas/state.db` — schema + open + migrate.
-3. Tauri command: `list_inbox()` returns array of file metadata from `~/iCloud/AgentCanvas/Inbox/`.
+3. Tauri command: `list_inbox()` returns array of file metadata from `~/Documents/AgentCanvas/Inbox/`.
 4. UI: Two-pane layout matches `prototypes/prototype-A-main.html`. Left pane shows Inbox file list (real files from iCloud). Right pane shows placeholder "Select a file."
 5. Apply visual-system.md tokens as CSS custom properties.
 6. Commit: `feat(substrate): wire iCloud folder + SQLite state + inbox list view`
@@ -252,7 +253,7 @@ Execute in this order. Atomic commits at each completed slice (conventional comm
 
 ### Slice 5 — File-watcher round-trip (~30 min)
 
-1. Use Rust `notify` crate to watch `~/iCloud/AgentCanvas/` recursively.
+1. Use Rust `notify` crate to watch `~/Documents/AgentCanvas/` recursively.
 2. On file-change events, debounce (~200ms) and emit a Tauri event to the UI.
 3. UI re-loads file list + re-renders current file if changed.
 4. New files arriving in `Inbox/` get the "just arrived" highlight (CSS animation + blue dot).
@@ -305,7 +306,7 @@ Execute in this order. Atomic commits at each completed slice (conventional comm
 2. Rescan-on-focus: when the window gains focus, re-list inbox + re-stat current file (Codex high finding).
 3. End-to-end smoke test:
    - Open viewer cold → iCloud folder bootstrapped → empty inbox shown
-   - From terminal: `echo "# Test artifact" > ~/iCloud/AgentCanvas/Inbox/test.md`
+   - From terminal: `echo "# Test artifact" > ~/Documents/AgentCanvas/Inbox/test.md`
    - Viewer shows test.md appear within 1-2 seconds (watcher hint) OR on next window focus (rescan)
    - Click test.md → renders → toggle edit mode → edit → save → toast shows
    - Modify file externally → try to save again → "changed on disk" banner appears, save aborts
@@ -328,7 +329,7 @@ Execute in this order. Atomic commits at each completed slice (conventional comm
 These must all pass:
 
 1. **Cold-start:** app launches, bootstraps iCloud folder, shows empty Inbox (or existing files).
-2. **File round-trip:** write a Markdown file to `~/iCloud/AgentCanvas/Inbox/foo.md` from a terminal — viewer shows it appear within 1-2 seconds (via watcher) OR on next window focus (via rescan).
+2. **File round-trip:** write a Markdown file to `~/Documents/AgentCanvas/Inbox/foo.md` from a terminal — viewer shows it appear within 1-2 seconds (via watcher) OR on next window focus (via rescan).
 3. **Markdown render:** click `.md` file → rendered preview, looking like `prototype-A-main.html`.
 4. **HTML render:** click `.html` file → rendered in sandboxed iframe (scripts disabled by default) with full visual fidelity.
 5. **Source edit + atomic save:** toggle edit mode → CodeMirror source view → make a small edit → save → file on disk reflects edit byte-for-byte (no reformat).

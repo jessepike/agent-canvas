@@ -44,7 +44,7 @@ On first launch, AgentCanvas creates:
 
 | Path | What |
 |---|---|
-| `~/iCloud/AgentCanvas/` | The canvas root. Resolves to `~/Library/Mobile Documents/com~apple~CloudDocs/AgentCanvas/`. Contains `inbox/`, `archive/`, and one folder per project. |
+| `~/Documents/AgentCanvas/` | The canvas root (iCloud-synced via Desktop & Documents). Contains `Inbox/`, `MyFiles/`, `Projects/`, and `Archive/`. |
 | `~/Library/Application Support/AgentCanvas/state.db` | SQLite database with file tracking, comments, agent sessions, attachments, queued user messages. |
 | `~/Library/Application Support/AgentCanvas/mcp.sock` | Unix domain socket for MCP clients (Claude Code, Codex, Cursor). |
 
@@ -58,7 +58,7 @@ You'll see an empty canvas. The next step is to give it some files to track.
 
 AgentCanvas has two file flavors:
 
-- **Flavor 1 — Inside canvas root.** Files in `~/iCloud/AgentCanvas/` are discovered automatically by the recursive watcher. Drop a file in `inbox/` from Finder and it appears immediately.
+- **Flavor 1 — Inside canvas root.** Files in `~/Documents/AgentCanvas/` are discovered automatically by the recursive watcher. Drop a file in `Inbox/` from Finder and it appears immediately.
 - **Flavor 2 — Anywhere on disk.** Tracked by absolute path. Agents add these via `attach_artifact(path)` over MCP, or you can drag any file from Finder into the canvas window and it gets tracked in place (no copy).
 
 Both flavors get the same comments, viewers, and Send-back behavior. The multi-path watcher in v0.3 covers Flavor 2 explicitly so push notifications fire when an agent (or anything else) writes to a tracked file outside the canvas root.
@@ -253,7 +253,7 @@ Unknown personas don't reject — they're tagged `default` for the session. You'
 
 | To reset… | Delete… |
 |---|---|
-| All comments | `~/iCloud/AgentCanvas/**/<file>.comments.json` |
+| All comments | `~/Documents/AgentCanvas/**/<file>.comments.json` |
 | All tracking state (will rescan canvas root) | `~/Library/Application Support/AgentCanvas/state.db` (will be recreated) |
 | MCP socket only (leaves DB alone) | `~/Library/Application Support/AgentCanvas/mcp.sock` (app rebinds on restart) |
 | Persona cache | ⌘K → Reload Persona Registry (no delete needed) |
